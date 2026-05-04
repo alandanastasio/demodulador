@@ -1,9 +1,10 @@
 ### DEMODULADOR V0.1 ###
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QPushButton, QToolBar) # <-- Agregamos QToolBar
+                             QToolBar, QToolButton, QMenu)
 import pyqtgraph as pg
 import numpy as np
 import signal
@@ -54,18 +55,31 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         self.recorded_psds = []
 
-        # --- BARRA SUPERIOR (TOOLBAR) ---
-        self.toolbar = QToolBar("Rec/Play")
+       # --- BARRA SUPERIOR  ---
+        self.toolbar = QToolBar("Barra Principal")
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
-        self.toolbar.setMovable(False) # Fija la barra para que no se pueda arrastrar
+        self.toolbar.setMovable(False)
 
-        # Volvemos a usar un QPushButton pero lo metemos en la Toolbar
-        self.record_btn = QPushButton("🔴 INICIAR GRABACIÓN")
-        self.record_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.record_btn.setStyleSheet("background-color: #E64545; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-        self.record_btn.clicked.connect(self.toggle_recording)
+        # 1 Rec/Play
+        self.rec_play_btn = QToolButton()
+        self.rec_play_btn.setText("Rec/Play")
+        self.rec_play_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup) # Despliega al instante
+        self.rec_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        # 2. Crear el Menú que va a contener las opciones
+        self.rec_play_menu = QMenu()
+
+        # 3. Crear las acciones (Opciones del menú)
+        self.record_action = QAction("🔴 Iniciar Grabación", self)
+        self.record_action.triggered.connect(self.toggle_recording)
         
-        self.toolbar.addWidget(self.record_btn)
+        # 4. Agregar la acción al menú, y el menú al botón
+        self.rec_play_menu.addAction(self.record_action)
+        # Acá a futuro podés agregar más acciones: self.rec_play_menu.addAction(otra_accion)
+
+        self.rec_play_btn.setMenu(self.rec_play_menu)
+        self.toolbar.addWidget(self.rec_play_btn)
 
 
         # Layout Principal
@@ -136,9 +150,9 @@ class MainWindow(QMainWindow):
             self.is_recording = True
             self.recorded_psds = []
             
-            # Cambiar apariencia del botón
-            self.record_btn.setText("⏹ DETENER Y GUARDAR")
-            self.record_btn.setStyleSheet("background-color: #006400; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            # Cambiar apariencia en el menú y poner rojo el botón principal
+            self.record_action.setText("⏹ Detener y Guardar")
+            self.rec_play_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
             print("Grabación iniciada...")
             
             self.freq_input.setEnabled(False)
@@ -147,9 +161,9 @@ class MainWindow(QMainWindow):
         else:
             self.is_recording = False
             
-            # Restaurar apariencia
-            self.record_btn.setText("🔴 INICIAR GRABACIÓN")
-            self.record_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            # Restaurar apariencia del menú y color original del botón
+            self.record_action.setText("🔴 Iniciar Grabación")
+            self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
             
             self.freq_input.setEnabled(True)
             self.sr_combo.setEnabled(True)
