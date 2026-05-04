@@ -3,11 +3,13 @@
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
-                             QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout)
+                             QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QPushButton)
 import pyqtgraph as pg
 import numpy as np
 import signal
 from python_hackrf import pyhackrf
+import time
+import datetime
 
 # Estado global para compartir entre la GUI y el hilo de C (callback)
 state = {
@@ -33,8 +35,15 @@ def rx_callback(device, buffer, buffer_length, valid_length):
         # Eliminar pico de DC (oscilador interno)
         chunk = chunk - np.mean(chunk)
 
-        # Calcular PSD sin averageo
-        PSD = 10.0 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs)
+        # Calcular PSD sin averageo y evitar log10(0)
+        potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+        PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+
+        # --- NUEVO: Interpolar el pozo del centro (DC) ---
+        centro = fs // 2
+        PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+
+        #time.sleep(0.1)
 
         # Emitir a la interfaz gráfica
         emitter.fft_updated.emit(PSD)
@@ -47,6 +56,10 @@ class MainWindow(QMainWindow):
         self.sdr = sdr_device
         self.setWindowTitle("Demodulador")
         self.setFixedSize(QSize(1200, 600))
+
+        # Variables para la grabación
+        self.is_recording = False
+        self.recorded_psds = []
 
         # Layout Principal (Horizontal: Gráfico a la izquierda, Controles a la derecha)
         main_layout = QHBoxLayout()
@@ -64,6 +77,12 @@ class MainWindow(QMainWindow):
         controls_layout = QVBoxLayout()
         controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout = QFormLayout()
+
+        # Botón de Grabación
+        self.record_btn = QPushButton("🔴 INICIAR GRABACIÓN")
+        self.record_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 10px;")
+        self.record_btn.clicked.connect(self.toggle_recording)
+        form_layout.addRow(self.record_btn)
 
         # 1. Frecuencia Central (Casilla con saltos de 0.1 MHz)
         self.freq_input = QDoubleSpinBox()
@@ -119,6 +138,47 @@ class MainWindow(QMainWindow):
         # Conectar actualización del gráfico
         emitter.fft_updated.connect(self.update_plot)
 
+    def toggle_recording(self):
+        if not self.is_recording:
+            # Iniciar grabación
+            self.is_recording = True
+            self.recorded_psds = []
+            self.record_btn.setText("⏹ DETENER Y GUARDAR")
+            self.record_btn.setStyleSheet("background-color: #006400; color: white; font-weight: bold; padding: 10px;")
+            print("Grabación iniciada...")
+            
+            # Deshabilitar controles que alteren la metadata de la grabación en curso
+            self.freq_input.setEnabled(False)
+            self.sr_combo.setEnabled(False)
+            self.fft_combo.setEnabled(False)
+        else:
+            # Detener y guardar
+            self.is_recording = False
+            self.record_btn.setText("🔴 INICIAR GRABACIÓN")
+            self.record_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 10px;")
+            
+            # Rehabilitar controles
+            self.freq_input.setEnabled(True)
+            self.sr_combo.setEnabled(True)
+            self.fft_combo.setEnabled(True)
+
+            if len(self.recorded_psds) > 0:
+                # Generar nombre de archivo con timestamp
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"espectro_{timestamp}.npz"
+                
+                # Guardar el array 2D (tiempo x frecuencias) comprimido junto a su metadata
+                np.savez_compressed(
+                    filename,
+                    psd_data=np.array(self.recorded_psds),
+                    center_freq=state['center_freq'],
+                    sample_rate=state['sample_rate'],
+                    fft_size=state['fft_size']
+                )
+                print(f"Grabación guardada exitosamente en: {filename}")
+                print(f"Paquetes grabados: {len(self.recorded_psds)}")
+                self.recorded_psds = [] # Limpiar memoria
+
     # --- SLOTS DE ACTUALIZACIÓN (CONTROLES A HACKRF) ---
     def on_freq_changed(self, val_mhz):
         state['center_freq'] = val_mhz * 1e6
@@ -128,12 +188,20 @@ class MainWindow(QMainWindow):
     def on_sr_changed(self, text):
         val_mhz = float(text.replace(" MHz", ""))
         state['sample_rate'] = val_mhz * 1e6
-        self.sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
         
-        # Ajustar el filtro pasa bajos baseband automáticamente
+        # 1. Frenar la recepción de datos por USB
+        self.sdr.pyhackrf_stop_rx()
+
+        # 2. Aplicar los cambios de hardware críticos
+        self.sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
         bw = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
         self.sdr.pyhackrf_set_baseband_filter_bandwidth(bw)
+        
+        # 3. Recalcular el eje X para el gráfico
         self.update_x_axis()
+
+        # 4. Volver a arrancar la recepción
+        self.sdr.pyhackrf_start_rx()
 
     def on_lna_changed(self, text):
         val = int(text.replace(" dB", ""))
@@ -156,9 +224,11 @@ class MainWindow(QMainWindow):
         self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
     def update_plot(self, PSD):
-        # Evitar crash si ocurre un cambio de FFT justo a la mitad del callback
         if len(self.f_axis) == len(PSD):
             self.freq_plot_curve.setData(self.f_axis, PSD)
+            # Acumular los datos si estamos grabando
+            if self.is_recording:
+                self.recorded_psds.append(PSD.copy())
 
 
 # --- INICIALIZACIÓN HACKRF Y APP ---
