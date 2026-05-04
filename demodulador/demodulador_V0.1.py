@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
     def __init__(self, sdr_device):
         super().__init__()
         self.sdr = sdr_device
-        self.setWindowTitle("Analizador de Espectro - HackRF")
+        self.setWindowTitle("Demodulador")
         self.setFixedSize(QSize(1200, 600))
 
         # Layout Principal (Horizontal: Gráfico a la izquierda, Controles a la derecha)
