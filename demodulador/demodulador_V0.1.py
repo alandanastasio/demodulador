@@ -87,8 +87,8 @@ class MainWindow(QMainWindow):
         
         # --- LADO IZQUIERDO: GRÁFICO ---
         self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
-        self.freq_plot.setMouseEnabled(x=False, y=True)
-        self.freq_plot_curve = self.freq_plot.plot([])
+        self.freq_plot.setMouseEnabled(x=True, y=True)
+        self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
         self.freq_plot.setYRange(-70, 10)
         self.update_x_axis()
         
