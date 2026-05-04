@@ -47,7 +47,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.sdr = sdr_device
         self.setWindowTitle("Demodulador")
-        self.setFixedSize(QSize(1200, 600))
+        self.resize(QSize(1200, 600))
+        self.setMinimumSize(QSize(800, 400))
 
         # Variables para la grabación
         self.is_recording = False
@@ -121,7 +122,7 @@ class MainWindow(QMainWindow):
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)
-        controls_widget.setFixedWidth(250)
+        controls_widget.setFixedWidth(300)
         main_layout.addWidget(controls_widget, stretch=1)
 
         central_widget = QWidget()
