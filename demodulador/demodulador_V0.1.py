@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         
         self.rec_play_btn.setText("▶ Reproduciendo...")
         self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-
+        self.freq_plot_curve.setPen(pg.mkPen(color="#FF8400", width=1.5))
         # Iniciar el temporizador (simula ~30 FPS = ~33ms)
         self.playback_index = 0
         self.playback_timer.start(33) 
@@ -264,7 +264,7 @@ class MainWindow(QMainWindow):
             
             self.rec_play_btn.setText("Rec/Play")
             self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-            
+            self.freq_plot_curve.setPen(pg.mkPen(color='#FFD500', width=1.5))
             # Volver a encender el hardware en vivo
             print("Reproducción finalizada. Volviendo a la antena.")
             self.sdr.pyhackrf_start_rx()
