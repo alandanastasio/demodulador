@@ -1,10 +1,10 @@
 ### DEMODULADOR V0.1 ###
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject
+from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QToolBar, QToolButton, QMenu)
+                             QToolBar, QToolButton, QMenu, QFileDialog)
 import pyqtgraph as pg
 import numpy as np
 import signal
@@ -52,9 +52,13 @@ class MainWindow(QMainWindow):
         self.resize(QSize(1200, 600))
         self.setMinimumSize(QSize(800, 400))
 
-        # Variables para la grabación
+        # Variables para la grabación y reproducción
         self.is_recording = False
         self.recorded_samples = []
+        self.playback_timer = QTimer()                            
+        self.playback_timer.timeout.connect(self.playback_step)   
+        self.playback_data = None                                 
+        self.playback_index = 0                                   
 
        # --- BARRA SUPERIOR  ---
         self.toolbar = QToolBar("Barra Principal")
@@ -75,8 +79,12 @@ class MainWindow(QMainWindow):
         self.record_action = QAction("🔴 Iniciar Grabación", self)
         self.record_action.triggered.connect(self.toggle_recording)
         
+        self.play_action = QAction("▶ Reproducir Archivo", self) 
+        self.play_action.triggered.connect(self.load_and_play)    
+        
         # 4. Agregar la acción al menú, y el menú al botón
         self.rec_play_menu.addAction(self.record_action)
+        self.rec_play_menu.addAction(self.play_action)         
         # Acá a futuro podés agregar más acciones: self.rec_play_menu.addAction(otra_accion)
 
         self.rec_play_btn.setMenu(self.rec_play_menu)
@@ -193,6 +201,90 @@ class MainWindow(QMainWindow):
             self.freq_input.setEnabled(True)
             self.sr_combo.setEnabled(True)
             self.fft_combo.setEnabled(True)
+
+    def load_and_play(self):
+        # Abrir ventana para elegir el archivo .npz
+        filename, _ = QFileDialog.getOpenFileName(self, "Seleccionar Grabación IQ", "", "Numpy Archives (*.npz)")
+        if not filename:
+            return # El usuario canceló
+
+        # Frenar la HackRF para que no colisionen los datos
+        self.sdr.pyhackrf_stop_rx()
+
+        print(f"Cargando archivo: {filename}...")
+        QApplication.processEvents() # Forzar actualización gráfica
+
+        # Cargar los datos a memoria
+        try:
+            data = np.load(filename)
+            self.playback_data = data['raw_iq']
+            cf = data['center_freq']
+            sr = data['sample_rate']
+        except Exception as e:
+            print(f"Error al leer el archivo: {e}")
+            self.sdr.pyhackrf_start_rx()
+            return
+
+        # Actualizar el estado y la interfaz gráfica para que coincidan con la grabación
+        state['center_freq'] = float(cf)
+        state['sample_rate'] = float(sr)
+        self.freq_input.setValue(cf / 1e6)
+        self.update_x_axis()
+
+        # Bloquear controles para que no arruinen la reproducción
+        self.freq_input.setEnabled(False)
+        self.sr_combo.setEnabled(False)
+        self.fft_combo.setEnabled(False)
+        self.record_action.setEnabled(False)
+        self.play_action.setEnabled(False)
+        
+        self.rec_play_btn.setText("▶ Reproduciendo...")
+        self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        # Iniciar el temporizador (simula ~30 FPS = ~33ms)
+        self.playback_index = 0
+        self.playback_timer.start(33) 
+        print("Reproducción iniciada.")
+
+    def playback_step(self):
+        fs = state['fft_size']
+        
+        # Calcular cuántas muestras saltar para simular la velocidad real
+        # Avance = Sample Rate (muestras/seg) * tiempo del frame (0.033 seg)
+        avance = int(state['sample_rate'] * 0.033) 
+
+        if self.playback_index + fs > len(self.playback_data):
+            # Si llegamos al final del archivo, terminar reproducción
+            self.playback_timer.stop()
+            self.freq_input.setEnabled(True)
+            self.sr_combo.setEnabled(True)
+            self.fft_combo.setEnabled(True)
+            self.record_action.setEnabled(True)
+            self.play_action.setEnabled(True)
+            
+            self.rec_play_btn.setText("Rec/Play")
+            self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            
+            # Volver a encender el hardware en vivo
+            print("Reproducción finalizada. Volviendo a la antena.")
+            self.sdr.pyhackrf_start_rx()
+            return
+
+        # Agarrar el pedacito de muestras crudas correspondiente a este frame
+        chunk = self.playback_data[self.playback_index : self.playback_index + fs].copy()
+        
+        # Avanzar el puntero en el tiempo
+        self.playback_index += avance
+
+        # Hacer la misma matemática de la FFT que hace el rx_callback
+        chunk = chunk - np.mean(chunk)
+        potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+        PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+        centro = fs // 2
+        PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+
+        # Enviar los datos al gráfico
+        emitter.data_updated.emit(PSD, chunk)
 
     def on_freq_changed(self, val_mhz):
         state['center_freq'] = val_mhz * 1e6
