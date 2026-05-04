@@ -20,7 +20,7 @@ state = {
 }
 
 class SignalEmitter(QObject):
-    fft_updated = pyqtSignal(np.ndarray)
+    data_updated = pyqtSignal(np.ndarray, np.ndarray)
 
 emitter = SignalEmitter()
 
@@ -30,7 +30,7 @@ def rx_callback(device, buffer, buffer_length, valid_length):
 
     fs = state['fft_size']
     if len(c_samples) >= fs:
-        chunk = c_samples[:fs]
+        chunk = c_samples[:fs].copy() # Sacamos una copia solo para el gráfico
         chunk = chunk - np.mean(chunk)
 
         potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
@@ -39,7 +39,8 @@ def rx_callback(device, buffer, buffer_length, valid_length):
         centro = fs // 2
         PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
 
-        emitter.fft_updated.emit(PSD)
+        # Emitimos el PSD para la pantalla y TODAS las muestras para grabar
+        emitter.data_updated.emit(PSD, c_samples)
 
     return 0
 
@@ -53,7 +54,7 @@ class MainWindow(QMainWindow):
 
         # Variables para la grabación
         self.is_recording = False
-        self.recorded_psds = []
+        self.recorded_samples = []
 
        # --- BARRA SUPERIOR  ---
         self.toolbar = QToolBar("Barra Principal")
@@ -143,17 +144,16 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-        emitter.fft_updated.connect(self.update_plot)
+        emitter.data_updated.connect(self.update_plot)
 
     def toggle_recording(self):
         if not self.is_recording:
             self.is_recording = True
-            self.recorded_psds = []
+            self.recorded_samples = [] # <-- Limpiamos la lista correcta
             
-            # Cambiar apariencia en el menú y poner rojo el botón principal
             self.record_action.setText("⏹ Detener y Guardar")
             self.rec_play_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-            print("Grabación iniciada...")
+            print("Grabación de muestras IQ iniciada...")
             
             self.freq_input.setEnabled(False)
             self.sr_combo.setEnabled(False)
@@ -161,28 +161,38 @@ class MainWindow(QMainWindow):
         else:
             self.is_recording = False
             
-            # Restaurar apariencia del menú y color original del botón
+            # 1. Cambiar estado visual y FORZAR a la GUI a actualizarse
+            self.record_action.setText("⏳ Guardando...")
+            self.rec_play_btn.setText("⏳ Guardando...")
+            self.rec_play_btn.setStyleSheet("background-color: #ff8c00; color: black; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            QApplication.processEvents() # <- Esto actualiza la pantalla ANTES de que se congele
+
+            if len(self.recorded_samples) > 0:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"muestras_iq_{timestamp}.npz"
+                
+                # Unir todos los fragmentos en un único array gigante 1D
+                todas_las_muestras = np.concatenate(self.recorded_samples)
+                
+                # 2. Guardar SIN COMPRESIÓN. Es muchísimo más rápido para ruido de RF.
+                np.savez(
+                    filename,
+                    raw_iq=todas_las_muestras,
+                    center_freq=state['center_freq'],
+                    sample_rate=state['sample_rate']
+                )
+                print(f"Grabación guardada exitosamente en: {filename}")
+                print(f"Muestras totales grabadas: {len(todas_las_muestras)}")
+                self.recorded_samples = []
+
+            # 3. Restaurar apariencia original de los botones y controles
             self.record_action.setText("🔴 Iniciar Grabación")
+            self.rec_play_btn.setText("Rec/Play")
             self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
             
             self.freq_input.setEnabled(True)
             self.sr_combo.setEnabled(True)
             self.fft_combo.setEnabled(True)
-
-            if len(self.recorded_psds) > 0:
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"espectro_{timestamp}.npz"
-                
-                np.savez_compressed(
-                    filename,
-                    psd_data=np.array(self.recorded_psds),
-                    center_freq=state['center_freq'],
-                    sample_rate=state['sample_rate'],
-                    fft_size=state['fft_size']
-                )
-                print(f"Grabación guardada exitosamente en: {filename}")
-                print(f"Paquetes grabados: {len(self.recorded_psds)}")
-                self.recorded_psds = []
 
     def on_freq_changed(self, val_mhz):
         state['center_freq'] = val_mhz * 1e6
@@ -221,11 +231,12 @@ class MainWindow(QMainWindow):
         self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
         self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
-    def update_plot(self, PSD):
+    def update_plot(self, PSD, raw_samples):
         if len(self.f_axis) == len(PSD):
             self.freq_plot_curve.setData(self.f_axis, PSD)
             if self.is_recording:
-                self.recorded_psds.append(PSD.copy())
+                # Guardamos las muestras complejas (IQ) intactas
+                self.recorded_samples.append(raw_samples.copy())
 
 # --- INICIALIZACIÓN HACKRF Y APP ---
 pyhackrf.pyhackrf_init()
