@@ -80,10 +80,10 @@ class MainWindow(QMainWindow):
         self.record_action = QAction("🔴 Iniciar Grabación", self)
         self.record_action.triggered.connect(self.toggle_recording)
         
-        self.play_action = QAction("▶ Reproducir Archivo", self)
+        self.play_action = QAction(" ▶ Reproducir Archivo", self)
         self.play_action.triggered.connect(lambda: self.load_and_play(loop=False))
         
-        # --- NUEVOS BOTONES ---
+        # Boton de reproducir en loop y de detener
         self.loop_action = QAction("🔁 Reproducir archivo en loop", self)
         self.loop_action.triggered.connect(lambda: self.load_and_play(loop=True))
 
@@ -101,6 +101,30 @@ class MainWindow(QMainWindow):
         self.rec_play_btn.setMenu(self.rec_play_menu)
         self.toolbar.addWidget(self.rec_play_btn)
 
+        self.toolbar.addSeparator() # Una barrita vertical para separar
+
+        # --- MENÚ DE MARKERS ---
+        # 1. Crear el botón principal (QToolButton)
+        self.markers_btn = QToolButton()
+        self.markers_btn.setText("Markers")
+        self.markers_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.markers_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.markers_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        # 2. Crear el Menú para los markers
+        self.markers_menu = QMenu()
+
+        # 3. Marker 1
+        self.marker_action = QAction("📌 Activar Marker", self)
+        self.marker_action.setCheckable(True) # Hace que quede tildado en el menú al activarlo
+        self.marker_action.triggered.connect(self.toggle_marker)
+        
+        # 4. Enchufar todo
+        self.markers_menu.addAction(self.marker_action)
+        self.markers_btn.setMenu(self.markers_menu)
+        
+        # 5. Agregar el botón desplegable a la barra
+        self.toolbar.addWidget(self.markers_btn)
 
         # Layout Principal
         main_layout = QHBoxLayout()
@@ -109,6 +133,15 @@ class MainWindow(QMainWindow):
         self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
         self.freq_plot.setMouseEnabled(x=True, y=True)
         self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
+
+        # Rombo flotante y Texto
+        self.marker_point = pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FF00'), symbol='d')
+        self.marker_text = pg.TextItem(text="", color='#00FF00', fill=pg.mkBrush(0, 0, 0, 200), anchor=(0, 1))
+        self.marker_freq = state['center_freq'] / 1e6 # Guarda la frecuencia seleccionada
+        
+        # Conectar el clic del mouse en el gráfico a una función nuestra
+        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+
         self.freq_plot.setYRange(-70, 10)
         self.update_x_axis()
         
@@ -164,6 +197,24 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         emitter.data_updated.connect(self.update_plot)
+
+    def toggle_marker(self, checked):
+        if checked:
+            self.freq_plot.addItem(self.marker_point)
+            self.freq_plot.addItem(self.marker_text)
+            self.marker_freq = state['center_freq'] / 1e6 # Aparece en el medio al prenderlo
+        else:
+            self.freq_plot.removeItem(self.marker_point)
+            self.freq_plot.removeItem(self.marker_text)
+    
+    def on_mouse_clicked(self, event):
+        # Solo actuar si el marker está prendido y fue un clic izquierdo
+        if self.marker_action.isChecked() and event.button() == Qt.MouseButton.LeftButton:
+            # Verificar que el clic fue dentro del área de dibujo
+            if self.freq_plot.sceneBoundingRect().contains(event.scenePos()):
+                # Traducir los píxeles de la pantalla a valores de Frecuencia (eje X)
+                mouse_point = self.freq_plot.getViewBox().mapSceneToView(event.scenePos())
+                self.marker_freq = mouse_point.x()
 
     def toggle_recording(self):
         if not self.is_recording:
@@ -354,8 +405,22 @@ class MainWindow(QMainWindow):
     def update_plot(self, PSD, raw_samples):
         if len(self.f_axis) == len(PSD):
             self.freq_plot_curve.setData(self.f_axis, PSD)
+            
+            # Lógica del Rombo en tiempo real
+            if self.marker_action.isChecked():
+                # 1. Encontrar la frecuencia en el eje X más cercana a donde hiciste clic
+                idx = (np.abs(self.f_axis - self.marker_freq)).argmin()
+                
+                # 2. Leer la Frecuencia real y la Potencia exacta en ese punto
+                x_val = self.f_axis[idx]
+                y_val = PSD[idx]
+                
+                # 3. Mover el rombo y el texto a esa coordenada exacta
+                self.marker_point.setData([x_val], [y_val])
+                self.marker_text.setText(f" Freq: {x_val:.3f} MHz \n Pot: {y_val:.2f} dB ")
+                self.marker_text.setPos(x_val, y_val)
+            
             if self.is_recording:
-                # Guardamos las muestras complejas (IQ) intactas
                 self.recorded_samples.append(raw_samples.copy())
 
 # --- INICIALIZACIÓN HACKRF Y APP ---
