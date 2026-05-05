@@ -1,4 +1,4 @@
-### DEMODULADOR V0.1 ###
+### DEMODULADOR V0.2 ###
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction
