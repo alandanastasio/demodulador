@@ -68,7 +68,7 @@ class MainWindow(QMainWindow):
         # 1 Rec/Play
         self.rec_play_btn = QToolButton()
         self.rec_play_btn.setText("Rec/Play")
-        self.rec_play_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup) # Despliega al instante
+        self.rec_play_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.rec_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
 
@@ -79,7 +79,7 @@ class MainWindow(QMainWindow):
         self.record_action = QAction("🔴 Iniciar Grabación", self)
         self.record_action.triggered.connect(self.toggle_recording)
         
-        self.play_action = QAction("▶ Reproducir Archivo", self) 
+        self.play_action = QAction(" ▶ Reproducir Archivo", self) 
         self.play_action.triggered.connect(self.load_and_play)    
         
         # 4. Agregar la acción al menú, y el menú al botón
