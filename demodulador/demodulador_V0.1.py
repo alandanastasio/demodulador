@@ -58,7 +58,8 @@ class MainWindow(QMainWindow):
         self.playback_timer = QTimer()                            
         self.playback_timer.timeout.connect(self.playback_step)   
         self.playback_data = None                                 
-        self.playback_index = 0                                   
+        self.playback_index = 0
+        self.is_looping = False                                   
 
        # --- BARRA SUPERIOR  ---
         self.toolbar = QToolBar("Barra Principal")
@@ -79,13 +80,23 @@ class MainWindow(QMainWindow):
         self.record_action = QAction("🔴 Iniciar Grabación", self)
         self.record_action.triggered.connect(self.toggle_recording)
         
-        self.play_action = QAction(" ▶ Reproducir Archivo", self) 
-        self.play_action.triggered.connect(self.load_and_play)    
+        self.play_action = QAction("▶ Reproducir Archivo", self)
+        self.play_action.triggered.connect(lambda: self.load_and_play(loop=False))
         
-        # 4. Agregar la acción al menú, y el menú al botón
+        # --- NUEVOS BOTONES ---
+        self.loop_action = QAction("🔁 Reproducir archivo en loop", self)
+        self.loop_action.triggered.connect(lambda: self.load_and_play(loop=True))
+
+        self.stop_play_action = QAction("⏹ Detener Reproducción", self)
+        self.stop_play_action.triggered.connect(self.stop_playback)
+        self.stop_play_action.setEnabled(False) # Arranca deshabilitado
+        
+        # 4. Agregar al menú
         self.rec_play_menu.addAction(self.record_action)
-        self.rec_play_menu.addAction(self.play_action)         
-        # Acá a futuro podés agregar más acciones: self.rec_play_menu.addAction(otra_accion)
+        self.rec_play_menu.addAction(self.play_action)
+        self.rec_play_menu.addAction(self.loop_action)
+        self.rec_play_menu.addSeparator() # Una rayita separadora queda linda
+        self.rec_play_menu.addAction(self.stop_play_action)
 
         self.rec_play_btn.setMenu(self.rec_play_menu)
         self.toolbar.addWidget(self.rec_play_btn)
@@ -202,19 +213,15 @@ class MainWindow(QMainWindow):
             self.sr_combo.setEnabled(True)
             self.fft_combo.setEnabled(True)
 
-    def load_and_play(self):
-        # Abrir ventana para elegir el archivo .npz
+    def load_and_play(self, loop=False): # <-- Agregamos el flag
         filename, _ = QFileDialog.getOpenFileName(self, "Seleccionar Grabación IQ", "", "Numpy Archives (*.npz)")
         if not filename:
-            return # El usuario canceló
+            return
 
-        # Frenar la HackRF para que no colisionen los datos
         self.sdr.pyhackrf_stop_rx()
-
         print(f"Cargando archivo: {filename}...")
-        QApplication.processEvents() # Forzar actualización gráfica
+        QApplication.processEvents()
 
-        # Cargar los datos a memoria
         try:
             data = np.load(filename)
             self.playback_data = data['raw_iq']
@@ -225,23 +232,30 @@ class MainWindow(QMainWindow):
             self.sdr.pyhackrf_start_rx()
             return
 
-        # Actualizar el estado y la interfaz gráfica para que coincidan con la grabación
+        self.is_looping = loop # <-- Guardamos el flag en la clase
         state['center_freq'] = float(cf)
         state['sample_rate'] = float(sr)
         self.freq_input.setValue(cf / 1e6)
         self.update_x_axis()
 
-        # Bloquear controles para que no arruinen la reproducción
+        # Bloquear y desbloquear controles
         self.freq_input.setEnabled(False)
         self.sr_combo.setEnabled(False)
         self.fft_combo.setEnabled(False)
         self.record_action.setEnabled(False)
         self.play_action.setEnabled(False)
+        self.loop_action.setEnabled(False)        # Bloquear Play en Loop
+        self.stop_play_action.setEnabled(True)    # Habilitar botón de Parar
         
-        self.rec_play_btn.setText("▶ Reproduciendo...")
+        # Cambiar el texto del botón principal según el modo
+        if self.is_looping:
+            self.rec_play_btn.setText("🔁 Reproduciendo Loop...")
+        else:
+            self.rec_play_btn.setText("▶ Reproduciendo...")
+            
         self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-        self.freq_plot_curve.setPen(pg.mkPen(color="#FF8400", width=1.5))
-        # Iniciar el temporizador (simula ~30 FPS = ~33ms)
+        self.freq_plot_curve.setPen(pg.mkPen(color="#22FF00", width=1.5))
+
         self.playback_index = 0
         self.playback_timer.start(33) 
         print("Reproducción iniciada.")
@@ -254,21 +268,13 @@ class MainWindow(QMainWindow):
         avance = int(state['sample_rate'] * 0.033) 
 
         if self.playback_index + fs > len(self.playback_data):
-            # Si llegamos al final del archivo, terminar reproducción
-            self.playback_timer.stop()
-            self.freq_input.setEnabled(True)
-            self.sr_combo.setEnabled(True)
-            self.fft_combo.setEnabled(True)
-            self.record_action.setEnabled(True)
-            self.play_action.setEnabled(True)
-            
-            self.rec_play_btn.setText("Rec/Play")
-            self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-            self.freq_plot_curve.setPen(pg.mkPen(color='#FFD500', width=1.5))
-            # Volver a encender el hardware en vivo
-            print("Reproducción finalizada. Volviendo a la antena.")
-            self.sdr.pyhackrf_start_rx()
-            return
+            if self.is_looping:
+                # Si estamos en loop, simplemente rebobinamos al índice 0
+                self.playback_index = 0 
+            else:
+                # Si es reproducción normal, detenemos todo
+                self.stop_playback() 
+                return
 
         # Agarrar el pedacito de muestras crudas correspondiente a este frame
         chunk = self.playback_data[self.playback_index : self.playback_index + fs].copy()
@@ -285,6 +291,28 @@ class MainWindow(QMainWindow):
 
         # Enviar los datos al gráfico
         emitter.data_updated.emit(PSD, chunk)
+    
+    def stop_playback(self):
+        self.playback_timer.stop()
+        self.is_looping = False
+        
+        # Rehabilitar todo
+        self.freq_input.setEnabled(True)
+        self.sr_combo.setEnabled(True)
+        self.fft_combo.setEnabled(True)
+        self.record_action.setEnabled(True)
+        self.play_action.setEnabled(True)
+        self.loop_action.setEnabled(True)
+        self.stop_play_action.setEnabled(False)
+        
+        # Restaurar botón principal y color del gráfico
+        self.rec_play_btn.setText("Rec/Play")
+        self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+        self.freq_plot_curve.setPen(pg.mkPen(color='#FFD500', width=1.5))
+        
+        # Volver a encender la HackRF en vivo
+        print("Reproducción finalizada o detenida. Volviendo a la antena.")
+        self.sdr.pyhackrf_start_rx()
 
     def on_freq_changed(self, val_mhz):
         state['center_freq'] = val_mhz * 1e6
