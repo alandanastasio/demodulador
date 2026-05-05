@@ -1,7 +1,7 @@
 ### DEMODULADOR V0.2 ###
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog)
@@ -52,6 +52,9 @@ class MainWindow(QMainWindow):
         self.resize(QSize(1200, 600))
         self.setMinimumSize(QSize(800, 400))
 
+        # Color de fondo y texto de la ventana
+        self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
+
         # Variables para la grabación y reproducción
         self.is_recording = False
         self.recorded_samples = []
@@ -75,6 +78,16 @@ class MainWindow(QMainWindow):
 
         # 2. Crear el Menú que va a contener las opciones
         self.rec_play_menu = QMenu()
+        self.rec_play_menu.setStyleSheet("""
+            QMenu {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: 1px solid #444;
+            }
+            QMenu::item:selected {
+                background-color: #555555;
+            }
+        """)
 
         # 3. Crear las acciones (Opciones del menú)
         self.record_action = QAction("🔴 Iniciar Grabación", self)
@@ -103,49 +116,102 @@ class MainWindow(QMainWindow):
 
         self.toolbar.addSeparator() # Una barrita vertical para separar
 
+        main_layout = QHBoxLayout()
+    
+        # --- LADO IZQUIERDO: GRÁFICO ---
+        self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
+        self.freq_plot.setMouseEnabled(x=True, y=True)
+        self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
+
+        # --- SISTEMA DE MARKERS ---
+        # Diccionario con la configuración y estado de cada marker/delta
+        self.markers_info = {
+            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00FF00', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FF00'), symbol='d')},
+            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00FFFF', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FFFF'), symbol='t')}, # 't' es triángulo
+            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#FF8800', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#FF8800'), symbol='d')},
+            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#FF00FF', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#FF00FF'), symbol='t')}
+        }
+        self.current_moving_marker = None # Cuál se mueve al hacer clic
+        
+        self.marker_text_box = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(1, 0))
+        self.freq_plot.addItem(self.marker_text_box)
+        self.marker_text_box.hide()
+
+        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+        self.freq_plot.setYRange(-70, 10)
+        self.update_x_axis()
+        main_layout.addWidget(self.freq_plot, stretch=4)
+
         # --- MENÚ DE MARKERS ---
-        # 1. Crear el botón principal (QToolButton)
         self.markers_btn = QToolButton()
         self.markers_btn.setText("Markers")
         self.markers_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.markers_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.markers_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
 
-        # 2. Crear el Menú para los markers
         self.markers_menu = QMenu()
+        self.markers_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
 
-        # 3. Marker 1
-        self.marker_action = QAction("📌 Activar Marker", self)
-        self.marker_action.setCheckable(True) # Hace que quede tildado en el menú al activarlo
-        self.marker_action.triggered.connect(self.toggle_marker)
+        # Grupo de acciones (Radio buttons para elegir qué marker mover)
+        self.marker_group = QActionGroup(self)
+        self.marker_group.setExclusive(True)
+
+        def create_marker_action(text, key):
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked, k=key: self.select_marker(k))
+            self.marker_group.addAction(action)
+            self.markers_menu.addAction(action)
+            return action
+
+        self.action_m1 = create_marker_action("📍 Seleccionar M1", 'M1')
+        self.action_d1 = create_marker_action("📍 Seleccionar Delta 1", 'D1')
+        self.action_m2 = create_marker_action("📍 Seleccionar M2", 'M2')
+        self.action_d2 = create_marker_action("📍 Seleccionar Delta 2", 'D2')
+
+        self.markers_menu.addSeparator()
         
-        # 4. Enchufar todo
-        self.markers_menu.addAction(self.marker_action)
+        self.action_none = QAction("🚫 Mover Ninguno", self)
+        self.action_none.setCheckable(True)
+        self.action_none.setChecked(True) # Por defecto no se mueve ninguno
+        self.action_none.triggered.connect(lambda: self.select_marker(None))
+        self.marker_group.addAction(self.action_none)
+        self.markers_menu.addAction(self.action_none)
+
+        self.markers_menu.addSeparator()
+        
+        # --- SUBMENÚ DE ELIMINACIÓN ---
+        self.delete_menu = QMenu("🗑️ Eliminar...", self)
+        self.delete_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #8b0000; } /* Un rojito oscuro al seleccionar */
+        """)
+
+        def create_delete_action(text, key):
+            action = QAction(text, self)
+            action.triggered.connect(lambda checked, k=key: self.delete_marker(k))
+            self.delete_menu.addAction(action)
+            return action
+
+        create_delete_action("❌ Eliminar M1", 'M1')
+        create_delete_action("❌ Eliminar Delta 1", 'D1')
+        create_delete_action("❌ Eliminar M2", 'M2')
+        create_delete_action("❌ Eliminar Delta 2", 'D2')
+        
+        self.delete_menu.addSeparator()
+        
+        self.clear_markers_action = QAction("💥 Limpiar Todos", self)
+        self.clear_markers_action.triggered.connect(self.clear_markers)
+        self.delete_menu.addAction(self.clear_markers_action)
+
+        # Agregar el submenú al menú principal
+        self.markers_menu.addMenu(self.delete_menu)
+
         self.markers_btn.setMenu(self.markers_menu)
-        
-        # 5. Agregar el botón desplegable a la barra
         self.toolbar.addWidget(self.markers_btn)
-
-        # Layout Principal
-        main_layout = QHBoxLayout()
-        
-        # --- LADO IZQUIERDO: GRÁFICO ---
-        self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
-        self.freq_plot.setMouseEnabled(x=True, y=True)
-        self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
-
-        # Rombo flotante y Texto
-        self.marker_point = pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FF00'), symbol='d')
-        self.marker_text = pg.TextItem(text="", color='#00FF00', fill=pg.mkBrush(0, 0, 0, 200), anchor=(0, 1))
-        self.marker_freq = state['center_freq'] / 1e6 # Guarda la frecuencia seleccionada
-        
-        # Conectar el clic del mouse en el gráfico a una función nuestra
-        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
-
-        self.freq_plot.setYRange(-70, 10)
-        self.update_x_axis()
-        
-        main_layout.addWidget(self.freq_plot, stretch=4)
 
         # --- LADO DERECHO: CONTROLES ---
         controls_layout = QVBoxLayout()
@@ -198,23 +264,46 @@ class MainWindow(QMainWindow):
 
         emitter.data_updated.connect(self.update_plot)
 
-    def toggle_marker(self, checked):
-        if checked:
-            self.freq_plot.addItem(self.marker_point)
-            self.freq_plot.addItem(self.marker_text)
-            self.marker_freq = state['center_freq'] / 1e6 # Aparece en el medio al prenderlo
-        else:
-            self.freq_plot.removeItem(self.marker_point)
-            self.freq_plot.removeItem(self.marker_text)
-    
+    def select_marker(self, key):
+        self.current_moving_marker = key
+        if key is not None:
+            # Si el marker no estaba activo, lo prendemos y lo mostramos
+            if not self.markers_info[key]['active']:
+                self.markers_info[key]['active'] = True
+                self.freq_plot.addItem(self.markers_info[key]['item'])
+                self.marker_text_box.show()
+
+    def clear_markers(self):
+        for key, data in self.markers_info.items():
+            if data['active']:
+                self.freq_plot.removeItem(data['item'])
+            data['active'] = False
+        
+        self.marker_text_box.hide()
+        self.action_none.setChecked(True)
+        self.current_moving_marker = None
+
+    def delete_marker(self, key):
+        # 1. Si el marker estaba activo, lo sacamos de la pantalla y lo marcamos apagado
+        if self.markers_info[key]['active']:
+            self.freq_plot.removeItem(self.markers_info[key]['item'])
+            self.markers_info[key]['active'] = False
+        
+        # 2. Si justo estábamos moviendo el marker que acabamos de borrar, reseteamos la selección
+        if self.current_moving_marker == key:
+            self.action_none.setChecked(True)
+            self.current_moving_marker = None
+        
+        # 3. Si ya no queda NINGÚN marker activo en pantalla, ocultamos el cuadro de texto negro
+        if not any(m['active'] for m in self.markers_info.values()):
+            self.marker_text_box.hide()
+
     def on_mouse_clicked(self, event):
-        # Solo actuar si el marker está prendido y fue un clic izquierdo
-        if self.marker_action.isChecked() and event.button() == Qt.MouseButton.LeftButton:
-            # Verificar que el clic fue dentro del área de dibujo
+        # Mueve únicamente el marker que está seleccionado en el menú
+        if event.button() == Qt.MouseButton.LeftButton and self.current_moving_marker is not None:
             if self.freq_plot.sceneBoundingRect().contains(event.scenePos()):
-                # Traducir los píxeles de la pantalla a valores de Frecuencia (eje X)
                 mouse_point = self.freq_plot.getViewBox().mapSceneToView(event.scenePos())
-                self.marker_freq = mouse_point.x()
+                self.markers_info[self.current_moving_marker]['freq'] = mouse_point.x()
 
     def toggle_recording(self):
         if not self.is_recording:
@@ -305,7 +394,7 @@ class MainWindow(QMainWindow):
             self.rec_play_btn.setText("▶ Reproduciendo...")
             
         self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-        self.freq_plot_curve.setPen(pg.mkPen(color="#22FF00", width=1.5))
+        self.freq_plot_curve.setPen(pg.mkPen(color="#0088FF", width=1.5))
 
         self.playback_index = 0
         self.playback_timer.start(33) 
@@ -406,19 +495,51 @@ class MainWindow(QMainWindow):
         if len(self.f_axis) == len(PSD):
             self.freq_plot_curve.setData(self.f_axis, PSD)
             
-            # Lógica del Rombo en tiempo real
-            if self.marker_action.isChecked():
-                # 1. Encontrar la frecuencia en el eje X más cercana a donde hiciste clic
-                idx = (np.abs(self.f_axis - self.marker_freq)).argmin()
-                
-                # 2. Leer la Frecuencia real y la Potencia exacta en ese punto
-                x_val = self.f_axis[idx]
-                y_val = PSD[idx]
-                
-                # 3. Mover el rombo y el texto a esa coordenada exacta
-                self.marker_point.setData([x_val], [y_val])
-                self.marker_text.setText(f" Freq: {x_val:.3f} MHz \n Pot: {y_val:.2f} dB ")
-                self.marker_text.setPos(x_val, y_val)
+            # --- LÓGICA DE MARKERS Y DELTAS ---
+            any_active = any(m['active'] for m in self.markers_info.values())
+            if any_active:
+                texto_global = ""
+                current_frame_data = {} # Para guardar X e Y y poder restar
+
+                # 1. Posicionar los gráficos de los que están activos
+                for key, data in self.markers_info.items():
+                    if data['active']:
+                        idx = (np.abs(self.f_axis - data['freq'])).argmin()
+                        x_val = self.f_axis[idx]
+                        y_val = PSD[idx]
+                        data['item'].setData([x_val], [y_val])
+                        current_frame_data[key] = {'x': x_val, 'y': y_val, 'color': data['color']}
+
+                # 2. Armar el texto para M1 y Delta 1
+                if 'M1' in current_frame_data:
+                    m1 = current_frame_data['M1']
+                    texto_global += f"<span style='color:{m1['color']}'><b>M1:</b> {m1['x']:.3f} MHz | {m1['y']:.2f} dB</span><br>"
+                if 'D1' in current_frame_data:
+                    d1 = current_frame_data['D1']
+                    if 'M1' in current_frame_data: # Si M1 existe, Delta 1 es relativo a M1
+                        dx = d1['x'] - m1['x']
+                        dy = d1['y'] - m1['y']
+                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
+                    else: # Si prendieron D1 pero M1 está apagado, muestra valores absolutos
+                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {d1['x']:.3f} MHz | {d1['y']:.2f} dB (Falta M1)</span><br>"
+
+                # 3. Armar el texto para M2 y Delta 2
+                if 'M2' in current_frame_data:
+                    m2 = current_frame_data['M2']
+                    texto_global += f"<span style='color:{m2['color']}'><b>M2:</b> {m2['x']:.3f} MHz | {m2['y']:.2f} dB</span><br>"
+                if 'D2' in current_frame_data:
+                    d2 = current_frame_data['D2']
+                    if 'M2' in current_frame_data:
+                        dx = d2['x'] - m2['x']
+                        dy = d2['y'] - m2['y']
+                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
+                    else:
+                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {d2['x']:.3f} MHz | {d2['y']:.2f} dB (Falta M2)</span><br>"
+
+                # 4. Actualizar el cuadro
+                self.marker_text_box.setHtml(texto_global)
+                view_rect = self.freq_plot.viewRange()
+                self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
             
             if self.is_recording:
                 self.recorded_samples.append(raw_samples.copy())
