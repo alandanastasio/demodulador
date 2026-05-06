@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
 
         # Variables para la grabación y reproducción
         self.is_recording = False
+        self.is_paused = False
         self.recorded_samples = []
         self.playback_timer = QTimer()                            
         self.playback_timer.timeout.connect(self.playback_step)   
@@ -89,6 +90,16 @@ class MainWindow(QMainWindow):
         self.rec_play_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.rec_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        # Botón Pausa/Reanudar
+        self.pause_btn = QToolButton()
+        self.pause_btn.setText("⏸")
+        self.pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setFixedSize(QSize(45, 40))
+        self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        self.toolbar.addWidget(self.pause_btn)
 
         # 2. Crear el Menú que va a contener las opciones
         self.rec_play_menu = QMenu()
@@ -349,6 +360,16 @@ class MainWindow(QMainWindow):
                 mouse_point = self.freq_plot.getViewBox().mapSceneToView(event.scenePos())
                 self.markers_info[self.current_moving_marker]['freq'] = mouse_point.x()
 
+    def toggle_pause(self):
+        self.is_paused = self.pause_btn.isChecked()
+        
+        if self.is_paused:
+            self.pause_btn.setText("▶")
+            self.pause_btn.setStyleSheet("background-color: #488BD8; color: black; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
+        else:
+            self.pause_btn.setText("⏸")
+            self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
+
     def toggle_recording(self):
         if not self.is_recording:
             self.is_recording = True
@@ -559,6 +580,9 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def update_plot(self, PSD, raw_samples):
+        if self.is_paused:
+            return
+        
         if len(self.f_axis) == len(PSD):
             
             # --- LÓGICA DE TRACE ---
