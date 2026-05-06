@@ -84,8 +84,11 @@ dependencies = [
     { name = "numpy" },
     { name = "pyqt6" },
     { name = "pyqtgraph" },
+    { name = "pyrtlsdr" },
     { name = "python-hackrf" },
+    { name = "pyusb" },
     { name = "scipy" },
+    { name = "setuptools" },
 ]
 
 [package.metadata]
@@ -94,8 +97,11 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pyqt6", specifier = ">=6.11.0" },
     { name = "pyqtgraph", specifier = ">=0.14.0" },
+    { name = "pyrtlsdr", specifier = "==0.2.93" },
     { name = "python-hackrf", specifier = ">=1.5.0.1" },
+    { name = "pyusb", specifier = ">=1.3.1" },
     { name = "scipy", specifier = ">=1.17.1" },
+    { name = "setuptools", specifier = "<69.0.0" },
 ]
 
 [[package]]
@@ -432,6 +438,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyrtlsdr"
+version = "0.2.93"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/cb/e81c73584fbdd9c8d0e85508aa89125c88a297a29b350dc1e0775d2be8d3/pyrtlsdr-0.2.93.tar.gz", hash = "sha256:2de29bb4e4037088a78e89012bc2cc84b73dc45c60608b28b7d903f62923ba26", size = 24956, upload-time = "2022-08-01T22:14:21.573Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/4c/eeed523bdf031ea2913dbc0e21708d3805b739f13dd4cd66f4b149a4bbea/pyrtlsdr-0.2.93-py2.py3-none-any.whl", hash = "sha256:9a35999876092af963869b499e6094555626c0c3bab45308643f9411495e8cc7", size = 25668, upload-time = "2022-08-01T22:14:20.337Z" },
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
@@ -451,6 +466,15 @@ dependencies = [
     { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/4b/d58fcffe466f2d161c7d8389d330a8a872999bf2e3115ce5cf7c140af79a/python_hackrf-1.5.0.1.tar.gz", hash = "sha256:a17d9e326b883970c0042140569f3be33f4131abc8d669aa3c375ded5d7fa9c2", size = 37987, upload-time = "2025-11-21T20:35:55.425Z" }
+
+[[package]]
+name = "pyusb"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/6b/ce3727395e52b7b76dfcf0c665e37d223b680b9becc60710d4bc08b7b7cb/pyusb-1.3.1.tar.gz", hash = "sha256:3af070b607467c1c164f49d5b0caabe8ac78dbed9298d703a8dbf9df4052d17e", size = 77281, upload-time = "2025-01-08T23:45:01.866Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/b8/27e6312e86408a44fe16bd28ee12dd98608b39f7e7e57884a24e8f29b573/pyusb-1.3.1-py3-none-any.whl", hash = "sha256:bf9b754557af4717fe80c2b07cc2b923a9151f5c08d17bdb5345dac09d6a0430", size = 58465, upload-time = "2025-01-08T23:45:00.029Z" },
+]
 
 [[package]]
 name = "scipy"
@@ -501,6 +525,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/52/52/e57eceff0e342a1f50e274264ed47497b59e6a4e3118808ee58ddda7b74a/scipy-1.17.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a77cbd07b940d326d39a1d1b37817e2ee4d79cb30e7338f3d0cddffae70fcaa2", size = 37682317, upload-time = "2026-02-23T00:22:18.513Z" },
     { url = "https://files.pythonhosted.org/packages/11/2f/b29eafe4a3fbc3d6de9662b36e028d5f039e72d345e05c250e121a230dd4/scipy-1.17.1-cp314-cp314t-win_amd64.whl", hash = "sha256:eb092099205ef62cd1782b006658db09e2fed75bffcae7cc0d44052d8aa0f484", size = 37345327, upload-time = "2026-02-23T00:22:24.442Z" },
     { url = "https://files.pythonhosted.org/packages/07/39/338d9219c4e87f3e708f18857ecd24d22a0c3094752393319553096b98af/scipy-1.17.1-cp314-cp314t-win_arm64.whl", hash = "sha256:200e1050faffacc162be6a486a984a0497866ec54149a01270adc8a59b7c7d21", size = 25489165, upload-time = "2026-02-23T00:22:29.563Z" },
+]
+
+[[package]]
+name = "setuptools"
+version = "68.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/cc/93f7213b2ab5ed383f98ce8020e632ef256b406b8569606c3f160ed8e1c9/setuptools-68.2.2.tar.gz", hash = "sha256:4ac1475276d2f1c48684874089fefcd83bd7162ddaafb81fac866ba0db282a87", size = 2203338, upload-time = "2023-09-12T17:22:07.903Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bb/26/7945080113158354380a12ce26873dd6c1ebd88d47f5bc24e2c5bb38c16a/setuptools-68.2.2-py3-none-any.whl", hash = "sha256:b454a35605876da60632df1a60f736524eb73cc47bbc9f3f1ef1b644de74fd2a", size = 807864, upload-time = "2023-09-12T17:22:04.917Z" },
 ]
 
 [[package]]

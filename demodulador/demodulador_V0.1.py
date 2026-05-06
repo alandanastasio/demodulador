@@ -4,13 +4,17 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget)
+                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,QPushButton)
 import pyqtgraph as pg
 import numpy as np
 import signal
 from python_hackrf import pyhackrf
 import time
 import datetime
+import usb.core
+import threading
+from rtlsdr import RtlSdr
+
 
 # Estado global para compartir entre la GUI y el hilo de C (callback)
 state = {
@@ -45,9 +49,11 @@ def rx_callback(device, buffer, buffer_length, valid_length):
     return 0
 
 class MainWindow(QMainWindow):
-    def __init__(self, sdr_device):
+    def __init__(self, sdr_device, device_type="hackrf"): 
         super().__init__()
         self.sdr = sdr_device
+        self.device_type = device_type # Guardamos qué radio es
+
         self.setWindowTitle("DEMODULADOR")
         self.resize(QSize(1200, 600))
         self.setMinimumSize(QSize(800, 400))
@@ -241,6 +247,7 @@ class MainWindow(QMainWindow):
         self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
         form_layout.addRow(QLabel("SAMP RATE:"), self.sr_combo)
 
+        
         self.lna_combo = QComboBox()
         self.lna_combo.addItems([f"{g} dB" for g in range(0, 48, 8)])
         self.lna_combo.setCurrentText("32 dB")
@@ -264,6 +271,19 @@ class MainWindow(QMainWindow):
         self.trace_combo.setCurrentText("White clear")
         self.trace_combo.currentTextChanged.connect(self.on_trace_changed)
         form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
+
+        # --- ADAPTACIÓN DE INTERFAZ SEGÚN EL SDR ---
+        if self.device_type == "rtlsdr":
+            # Bloqueamos las señales un segundo para que no dispare on_sr_changed mientras limpiamos
+            self.sr_combo.blockSignals(True) 
+            self.sr_combo.clear()
+            self.sr_combo.addItems(["1.024 MHz", "2.048 MHz", "2.4 MHz", "2.88 MHz"])
+            self.sr_combo.setCurrentText("2.4 MHz")
+            self.sr_combo.blockSignals(False) # Las volvemos a encender
+            
+            # Ahora sí podemos apagarlas porque ya fueron creadas arriba
+            self.lna_combo.setEnabled(False)
+            self.vga_combo.setEnabled(False)
 
         controls_layout.addLayout(form_layout)
         
@@ -480,29 +500,38 @@ class MainWindow(QMainWindow):
 
     def on_freq_changed(self, val_mhz):
         state['center_freq'] = val_mhz * 1e6
-        self.sdr.pyhackrf_set_freq(int(state['center_freq']))
+        if self.device_type == "hackrf":
+            self.sdr.pyhackrf_set_freq(int(state['center_freq']))
+        elif self.device_type == "rtlsdr":
+            self.sdr.center_freq = state['center_freq']
         self.update_x_axis()
 
     def on_sr_changed(self, text):
+        if not text: return #ignoramos señales vacias
+
         val_mhz = float(text.replace(" MHz", ""))
         state['sample_rate'] = val_mhz * 1e6
         
-        self.sdr.pyhackrf_stop_rx()
-
-        self.sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
-        bw = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
-        self.sdr.pyhackrf_set_baseband_filter_bandwidth(bw)
-        
+        if self.device_type == "hackrf":
+            self.sdr.pyhackrf_stop_rx()
+            self.sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
+            bw = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
+            self.sdr.pyhackrf_set_baseband_filter_bandwidth(bw)
+            self.sdr.pyhackrf_start_rx()
+        elif self.device_type == "rtlsdr":
+            self.sdr.sample_rate = state['sample_rate']
+            
         self.update_x_axis()
-        self.sdr.pyhackrf_start_rx()
 
     def on_lna_changed(self, text):
-        val = int(text.replace(" dB", ""))
-        self.sdr.pyhackrf_set_lna_gain(val)
+        if self.device_type == "hackrf":
+            val = int(text.replace(" dB", ""))
+            self.sdr.pyhackrf_set_lna_gain(val)
 
     def on_vga_changed(self, text):
-        val = int(text.replace(" dB", ""))
-        self.sdr.pyhackrf_set_vga_gain(val)
+        if self.device_type == "hackrf":
+            val = int(text.replace(" dB", ""))
+            self.sdr.pyhackrf_set_vga_gain(val)
 
     def on_fft_changed(self, text):
         state['fft_size'] = int(text)
@@ -517,14 +546,16 @@ class MainWindow(QMainWindow):
         self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
     def closeEvent(self, event):
-        # Este evento se dispara cuando cerrás la ventana principal
-        print("Cerrando demodulador y apagando SDR...")
+        print(f"Cerrando demodulador y apagando {self.device_type}...")
         try:
-            self.sdr.pyhackrf_stop_rx()
-            self.sdr.pyhackrf_close()
-            pyhackrf.pyhackrf_exit()
-        except:
-            pass
+            if self.device_type == "hackrf":
+                self.sdr.pyhackrf_stop_rx()
+                self.sdr.pyhackrf_close()
+                pyhackrf.pyhackrf_exit()
+            elif self.device_type == "rtlsdr":
+                self.sdr.cancel_read_async()
+                self.sdr.close()
+        except: pass
         event.accept()
 
     def update_plot(self, PSD, raw_samples):
@@ -613,30 +644,29 @@ class StartupWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DEMODULADOR")
-        self.resize(QSize(400, 300))
+        self.resize(QSize(400, 350))
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
         layout = QVBoxLayout()
         
-        label = QLabel("Dispositivos SDR disponibles:")
+        label = QLabel("Dispositivos SDR detectados por USB:")
         label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
         layout.addWidget(label)
 
-        # Crear la lista visual
+        # Botón para forzar el escaneo manual
+        self.scan_btn = QPushButton("🔄 Escanear Puertos USB")
+        self.scan_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.scan_btn.clicked.connect(self.scan_devices)
+        layout.addWidget(self.scan_btn)
+
         self.device_list = QListWidget()
         self.device_list.setStyleSheet("""
-            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 14px; outline: none;}
+            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 14px; outline: none; }
             QListWidget::item { padding: 15px; }
-            QListWidget::item:selected { background-color: #0077FF; }
+            QListWidget::item:selected { background-color: #0077FF; color: white; }
             QListWidget::item:hover { background-color: #444444; }
         """)
-        
-        # Por ahora solo agregamos la HackRF manual. A futuro acá podés poner una función que escanee USBs.
-        self.device_list.addItem("HackRF One")
-        
-        # Conectar el clic en la lista a nuestra función de inicio
         self.device_list.itemClicked.connect(self.launch_main_window)
-        
         layout.addWidget(self.device_list)
 
         central_widget = QWidget()
@@ -644,32 +674,83 @@ class StartupWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self.main_app_window = None
+        self.scan_devices() # Escaneo automático al abrir la ventana
+
+    def scan_devices(self):
+        self.device_list.clear()
+        devices_found = 0
+
+        # Buscar HackRF por su VID y PID
+        try:
+            if usb.core.find(idVendor=0x1d50, idProduct=0x6089):
+                self.device_list.addItem("HackRF One")
+                devices_found += 1
+        except Exception: pass
+
+        # Buscar RTL-SDR por su VID y PID
+        try:
+            if usb.core.find(idVendor=0x0bda, idProduct=0x2838):
+                self.device_list.addItem("RTL-SDR")
+                devices_found += 1
+        except Exception: pass
+
+        if devices_found == 0:
+            item = self.device_list.addItem("⚠️ No se encontraron dispositivos SDR")
+            item.setFlags(Qt.ItemFlag.NoItemFlags) # Hace que no se le pueda hacer clic
 
     def launch_main_window(self, item):
         device_name = item.text()
         
         if "HackRF" in device_name:
             print("Iniciando HackRF...")
-            # Toda la inicialización que antes estaba suelta al final, ahora va acá
             pyhackrf.pyhackrf_init()
             sdr = pyhackrf.pyhackrf_open()
-
             sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
             bw_inicial = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
             sdr.pyhackrf_set_baseband_filter_bandwidth(bw_inicial)
             sdr.pyhackrf_set_freq(int(state['center_freq']))
             sdr.pyhackrf_set_lna_gain(32)
             sdr.pyhackrf_set_vga_gain(50)
-
             sdr.set_rx_callback(rx_callback)
             sdr.pyhackrf_start_rx()
 
-            # Instanciar y mostrar la ventana principal pasándole esta SDR
-            self.main_app_window = MainWindow(sdr)
+            self.main_app_window = MainWindow(sdr, device_type="hackrf")
             self.main_app_window.show()
-            
-            # Cerrar la ventanita del menú de inicio
             self.close()
+
+        elif "RTL-SDR" in device_name:
+            print("Iniciando RTL-SDR...")
+            if RtlSdr is None:
+                print("Librería rtlsdr no está instalada.")
+                return
+            
+            sdr = RtlSdr()
+            # La RTL no soporta 10 MHz. Su máximo estable es 2.4 MHz.
+            state['sample_rate'] = 2.4e6 
+            sdr.sample_rate = state['sample_rate']
+            sdr.center_freq = state['center_freq']
+            sdr.gain = 'auto'
+
+            # Callback especial para la RTL (ya entrega números complejos directos)
+            def rtl_callback(samples, context):
+                fs = state['fft_size']
+                if len(samples) >= fs:
+                    chunk = samples[:fs].copy()
+                    chunk = chunk - np.mean(chunk)
+                    potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+                    PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+                    centro = fs // 2
+                    PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+                    emitter.data_updated.emit(PSD, samples)
+
+            self.main_app_window = MainWindow(sdr, device_type="rtlsdr")
+            self.main_app_window.show()
+            self.close()
+
+            # La lectura de la RTL bloquea el programa, así que lo mandamos a un hilo secundario
+            t = threading.Thread(target=sdr.read_samples_async, args=(rtl_callback, 8192))
+            t.daemon = True
+            t.start()
 
 # --- INICIALIZACIÓN DE LA APP ---
 app = QApplication([])
