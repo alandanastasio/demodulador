@@ -62,7 +62,15 @@ class MainWindow(QMainWindow):
         self.playback_timer.timeout.connect(self.playback_step)   
         self.playback_data = None                                 
         self.playback_index = 0
-        self.is_looping = False                                   
+        self.is_looping = False    
+
+        # --- VARIABLES DEL TRACE ---
+        self.trace_mode = "White clear"
+        self.max_hold_data = None
+        self.avg_buffer = None
+        self.avg_index = 0
+        self.avg_count = 0
+        self.AVG_MAX = 100                               
 
        # --- BARRA SUPERIOR  ---
         self.toolbar = QToolBar("Barra Principal")
@@ -251,6 +259,12 @@ class MainWindow(QMainWindow):
         self.fft_combo.currentTextChanged.connect(self.on_fft_changed)
         form_layout.addRow(QLabel("TAMAÑO FFT:"), self.fft_combo)
 
+        self.trace_combo = QComboBox()
+        self.trace_combo.addItems(["White clear", "Max Hold", "Average"])
+        self.trace_combo.setCurrentText("White clear")
+        self.trace_combo.currentTextChanged.connect(self.on_trace_changed)
+        form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
+
         controls_layout.addLayout(form_layout)
         
         controls_widget = QWidget()
@@ -263,6 +277,16 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         emitter.data_updated.connect(self.update_plot)
+
+    def on_trace_changed(self, text):
+        self.trace_mode = text
+        self.reset_traces()
+
+    def reset_traces(self):
+        self.max_hold_data = None
+        self.avg_buffer = None
+        self.avg_index = 0
+        self.avg_count = 0
 
     def select_marker(self, key):
         self.current_moving_marker = key
@@ -482,6 +506,7 @@ class MainWindow(QMainWindow):
 
     def on_fft_changed(self, text):
         state['fft_size'] = int(text)
+        self.reset_traces()
         self.update_x_axis()
 
     def update_x_axis(self):
@@ -493,7 +518,36 @@ class MainWindow(QMainWindow):
 
     def update_plot(self, PSD, raw_samples):
         if len(self.f_axis) == len(PSD):
-            self.freq_plot_curve.setData(self.f_axis, PSD)
+            
+            # --- LÓGICA DE TRACE ---
+            display_psd = PSD # Por defecto, "White clear" usa la señal directa
+            
+            if self.trace_mode == "Max Hold":
+                if self.max_hold_data is None or len(self.max_hold_data) != len(PSD):
+                    self.max_hold_data = PSD.copy()
+                else:
+                    # Compara punto por punto y se queda con el más alto
+                    self.max_hold_data = np.maximum(self.max_hold_data, PSD) 
+                display_psd = self.max_hold_data
+
+            elif self.trace_mode == "Average":
+                if self.avg_buffer is None or self.avg_buffer.shape[1] != len(PSD):
+                    # Matriz de 100 filas (muestras) x N columnas (frecuencias)
+                    self.avg_buffer = np.zeros((self.AVG_MAX, len(PSD)))
+                    self.avg_index = 0
+                    self.avg_count = 0
+                
+                # Guarda la muestra actual en la posición del índice y avanza cíclicamente
+                self.avg_buffer[self.avg_index] = PSD
+                self.avg_index = (self.avg_index + 1) % self.AVG_MAX
+                if self.avg_count < self.AVG_MAX:
+                    self.avg_count += 1
+                
+                # Promedia sobre las muestras recolectadas hasta el momento
+                display_psd = np.mean(self.avg_buffer[:self.avg_count], axis=0)
+
+            # Graficamos la señal procesada
+            self.freq_plot_curve.setData(self.f_axis, display_psd)
             
             # --- LÓGICA DE MARKERS Y DELTAS ---
             any_active = any(m['active'] for m in self.markers_info.values())
