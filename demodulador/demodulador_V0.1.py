@@ -126,10 +126,10 @@ class MainWindow(QMainWindow):
         # --- SISTEMA DE MARKERS ---
         # Diccionario con la configuración y estado de cada marker/delta
         self.markers_info = {
-            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00FF00', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FF00'), symbol='d')},
-            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00FFFF', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00FFFF'), symbol='t')}, # 't' es triángulo
-            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#FF8800', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#FF8800'), symbol='d')},
-            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#FF00FF', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#FF00FF'), symbol='t')}
+            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00B000', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00B000'), symbol='d')},
+            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#00B000", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#007E00"), symbol='t')}, # 't' es triángulo
+            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0077FF"), symbol='d')},
+            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0054C2"), symbol='t')}
         }
         self.current_moving_marker = None # Cuál se mueve al hacer clic
         
@@ -394,7 +394,7 @@ class MainWindow(QMainWindow):
             self.rec_play_btn.setText("▶ Reproduciendo...")
             
         self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-        self.freq_plot_curve.setPen(pg.mkPen(color="#0088FF", width=1.5))
+        self.freq_plot_curve.setPen(pg.mkPen(color="#FF8C00", width=1.5))
 
         self.playback_index = 0
         self.playback_timer.start(33) 
