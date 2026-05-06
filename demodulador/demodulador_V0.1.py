@@ -4,7 +4,7 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,QPushButton)
+                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,QPushButton, QListWidgetItem)
 import pyqtgraph as pg
 import numpy as np
 import signal
@@ -655,7 +655,25 @@ class StartupWindow(QMainWindow):
 
         # Botón para forzar el escaneo manual
         self.scan_btn = QPushButton("🔄 Escanear Puertos USB")
-        self.scan_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor) # Cambia la flecha por la manito
+        self.scan_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444444; 
+                color: white; 
+                font-weight: bold; 
+                padding: 10px 15px; 
+                border-radius: 6px; 
+                border: 1px solid #5a5a5a;
+            }
+            QPushButton:hover {
+                background-color: #555555; /* Se aclara al pasar el mouse */
+                border: 1px solid #777777;
+            }
+            QPushButton:pressed {
+                background-color: #2b2b2b; /* Se oscurece al hacer clic (efecto de hundimiento) */
+                border: 1px solid #222222;
+            }
+        """)
         self.scan_btn.clicked.connect(self.scan_devices)
         layout.addWidget(self.scan_btn)
 
@@ -695,8 +713,12 @@ class StartupWindow(QMainWindow):
         except Exception: pass
 
         if devices_found == 0:
-            item = self.device_list.addItem("⚠️ No se encontraron dispositivos SDR")
-            item.setFlags(Qt.ItemFlag.NoItemFlags) # Hace que no se le pueda hacer clic
+            # 1. Creamos el ítem físicamente
+            item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
+            # 2. Le sacamos la propiedad de ser seleccionable/clickeable
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            # 3. Lo metemos en la lista
+            self.device_list.addItem(item)
 
     def launch_main_window(self, item):
         device_name = item.text()
