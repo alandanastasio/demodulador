@@ -666,11 +666,11 @@ class StartupWindow(QMainWindow):
                 border: 1px solid #5a5a5a;
             }
             QPushButton:hover {
-                background-color: #555555; /* Se aclara al pasar el mouse */
+                background-color: #555555;
                 border: 1px solid #777777;
             }
             QPushButton:pressed {
-                background-color: #2b2b2b; /* Se oscurece al hacer clic (efecto de hundimiento) */
+                background-color: #2b2b2b;
                 border: 1px solid #222222;
             }
         """)
