@@ -4,7 +4,7 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QToolBar, QToolButton, QMenu, QFileDialog)
+                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget)
 import pyqtgraph as pg
 import numpy as np
 import signal
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
     def __init__(self, sdr_device):
         super().__init__()
         self.sdr = sdr_device
-        self.setWindowTitle("Demodulador")
+        self.setWindowTitle("DEMODULADOR")
         self.resize(QSize(1200, 600))
         self.setMinimumSize(QSize(800, 400))
 
@@ -516,6 +516,17 @@ class MainWindow(QMainWindow):
         self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
         self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
+    def closeEvent(self, event):
+        # Este evento se dispara cuando cerrás la ventana principal
+        print("Cerrando demodulador y apagando SDR...")
+        try:
+            self.sdr.pyhackrf_stop_rx()
+            self.sdr.pyhackrf_close()
+            pyhackrf.pyhackrf_exit()
+        except:
+            pass
+        event.accept()
+
     def update_plot(self, PSD, raw_samples):
         if len(self.f_axis) == len(PSD):
             
@@ -598,27 +609,73 @@ class MainWindow(QMainWindow):
             if self.is_recording:
                 self.recorded_samples.append(raw_samples.copy())
 
-# --- INICIALIZACIÓN HACKRF Y APP ---
-pyhackrf.pyhackrf_init()
-sdr = pyhackrf.pyhackrf_open()
+class StartupWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("DEMODULADOR")
+        self.resize(QSize(400, 300))
+        self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
-sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
-bw_inicial = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
-sdr.pyhackrf_set_baseband_filter_bandwidth(bw_inicial)
-sdr.pyhackrf_set_freq(int(state['center_freq']))
-sdr.pyhackrf_set_lna_gain(32)
-sdr.pyhackrf_set_vga_gain(50)
+        layout = QVBoxLayout()
+        
+        label = QLabel("Dispositivos SDR disponibles:")
+        label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(label)
 
-sdr.set_rx_callback(rx_callback)
-sdr.pyhackrf_start_rx()
+        # Crear la lista visual
+        self.device_list = QListWidget()
+        self.device_list.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 14px; outline: none;}
+            QListWidget::item { padding: 15px; }
+            QListWidget::item:selected { background-color: #0077FF; }
+            QListWidget::item:hover { background-color: #444444; }
+        """)
+        
+        # Por ahora solo agregamos la HackRF manual. A futuro acá podés poner una función que escanee USBs.
+        self.device_list.addItem("HackRF One")
+        
+        # Conectar el clic en la lista a nuestra función de inicio
+        self.device_list.itemClicked.connect(self.launch_main_window)
+        
+        layout.addWidget(self.device_list)
 
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+        self.main_app_window = None
+
+    def launch_main_window(self, item):
+        device_name = item.text()
+        
+        if "HackRF" in device_name:
+            print("Iniciando HackRF...")
+            # Toda la inicialización que antes estaba suelta al final, ahora va acá
+            pyhackrf.pyhackrf_init()
+            sdr = pyhackrf.pyhackrf_open()
+
+            sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
+            bw_inicial = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(state['sample_rate'] * 0.75)
+            sdr.pyhackrf_set_baseband_filter_bandwidth(bw_inicial)
+            sdr.pyhackrf_set_freq(int(state['center_freq']))
+            sdr.pyhackrf_set_lna_gain(32)
+            sdr.pyhackrf_set_vga_gain(50)
+
+            sdr.set_rx_callback(rx_callback)
+            sdr.pyhackrf_start_rx()
+
+            # Instanciar y mostrar la ventana principal pasándole esta SDR
+            self.main_app_window = MainWindow(sdr)
+            self.main_app_window.show()
+            
+            # Cerrar la ventanita del menú de inicio
+            self.close()
+
+# --- INICIALIZACIÓN DE LA APP ---
 app = QApplication([])
-window = MainWindow(sdr)
-window.show()
+
+startup_window = StartupWindow()
+startup_window.show()
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 app.exec()
-
-sdr.pyhackrf_stop_rx()
-sdr.pyhackrf_close()
-pyhackrf.pyhackrf_exit()
