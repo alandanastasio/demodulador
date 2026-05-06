@@ -560,7 +560,7 @@ class MainWindow(QMainWindow):
                     if data['active']:
                         idx = (np.abs(self.f_axis - data['freq'])).argmin()
                         x_val = self.f_axis[idx]
-                        y_val = PSD[idx]
+                        y_val = display_psd[idx]
                         data['item'].setData([x_val], [y_val])
                         current_frame_data[key] = {'x': x_val, 'y': y_val, 'color': data['color']}
 
