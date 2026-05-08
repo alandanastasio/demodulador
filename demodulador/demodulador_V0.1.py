@@ -14,6 +14,7 @@ import datetime
 import usb.core
 import threading
 from rtlsdr import RtlSdr
+import bladerf
 
 
 # Estado global para compartir entre la GUI y el hilo de C (callback)
@@ -53,6 +54,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.sdr = sdr_device
         self.device_type = device_type # Guardamos qué radio es
+
+        if self.device_type == "bladerf":
+            import bladerf
+            self.rx_ch = self.sdr.Channel(bladerf.CHANNEL_RX(0))
 
         self.setWindowTitle("DEMODULADOR")
         self.resize(QSize(1200, 600))
@@ -296,6 +301,21 @@ class MainWindow(QMainWindow):
             self.lna_combo.setEnabled(False)
             self.vga_combo.setEnabled(False)
 
+        elif self.device_type == "bladerf":
+            self.sr_combo.blockSignals(True) 
+            self.sr_combo.clear()
+            self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
+            self.sr_combo.setCurrentText("20 MHz")
+            self.sr_combo.blockSignals(False)
+            
+            self.lna_combo.blockSignals(True)
+            self.lna_combo.clear()
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)]) # bladeRF tiene una única ganancia global de -15 a 60
+            self.lna_combo.setCurrentText("50 dB")
+            self.lna_combo.blockSignals(False)
+            
+            self.vga_combo.setEnabled(False) # Apagamos el VGA
+
         controls_layout.addLayout(form_layout)
         
         controls_widget = QWidget()
@@ -525,6 +545,8 @@ class MainWindow(QMainWindow):
             self.sdr.pyhackrf_set_freq(int(state['center_freq']))
         elif self.device_type == "rtlsdr":
             self.sdr.center_freq = state['center_freq']
+        elif self.device_type == "bladerf":
+            self.rx_ch.frequency = int(state['center_freq'])
         self.update_x_axis()
 
     def on_sr_changed(self, text):
@@ -541,13 +563,19 @@ class MainWindow(QMainWindow):
             self.sdr.pyhackrf_start_rx()
         elif self.device_type == "rtlsdr":
             self.sdr.sample_rate = state['sample_rate']
+        elif self.device_type == "bladerf":
+            self.rx_ch.sample_rate = int(state['sample_rate'])
+            self.rx_ch.bandwidth = int(state['sample_rate'] / 2)
             
         self.update_x_axis()
 
     def on_lna_changed(self, text):
+        if not text: return
+        val = int(text.replace(" dB", ""))
         if self.device_type == "hackrf":
-            val = int(text.replace(" dB", ""))
             self.sdr.pyhackrf_set_lna_gain(val)
+        elif self.device_type == "bladerf":
+            self.rx_ch.gain = val
 
     def on_vga_changed(self, text):
         if self.device_type == "hackrf":
@@ -575,6 +603,11 @@ class MainWindow(QMainWindow):
                 pyhackrf.pyhackrf_exit()
             elif self.device_type == "rtlsdr":
                 self.sdr.cancel_read_async()
+                self.sdr.close()
+            elif self.device_type == "bladerf":
+                self.bladerf_running = False # Frena el hilo worker (while)
+                time.sleep(0.1) # Le da tiempo a terminar de leer el USB
+                self.rx_ch.enable = False
                 self.sdr.close()
         except: pass
         event.accept()
@@ -736,6 +769,13 @@ class StartupWindow(QMainWindow):
                 devices_found += 1
         except Exception: pass
 
+        # Buscar Nuand bladeRF por su Vendor ID
+        try:
+            if usb.core.find(idVendor=0x2cf0) or usb.core.find(idVendor=0x1d50, idProduct=0x6066):
+                self.device_list.addItem("Nuand bladeRF x40")
+                devices_found += 1
+        except Exception: pass
+
         if devices_found == 0:
             # 1. Creamos el ítem físicamente
             item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
@@ -795,6 +835,78 @@ class StartupWindow(QMainWindow):
 
             # La lectura de la RTL bloquea el programa, así que lo mandamos a un hilo secundario
             t = threading.Thread(target=sdr.read_samples_async, args=(rtl_callback, 8192))
+            t.daemon = True
+            t.start()
+        
+        elif "bladeRF" in device_name:
+            print("Iniciando bladeRF...")
+            if bladerf is None:
+                print("Librería bladerf no está instalada.")
+                return
+            
+            sdr = bladerf.BladeRF()
+            rx_ch = sdr.Channel(bladerf.CHANNEL_RX(0))
+            
+            # Configuraciones iniciales (BladeRF soporta anchos de banda enormes)
+            state['sample_rate'] = 20e6
+            state['center_freq'] = 300e6
+            rx_ch.frequency = int(state['center_freq'])
+            rx_ch.sample_rate = int(state['sample_rate'])
+            rx_ch.bandwidth = int(state['sample_rate'])
+            rx_ch.gain = 0 # La bladeRF usa una sola ganancia global (-15 a 60 dB)
+
+            # Setup del stream sincrónico de altísima velocidad
+            sdr.sync_config(
+                layout=bladerf._bladerf.ChannelLayout.RX_X1,
+                fmt=bladerf._bladerf.Format.SC16_Q11,
+                num_buffers=16,
+                buffer_size=32768,
+                num_transfers=8,
+                stream_timeout=3500
+            )
+            rx_ch.enable = True
+
+            self.main_app_window = MainWindow(sdr, device_type="bladerf")
+            self.main_app_window.bladerf_running = True
+            self.main_app_window.show()
+            self.close()
+
+            # El hilo secundario que succiona datos del USB a lo bestia
+            def bladerf_worker(app_window, device):
+                bytes_per_sample = 4 # SC16_Q11 = 2 enteros de 16 bits (I y Q)
+                buf_size = 32768
+                buf = bytearray(buf_size * bytes_per_sample)
+                emit_counter = 0
+                
+                while app_window.bladerf_running:
+                    try:
+                        # Leemos los datos para vaciar el USB
+                        device.sync_rx(buf, buf_size)
+                        
+                        emit_counter += 1
+                        if emit_counter % 20 != 0:
+                            continue # Saltamos la graficación para no ahogar a PyQt con FPS absurdos
+                        
+                        # Conversión directa usando numpy (súper optimizado)
+                        data = np.frombuffer(buf, dtype=np.int16)
+                        # Dividimos por 2048 porque el formato usa rango [-2048 a 2047]
+                        c_samples = (data[0::2] + 1j * data[1::2]) / 2048.0 
+                        
+                        fs = state['fft_size']
+                        if len(c_samples) >= fs:
+                            chunk = c_samples[:fs].copy()
+                            chunk = chunk - np.mean(chunk)
+                            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+                            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+                            centro = fs // 2
+                            PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+                            
+                            emitter.data_updated.emit(PSD, c_samples)
+                    except Exception as e:
+                        print("Error en rx bladeRF:", e)
+                        break
+
+            t = threading.Thread(target=bladerf_worker, args=(self.main_app_window, sdr))
             t.daemon = True
             t.start()
 

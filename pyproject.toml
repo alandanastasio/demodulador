@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "bladerf",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "pyqt6>=6.11.0",
@@ -15,3 +16,6 @@ dependencies = [
     "scipy>=1.17.1",
     "setuptools<69.0.0",
 ]
+
+[tool.uv.sources]
+bladerf = { git = "https://github.com/Nuand/bladeRF.git", subdirectory = "host/libraries/libbladeRF_bindings/python" }
