@@ -243,11 +243,12 @@ class MainWindow(QMainWindow):
         self.markers_btn.setMenu(self.markers_menu)
         self.toolbar.addWidget(self.markers_btn)
 
-        # --- LADO DERECHO: CONTROLES ---
+# --- LADO DERECHO: CONTROLES ---
         controls_layout = QVBoxLayout()
         controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout = QFormLayout()
 
+        # 1. FRECUENCIA CENTRAL (Común a todos)
         self.freq_input = QDoubleSpinBox()
         self.freq_input.setSuffix(" MHz")
         self.freq_input.setDecimals(3)
@@ -257,25 +258,46 @@ class MainWindow(QMainWindow):
         self.freq_input.valueChanged.connect(self.on_freq_changed)
         form_layout.addRow(QLabel("FREQ CENTRAL:"), self.freq_input)
 
+        # 2. SAMPLE RATE (Común, pero con opciones distintas según SDR)
         self.sr_combo = QComboBox()
-        self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "12.5 MHz", "16 MHz", "20 MHz"])
-        self.sr_combo.setCurrentText("10 MHz")
+        if self.device_type == "hackrf":
+            self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "12.5 MHz", "16 MHz", "20 MHz"])
+            self.sr_combo.setCurrentText("10 MHz")
+        elif self.device_type == "rtlsdr":
+            self.sr_combo.addItems(["1.024 MHz", "2.048 MHz", "2.4 MHz", "2.88 MHz"])
+            self.sr_combo.setCurrentText("2.4 MHz")
+        elif self.device_type == "bladerf":
+            self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
+            self.sr_combo.setCurrentText("20 MHz")
+            
         self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
         form_layout.addRow(QLabel("SAMP RATE:"), self.sr_combo)
 
-        
-        self.lna_combo = QComboBox()
-        self.lna_combo.addItems([f"{g} dB" for g in range(0, 48, 8)])
-        self.lna_combo.setCurrentText("32 dB")
-        self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
-        form_layout.addRow(QLabel("LNA GAIN:"), self.lna_combo)
-
+        # 3. GANANCIAS (Aparecen, cambian de nombre o desaparecen)
+        self.lna_combo = QComboBox() # Creamos las variables para no romper callbacks
         self.vga_combo = QComboBox()
-        self.vga_combo.addItems([f"{g} dB" for g in range(0, 64, 2)])
-        self.vga_combo.setCurrentText("50 dB")
-        self.vga_combo.currentTextChanged.connect(self.on_vga_changed)
-        form_layout.addRow(QLabel("VGA GAIN:"), self.vga_combo)
 
+        if self.device_type == "hackrf":
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 48, 8)])
+            self.lna_combo.setCurrentText("32 dB")
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            form_layout.addRow(QLabel("LNA GAIN:"), self.lna_combo)
+
+            self.vga_combo.addItems([f"{g} dB" for g in range(0, 64, 2)])
+            self.vga_combo.setCurrentText("50 dB")
+            self.vga_combo.currentTextChanged.connect(self.on_vga_changed)
+            form_layout.addRow(QLabel("VGA GAIN:"), self.vga_combo)
+
+        elif self.device_type == "bladerf":
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)])
+            self.lna_combo.setCurrentText("0 dB") # Arrancamos en 0 para no tener tanto ruido al inicio
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            # Lo llamamos GLOBAL GAIN porque la bladeRF maneja una sola etapa unificada
+            form_layout.addRow(QLabel("GLOBAL GAIN:"), self.lna_combo)
+            
+        # Si es "rtlsdr", directamente NO agregamos los botones de ganancia al layout.
+
+        # 4. FFT y TRACE (Común a todos)
         self.fft_combo = QComboBox()
         self.fft_combo.addItems(["512", "1024", "2048", "4096", "8192"])
         self.fft_combo.setCurrentText("4096")
@@ -288,33 +310,7 @@ class MainWindow(QMainWindow):
         self.trace_combo.currentTextChanged.connect(self.on_trace_changed)
         form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
 
-        # --- ADAPTACIÓN DE INTERFAZ SEGÚN EL SDR ---
-        if self.device_type == "rtlsdr":
-            # Bloqueamos las señales un segundo para que no dispare on_sr_changed mientras limpiamos
-            self.sr_combo.blockSignals(True) 
-            self.sr_combo.clear()
-            self.sr_combo.addItems(["1.024 MHz", "2.048 MHz", "2.4 MHz", "2.88 MHz"])
-            self.sr_combo.setCurrentText("2.4 MHz")
-            self.sr_combo.blockSignals(False) # Las volvemos a encender
-            
-            # Ahora sí podemos apagarlas porque ya fueron creadas arriba
-            self.lna_combo.setEnabled(False)
-            self.vga_combo.setEnabled(False)
-
-        elif self.device_type == "bladerf":
-            self.sr_combo.blockSignals(True) 
-            self.sr_combo.clear()
-            self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
-            self.sr_combo.setCurrentText("20 MHz")
-            self.sr_combo.blockSignals(False)
-            
-            self.lna_combo.blockSignals(True)
-            self.lna_combo.clear()
-            self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)]) # bladeRF tiene una única ganancia global de -15 a 60
-            self.lna_combo.setCurrentText("50 dB")
-            self.lna_combo.blockSignals(False)
-            
-            self.vga_combo.setEnabled(False) # Apagamos el VGA
+        controls_layout.addLayout(form_layout)
 
         controls_layout.addLayout(form_layout)
         
