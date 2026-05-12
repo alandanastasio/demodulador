@@ -31,7 +31,7 @@ state = {
 fm_buffer = np.array([], dtype=np.complex128)
 
 class SignalEmitter(QObject):
-    data_updated = pyqtSignal(np.ndarray, np.ndarray)
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object)
 
 emitter = SignalEmitter()
 
@@ -39,32 +39,47 @@ def process_iq_samples(c_samples):
     global fm_buffer
     
     if state['demod_mode'] == 'wbfm':
-        # Acumulamos las muestras entrantes
         fm_buffer = np.append(fm_buffer, c_samples)
-        sr = int(state['sample_rate']) # Que va a ser 300,000
+        sr = int(state['sample_rate'])
         
-        # Si ya juntamos 1 segundo de muestras (o más)
         if len(fm_buffer) >= sr:
             chunk_1s = fm_buffer[:sr]
             fm_buffer = fm_buffer[sr:] # Guardamos el excedente para el próximo segundo
             
-            # --- MATEMÁTICA JUPYTER ---
-            # 1. Filtro Pasabajos de 100 kHz (Equivale a pasabanda de 200 kHz en I/Q)
-            nyq = 0.5 * sr
-            cutoff = 100e3
-            b, a = butter(4, cutoff / nyq, btype='low')
-            filtered_chunk = lfilter(b, a, chunk_1s)
-            
-            # 2. FFT de 1 segundo entero
-            filtered_chunk = filtered_chunk - np.mean(filtered_chunk)
-            potencia = np.abs(np.fft.fftshift(np.fft.fft(filtered_chunk)))**2 / sr
+            # --- 1. ESPECTRO RF CRUDO (Para gráfico 1-1) ---
+            # Hacemos la FFT directo de las muestras que entraron SIN filtrar
+            raw_rf = chunk_1s - np.mean(chunk_1s)
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(raw_rf)))**2 / sr
             PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
             
-            # Emitimos para graficar (1 vez por segundo)
-            emitter.data_updated.emit(PSD, filtered_chunk)
+            # --- 2. FILTRADO (Solo para la demodulación) ---
+            nyq = 0.5 * sr
+            b, a = butter(4, 100e3 / nyq, btype='low')
+            filtered_chunk = lfilter(b, a, chunk_1s)
+            
+            # --- 3. DEMODULACIÓN (AUDIO MPX para gráfico 1-2) ---
+            # Discriminador polar para extraer frecuencia instantánea de la señal FILTRADA
+            demod = np.angle(filtered_chunk[1:] * np.conj(filtered_chunk[:-1]))
+            
+            # FFT de la señal de audio
+            demod = demod - np.mean(demod)
+            fs_audio = len(demod)
+            potencia_audio = np.abs(np.fft.fft(demod))**2 / fs_audio
+            
+            # Como la señal de audio es real, nos quedamos solo con la mitad positiva
+            mitad = fs_audio // 2
+            potencia_audio_pos = potencia_audio[:mitad]
+            PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio_pos, 1e-12))
+            
+            # Eje X del audio de 0 a 150 kHz
+            f_axis_audio = np.linspace(0, (sr/2)/1e3, mitad)
+            
+            # Emitimos para graficar. Mandamos chunk_1s crudo en lugar de filtered_chunk 
+            # para que si le das a "Grabar", se guarde el espectro real completo.
+            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio)
             
     else:
-        # Lógica Normal: FFT en tiempo real con el tamaño elegido en la interfaz
+        # Lógica Normal
         fs = state['fft_size']
         if len(c_samples) >= fs:
             chunk = c_samples[:fs].copy()
@@ -74,7 +89,8 @@ def process_iq_samples(c_samples):
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
-            emitter.data_updated.emit(PSD, chunk)
+            # En modo normal, los datos de audio van como None
+            emitter.data_updated.emit(PSD, chunk, None, None)
 
 def rx_callback(device, buffer, buffer_length, valid_length):
     accepted_samples = buffer[:valid_length].astype(np.int8)
@@ -216,7 +232,7 @@ class MainWindow(QMainWindow):
         # Agregamos el espectro original a la grilla [Fila 0, Columna 0] (1-1)
         self.plot_layout.addWidget(self.freq_plot, 0, 0)
 
-        # Creamos los otros 3 cuadrantes como gráficos vacíos (para que mantengan el color y estilo)
+        # Creamos los cuadrantes genericos
         self.q2_widget = pg.PlotWidget(title="1-2 (Vacío)")
         self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
         self.q4_widget = pg.PlotWidget(title="2-2 (Vacío)")
@@ -225,6 +241,9 @@ class MainWindow(QMainWindow):
         self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
         self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
         self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
+
+        # Dejamos la curva creada genéricamente
+        self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color='#00FF00', width=1.5))
 
         # Los ocultamos por defecto al iniciar el programa
         self.q2_widget.hide()
@@ -393,6 +412,7 @@ class MainWindow(QMainWindow):
         self.unit_combo.currentTextChanged.connect(self.on_unit_changed)
 
         # 2. SAMPLE RATE (Común, pero con opciones distintas según SDR)
+        self.sr_label = QLabel("SAMP RATE:")
         self.sr_combo = QComboBox()
         if self.device_type == "hackrf":
             self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "12.5 MHz", "16 MHz", "20 MHz"])
@@ -405,7 +425,7 @@ class MainWindow(QMainWindow):
             self.sr_combo.setCurrentText("20 MHz")
             
         self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
-        form_layout.addRow(QLabel("SAMP RATE:"), self.sr_combo)
+        form_layout.addRow(self.sr_label, self.sr_combo)
 
         # 3. GANANCIAS (Aparecen, cambian de nombre o desaparecen)
         self.lna_combo = QComboBox() # Creamos las variables para no romper callbacks
@@ -470,9 +490,34 @@ class MainWindow(QMainWindow):
         self.avg_count = 0
 
     def set_wbfm_mode(self):
+        
+        # --- CONFIGURACIÓN DE CUADRANTES PARA WBFM ---
+        self.q2_widget.setTitle("Espectro MPX (Audio Demodulado)")
+        self.q2_widget.setLabel('bottom', 'Frecuencia [kHz]')
+        self.q2_widget.setLabel('left', 'Magnitud [dB]')
+        self.q2_widget.setXRange(0, 100)
+        self.q2_widget.setYRange(-80, 20)
+        
+        # Mostrar los cuadrantes
         self.q2_widget.show()
         self.q3_widget.show()
         self.q4_widget.show()
+
+        # --- MANEJO DEL SAMPLE RATE VISUAL ---
+        # Guardamos el valor que estaba seleccionado para restaurarlo después
+        self.previous_sr_text = self.sr_combo.currentText()
+        
+        # Bloqueamos las señales para no mandar comandos accidentales a la SDR
+        self.sr_combo.blockSignals(True)
+        
+        # Agregamos "300 kHz" si no existe, lo seleccionamos y lo desactivamos
+        if self.sr_combo.findText("300 kHz") == -1:
+            self.sr_combo.addItem("300 kHz")
+        self.sr_combo.setCurrentText("300 kHz")
+        self.sr_combo.setEnabled(False) 
+        
+        self.sr_combo.blockSignals(False)
+        # --------------------------------------
 
         state['demod_mode'] = 'wbfm'
         state['sample_rate'] = 300e3 # Forzamos a 300 ksps
@@ -488,7 +533,7 @@ class MainWindow(QMainWindow):
             self.rx_ch.sample_rate = int(state['sample_rate'])
             self.rx_ch.bandwidth = 200000
 
-        self.update_x_axis() # Actualizamos el eje X
+        self.update_x_axis() 
         
         # Sintonizamos el centro de FM (97.75 MHz)
         freq_fm_centro_hz = 97.75 * 1e6 
@@ -499,10 +544,31 @@ class MainWindow(QMainWindow):
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_widget.hide()
+
+        # Limpiamos los títulos visualmente (por si otra función los vuelve a mostrar sin configurar)
+        self.q2_widget.setTitle("1-2 (Vacío)")
+        self.q2_curve.setData([], []) # Borra la línea verde de la pantalla
+        
+        # --- MANEJO DEL SAMPLE RATE VISUAL ---
+        self.sr_combo.blockSignals(True)
+        
+        # Eliminamos el "300 kHz" temporal de la lista
+        idx = self.sr_combo.findText("300 kHz")
+        if idx != -1:
+            self.sr_combo.removeItem(idx)
+            
+        # Restauramos el valor que el usuario tenía antes de entrar a WBFM
+        if hasattr(self, 'previous_sr_text'):
+            self.sr_combo.setCurrentText(self.previous_sr_text)
+            
+        # Volvemos a habilitar el control
+        self.sr_combo.setEnabled(True) 
+        self.sr_combo.blockSignals(False)
+        # --------------------------------------
         
         state['demod_mode'] = 'none'
         
-        # Leemos lo que dice el combo y lo restauramos
+        # Leemos lo que dice el combo restaurado y aplicamos a la radio
         self.on_sr_changed(self.sr_combo.currentText()) 
         self.update_x_axis()
 
@@ -821,7 +887,7 @@ class MainWindow(QMainWindow):
         except: pass
         event.accept()
 
-    def update_plot(self, PSD, raw_samples):
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None):
         if self.is_paused:
             return
         
@@ -905,6 +971,10 @@ class MainWindow(QMainWindow):
             
             if self.is_recording:
                 self.recorded_samples.append(raw_samples.copy())
+
+            # Graficar la FM demodulada si estamos en ese modo
+            if state.get('demod_mode') == 'wbfm' and PSD_audio is not None:
+                self.q2_curve.setData(f_axis_audio, PSD_audio)
 
 class StartupWindow(QMainWindow):
     def __init__(self):
