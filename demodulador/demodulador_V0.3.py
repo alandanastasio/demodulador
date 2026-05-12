@@ -16,7 +16,9 @@ import usb.core
 import threading
 from rtlsdr import RtlSdr
 import bladerf
-from scipy.signal import butter, lfilter
+from scipy.signal import butter, lfilter, resample
+import sounddevice as sd
+import queue
 
 
 # Estado global para compartir entre la GUI y el hilo de C (callback)
@@ -24,14 +26,18 @@ state = {
     'fft_size': 4096,
     'center_freq': 100e6,
     'sample_rate': 10e6,
-    'demod_mode': 'none'
+    'demod_mode': 'none',
+    # --- VARIABLES DE AUDIO ---
+    'play_audio': False,
+    'audio_queue': queue.Queue(maxsize=5), # Buffer para evitar cortes (hasta 5 segundos)
+    'audio_buffer': np.array([], dtype=np.float32) # Buffer temporal para la placa de sonido
 }
 
 # Buffer global para acumular las muestras de FM
 fm_buffer = np.array([], dtype=np.complex128)
 
 class SignalEmitter(QObject):
-    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object)
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object)
 
 emitter = SignalEmitter()
 
@@ -74,9 +80,36 @@ def process_iq_samples(c_samples):
             # Eje X del audio de 0 a 150 kHz
             f_axis_audio = np.linspace(0, (sr/2)/1e3, mitad)
             
-            # Emitimos para graficar. Mandamos chunk_1s crudo en lugar de filtered_chunk 
-            # para que si le das a "Grabar", se guarde el espectro real completo.
-            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio)
+            # --- 4. AUDIO EN EL TIEMPO (Para gráfico 2-1) ---
+            # Agarramos solo 10 ms para poder visualizar la onda sin que sea una mancha sólida
+            muestras_10ms = int(sr * 0.01)
+            audio_time_snippet = demod[:muestras_10ms]
+            t_axis_audio = np.linspace(0, 10, muestras_10ms) # Eje X en milisegundos
+
+            # --- 5. REPRODUCCIÓN DE AUDIO ---
+            if state.get('play_audio', False):
+                # 1. Decimación: Bajamos de 300 kHz a los 48 kHz que entiende la placa de sonido
+                muestras_48k = 48000 
+                audio_48k = resample(demod, muestras_48k)
+                
+                # 2. De-énfasis: La FM comercial pre-amplifica los agudos al transmitir. 
+                # Acá usamos un pasabajos de 1er orden (~2.1 kHz) para atenuarlos y que no suene chirriante.
+                b_aud, a_aud = butter(1, 2122 / (48000/2), btype='low')
+                audio_filtrado = lfilter(b_aud, a_aud, audio_48k)
+                
+                # 3. Normalización: Evita que el audio sature (clipping) o suene muy despacio
+                max_val = np.max(np.abs(audio_filtrado))
+                if max_val > 0:
+                    audio_norm = np.float32(audio_filtrado / max_val)
+                else:
+                    audio_norm = np.float32(audio_filtrado)
+                
+                # 4. Lo mandamos a la cola para que el hilo de sonido lo agarre
+                if not state['audio_queue'].full():
+                    state['audio_queue'].put(audio_norm)
+            
+            # Emitimos mandando los 6 parámetros
+            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio)
             
     else:
         # Lógica Normal
@@ -90,14 +123,22 @@ def process_iq_samples(c_samples):
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
             # En modo normal, los datos de audio van como None
-            emitter.data_updated.emit(PSD, chunk, None, None)
+            emitter.data_updated.emit(PSD, chunk, None, None, None, None)
 
 def rx_callback(device, buffer, buffer_length, valid_length):
-    accepted_samples = buffer[:valid_length].astype(np.int8)
-    c_samples = (accepted_samples[0::2] + 1j * accepted_samples[1::2]) / 128.0
+    try:
+        # 1. Convertimos el objeto ctypes crudo a un array de NumPy
+        raw_data = np.array(buffer[:valid_length], dtype=np.int8)
+        
+        # 2. Separamos I y Q
+        c_samples = (raw_data[0::2] + 1j * raw_data[1::2]) / 128.0
 
-    # Mandamos las muestras crudas a la procesadora central
-    process_iq_samples(c_samples)
+        # 3. Mandamos las muestras crudas a la procesadora central
+        process_iq_samples(c_samples)
+        
+    except Exception as e:
+        # Si algo falla acá adentro, ahora lo vamos a poder leer en la consola
+        print(f"Error crítico en rx_callback: {e}")
 
     return 0
 
@@ -243,7 +284,8 @@ class MainWindow(QMainWindow):
         self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
 
         # Dejamos la curva creada genéricamente
-        self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color='#00FF00', width=1.5))
+        self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
+        self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
 
         # Los ocultamos por defecto al iniciar el programa
         self.q2_widget.hide()
@@ -466,7 +508,15 @@ class MainWindow(QMainWindow):
 
         controls_layout.addLayout(form_layout)
 
-        controls_layout.addLayout(form_layout)
+        # 5. BOTÓN DE AUDIO
+        self.audio_btn = QPushButton("🔊 Escuchar Audio")
+        self.audio_btn.setCheckable(True)
+        self.audio_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+        self.audio_btn.clicked.connect(self.toggle_audio)
+        controls_layout.addWidget(self.audio_btn)
+        
+        self.audio_stream = None # Guardamos la referencia para poder apagarlo después
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)
@@ -497,6 +547,13 @@ class MainWindow(QMainWindow):
         self.q2_widget.setLabel('left', 'Magnitud [dB]')
         self.q2_widget.setXRange(0, 100)
         self.q2_widget.setYRange(-80, 20)
+
+        # Configuración del osciloscopio de audio
+        self.q3_widget.setTitle("Señal Demodulada en el Tiempo")
+        self.q3_widget.setLabel('bottom', 'Tiempo [ms]')
+        self.q3_widget.setLabel('left', 'Amplitud')
+        self.q3_widget.setXRange(0, 10) # Mostramos 10 ms
+        self.q3_widget.setYRange(-3.14, 3.14) # np.angle devuelve valores entre -pi y pi
         
         # Mostrar los cuadrantes
         self.q2_widget.show()
@@ -548,6 +605,9 @@ class MainWindow(QMainWindow):
         # Limpiamos los títulos visualmente (por si otra función los vuelve a mostrar sin configurar)
         self.q2_widget.setTitle("1-2 (Vacío)")
         self.q2_curve.setData([], []) # Borra la línea verde de la pantalla
+
+        self.q3_widget.setTitle("2-1 (Vacío)")
+        self.q3_curve.setData([], [])
         
         # --- MANEJO DEL SAMPLE RATE VISUAL ---
         self.sr_combo.blockSignals(True)
@@ -718,6 +778,7 @@ class MainWindow(QMainWindow):
         self.playback_timer.start(33) 
         print("Reproducción iniciada.")
 
+
     def playback_step(self):
         fs = state['fft_size']
         
@@ -771,6 +832,47 @@ class MainWindow(QMainWindow):
         # Volver a encender la HackRF en vivo
         print("Reproducción finalizada o detenida. Volviendo a la antena.")
         self.sdr.pyhackrf_start_rx()
+
+    def toggle_audio(self):
+        if self.audio_btn.isChecked():
+            self.audio_btn.setText("🔇 Detener Audio")
+            self.audio_btn.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+            state['play_audio'] = True
+            
+            # Limpiamos buffers viejos por si había quedado audio colgado de antes
+            state['audio_buffer'] = np.array([], dtype=np.float32)
+            while not state['audio_queue'].empty():
+                state['audio_queue'].get()
+
+            # Callback exigido por sounddevice para escupir audio al hardware
+            def audio_callback(outdata, frames, time, status):
+                try:
+                    # Si nos faltan datos, sacamos del Queue de 1 segundo
+                    while len(state['audio_buffer']) < frames:
+                        state['audio_buffer'] = np.append(state['audio_buffer'], state['audio_queue'].get_nowait())
+                except queue.Empty:
+                    pass
+                
+                # Llenamos el requerimiento de la placa de sonido
+                if len(state['audio_buffer']) >= frames:
+                    outdata[:, 0] = state['audio_buffer'][:frames]
+                    state['audio_buffer'] = state['audio_buffer'][frames:]
+                else:
+                    outdata[:, 0] = np.zeros(frames) # Silencio si hay micro-cortes
+                    state['audio_buffer'] = np.array([], dtype=np.float32)
+
+            # Iniciamos el stream mono a 48 kHz
+            self.audio_stream = sd.OutputStream(samplerate=48000, channels=1, callback=audio_callback)
+            self.audio_stream.start()
+        else:
+            # Apagamos todo
+            self.audio_btn.setText("🔊 Escuchar Audio")
+            self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+            state['play_audio'] = False
+            if self.audio_stream:
+                self.audio_stream.stop()
+                self.audio_stream.close()
+
 
     def update_spinbox_step(self):
         # Ajusta cuánto salta el valor al apretar las flechitas según la unidad
@@ -872,6 +974,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         print(f"Cerrando demodulador y apagando {self.device_type}...")
         try:
+            if hasattr(self, 'audio_stream') and self.audio_stream:
+                self.audio_stream.stop()
+                self.audio_stream.close()
             if self.device_type == "hackrf":
                 self.sdr.pyhackrf_stop_rx()
                 self.sdr.pyhackrf_close()
@@ -887,7 +992,7 @@ class MainWindow(QMainWindow):
         except: pass
         event.accept()
 
-    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None):
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_time=None, t_axis=None):
         if self.is_paused:
             return
         
@@ -975,6 +1080,13 @@ class MainWindow(QMainWindow):
             # Graficar la FM demodulada si estamos en ese modo
             if state.get('demod_mode') == 'wbfm' and PSD_audio is not None:
                 self.q2_curve.setData(f_axis_audio, PSD_audio)
+
+            #Graficar la FM demodulada en el tiempo si estamos en ese modo
+            if state.get('demod_mode') == 'wbfm':
+                if PSD_audio is not None:
+                    self.q2_curve.setData(f_axis_audio, PSD_audio)
+                if audio_time is not None:
+                    self.q3_curve.setData(t_axis, audio_time)
 
 class StartupWindow(QMainWindow):
     def __init__(self):
