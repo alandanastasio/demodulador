@@ -16,37 +16,72 @@ import usb.core
 import threading
 from rtlsdr import RtlSdr
 import bladerf
+from scipy.signal import butter, lfilter
 
 
 # Estado global para compartir entre la GUI y el hilo de C (callback)
 state = {
     'fft_size': 4096,
     'center_freq': 100e6,
-    'sample_rate': 10e6
+    'sample_rate': 10e6,
+    'demod_mode': 'none'
 }
+
+# Buffer global para acumular las muestras de FM
+fm_buffer = np.array([], dtype=np.complex128)
 
 class SignalEmitter(QObject):
     data_updated = pyqtSignal(np.ndarray, np.ndarray)
 
 emitter = SignalEmitter()
 
+def process_iq_samples(c_samples):
+    global fm_buffer
+    
+    if state['demod_mode'] == 'wbfm':
+        # Acumulamos las muestras entrantes
+        fm_buffer = np.append(fm_buffer, c_samples)
+        sr = int(state['sample_rate']) # Que va a ser 300,000
+        
+        # Si ya juntamos 1 segundo de muestras (o más)
+        if len(fm_buffer) >= sr:
+            chunk_1s = fm_buffer[:sr]
+            fm_buffer = fm_buffer[sr:] # Guardamos el excedente para el próximo segundo
+            
+            # --- MATEMÁTICA JUPYTER ---
+            # 1. Filtro Pasabajos de 100 kHz (Equivale a pasabanda de 200 kHz en I/Q)
+            nyq = 0.5 * sr
+            cutoff = 100e3
+            b, a = butter(4, cutoff / nyq, btype='low')
+            filtered_chunk = lfilter(b, a, chunk_1s)
+            
+            # 2. FFT de 1 segundo entero
+            filtered_chunk = filtered_chunk - np.mean(filtered_chunk)
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(filtered_chunk)))**2 / sr
+            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            
+            # Emitimos para graficar (1 vez por segundo)
+            emitter.data_updated.emit(PSD, filtered_chunk)
+            
+    else:
+        # Lógica Normal: FFT en tiempo real con el tamaño elegido en la interfaz
+        fs = state['fft_size']
+        if len(c_samples) >= fs:
+            chunk = c_samples[:fs].copy()
+            chunk = chunk - np.mean(chunk)
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            centro = fs // 2
+            PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+            
+            emitter.data_updated.emit(PSD, chunk)
+
 def rx_callback(device, buffer, buffer_length, valid_length):
     accepted_samples = buffer[:valid_length].astype(np.int8)
     c_samples = (accepted_samples[0::2] + 1j * accepted_samples[1::2]) / 128.0
 
-    fs = state['fft_size']
-    if len(c_samples) >= fs:
-        chunk = c_samples[:fs].copy() # Sacamos una copia solo para el gráfico
-        chunk = chunk - np.mean(chunk)
-
-        potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
-        PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
-
-        centro = fs // 2
-        PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
-
-        # Emitimos el PSD para la pantalla y TODAS las muestras para grabar
-        emitter.data_updated.emit(PSD, c_samples)
+    # Mandamos las muestras crudas a la procesadora central
+    process_iq_samples(c_samples)
 
     return 0
 
@@ -435,16 +470,41 @@ class MainWindow(QMainWindow):
         self.avg_count = 0
 
     def set_wbfm_mode(self):
-        # Muestra los 4 cuadrantes
         self.q2_widget.show()
         self.q3_widget.show()
         self.q4_widget.show()
 
+        state['demod_mode'] = 'wbfm'
+        state['sample_rate'] = 300e3 # Forzamos a 300 ksps
+        
+        # Aplicar el cambio a la SDR seleccionada
+        if self.device_type == "hackrf":
+            self.sdr.pyhackrf_stop_rx()
+            self.sdr.pyhackrf_set_sample_rate(int(state['sample_rate']))
+            self.sdr.pyhackrf_start_rx()
+        elif self.device_type == "rtlsdr":
+            self.sdr.sample_rate = state['sample_rate']
+        elif self.device_type == "bladerf":
+            self.rx_ch.sample_rate = int(state['sample_rate'])
+            self.rx_ch.bandwidth = 200000
+
+        self.update_x_axis() # Actualizamos el eje X
+        
+        # Sintonizamos el centro de FM (97.75 MHz)
+        freq_fm_centro_hz = 97.75 * 1e6 
+        display_val = freq_fm_centro_hz / self.current_freq_multiplier
+        self.freq_input.setValue(display_val)
+
     def set_normal_mode(self):
-        # Oculta los cuadrantes extra, dejando solo el espectro en grande
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_widget.hide()
+        
+        state['demod_mode'] = 'none'
+        
+        # Leemos lo que dice el combo y lo restauramos
+        self.on_sr_changed(self.sr_combo.currentText()) 
+        self.update_x_axis()
 
     def select_marker(self, key):
         self.current_moving_marker = key
@@ -734,7 +794,12 @@ class MainWindow(QMainWindow):
     def update_x_axis(self):
         cf = state['center_freq']
         sr = state['sample_rate']
-        fs = state['fft_size']
+        
+        if state.get('demod_mode') == 'wbfm':
+            fs = int(sr) # Eje X de 300,000 puntos (1 segundo)
+        else:
+            fs = state['fft_size'] # Eje X normal dictado por la interfaz
+            
         self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
         self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
@@ -961,17 +1026,9 @@ class StartupWindow(QMainWindow):
             sdr.center_freq = state['center_freq']
             sdr.gain = 'auto'
 
-            # Callback especial para la RTL (ya entrega números complejos directos)
+            #Callback especial para la RTL (ya entrega números complejos directos)
             def rtl_callback(samples, context):
-                fs = state['fft_size']
-                if len(samples) >= fs:
-                    chunk = samples[:fs].copy()
-                    chunk = chunk - np.mean(chunk)
-                    potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
-                    PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
-                    centro = fs // 2
-                    PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
-                    emitter.data_updated.emit(PSD, samples)
+                process_iq_samples(samples)
 
             self.main_app_window = MainWindow(sdr, device_type="rtlsdr")
             self.main_app_window.show()
@@ -1027,25 +1084,20 @@ class StartupWindow(QMainWindow):
                         # Leemos los datos para vaciar el USB
                         device.sync_rx(buf, buf_size)
                         
-                        emit_counter += 1
-                        if emit_counter % 20 != 0:
-                            continue # Saltamos la graficación para no ahogar a PyQt con FPS absurdos
-                        
                         # Conversión directa usando numpy (súper optimizado)
                         data = np.frombuffer(buf, dtype=np.int16)
                         # Dividimos por 2048 porque el formato usa rango [-2048 a 2047]
                         c_samples = (data[0::2] + 1j * data[1::2]) / 2048.0 
                         
-                        fs = state['fft_size']
-                        if len(c_samples) >= fs:
-                            chunk = c_samples[:fs].copy()
-                            chunk = chunk - np.mean(chunk)
-                            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
-                            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
-                            centro = fs // 2
-                            PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
-                            
-                            emitter.data_updated.emit(PSD, c_samples)
+                        if state.get('demod_mode') == 'wbfm':
+                            # En demodulación mandamos TODO para no perder continuidad en el buffer de 1s
+                            process_iq_samples(c_samples)
+                        else:
+                            # En modo normal saltamos la graficación para no ahogar a PyQt con FPS absurdos
+                            emit_counter += 1
+                            if emit_counter % 20 == 0:
+                                process_iq_samples(c_samples)
+                                
                     except Exception as e:
                         print("Error en rx bladeRF:", e)
                         break
