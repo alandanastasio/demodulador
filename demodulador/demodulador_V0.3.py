@@ -4,7 +4,8 @@ from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
-                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,QPushButton, QListWidgetItem)
+                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
+                             QPushButton, QListWidgetItem, QGridLayout)
 import pyqtgraph as pg
 import numpy as np
 import signal
@@ -170,7 +171,33 @@ class MainWindow(QMainWindow):
         self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
         self.freq_plot.setYRange(-70, 10)
         self.update_x_axis()
-        main_layout.addWidget(self.freq_plot, stretch=4)
+
+        # CONTENEDOR GRILLA (2x2)
+        self.plot_container = QWidget()
+        self.plot_layout = QGridLayout(self.plot_container)
+        self.plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.plot_layout.setSpacing(5) # Un pequeño margen entre los gráficos
+
+        # Agregamos el espectro original a la grilla [Fila 0, Columna 0] (1-1)
+        self.plot_layout.addWidget(self.freq_plot, 0, 0)
+
+        # Creamos los otros 3 cuadrantes como gráficos vacíos (para que mantengan el color y estilo)
+        self.q2_widget = pg.PlotWidget(title="1-2 (Vacío)")
+        self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
+        self.q4_widget = pg.PlotWidget(title="2-2 (Vacío)")
+
+        # Agregamos los vacíos a sus respectivas posiciones
+        self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
+        self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
+        self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
+
+        # Los ocultamos por defecto al iniciar el programa
+        self.q2_widget.hide()
+        self.q3_widget.hide()
+        self.q4_widget.hide()
+
+        # En vez de agregar solo freq_plot, agregamos el contenedor entero al layout principal
+        main_layout.addWidget(self.plot_container, stretch=4)
 
         # --- MENÚ DE MARKERS ---
         self.markers_btn = QToolButton()
@@ -242,21 +269,93 @@ class MainWindow(QMainWindow):
 
         self.markers_btn.setMenu(self.markers_menu)
         self.toolbar.addWidget(self.markers_btn)
+    
+
+        # --- MENÚ DE DEMODULACIONES ---
+        self.demod_btn = QToolButton()
+        self.demod_btn.setText("Demodulación")
+        self.demod_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.demod_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.demod_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        self.demod_menu = QMenu()
+        self.demod_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        # Grupo de acciones para que solo una demodulación esté activa a la vez en toda la app
+        self.demod_group = QActionGroup(self)
+        self.demod_group.setExclusive(True)
+
+        # Acción: Sin Demodular (Por defecto)
+        self.action_demod_none = QAction("Sin Demodular", self)
+        self.action_demod_none.setCheckable(True)
+        self.action_demod_none.setChecked(True)
+        self.action_demod_none.triggered.connect(self.set_normal_mode)
+        self.demod_group.addAction(self.action_demod_none)
+        self.demod_menu.addAction(self.action_demod_none)
+
+        self.demod_menu.addSeparator()
+
+        # --- SUBMENÚ: FM ---
+        self.fm_menu = QMenu("FM", self)
+        self.fm_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        # Opciones dentro del submenú FM
+        self.action_wbfm = QAction("WBFM (Radio Comercial)", self)
+        self.action_wbfm.setCheckable(True)
+        self.action_wbfm.triggered.connect(self.set_wbfm_mode)
+        self.demod_group.addAction(self.action_wbfm)
+        self.fm_menu.addAction(self.action_wbfm)
+
+        self.action_nbfm = QAction("Custom FM", self)
+        self.action_nbfm.setCheckable(True)
+        # self.action_nbfm.triggered.connect(...)
+        self.demod_group.addAction(self.action_nbfm)
+        self.fm_menu.addAction(self.action_nbfm)
+
+        # Agregamos el submenú FM al menú principal de Demodulación
+        self.demod_menu.addMenu(self.fm_menu)
+
+        # Asignar menú al botón y agregar a la barra principal
+        self.demod_btn.setMenu(self.demod_menu)
+        self.toolbar.addWidget(self.demod_btn)
 
 # --- LADO DERECHO: CONTROLES ---
         controls_layout = QVBoxLayout()
         controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout = QFormLayout()
 
-        # 1. FRECUENCIA CENTRAL (Común a todos)
+       # 1. FRECUENCIA CENTRAL (Común a todos)
+        freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
+
         self.freq_input = QDoubleSpinBox()
-        self.freq_input.setSuffix(" MHz")
-        self.freq_input.setDecimals(3)
-        self.freq_input.setRange(1.0, 6000.0)
-        self.freq_input.setSingleStep(0.1)
-        self.freq_input.setValue(state['center_freq'] / 1e6)
+        self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
+        self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
+        
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["Hz", "kHz", "MHz", "GHz"])
+        self.unit_combo.setCurrentText("MHz")
+        
+        # Agregamos los dos elementos al layout horizontal
+        freq_layout.addWidget(self.freq_input)
+        freq_layout.addWidget(self.unit_combo)
+
+        # Agregamos el layout compuesto al formulario
+        form_layout.addRow(QLabel("FREQ CENTRAL:"), freq_layout)
+
+        # Variables de estado para las unidades
+        self.current_freq_multiplier = 1e6
+        self.freq_input.setValue(state['center_freq'] / self.current_freq_multiplier)
+        self.update_spinbox_step() # Ajusta el salto de las flechitas
+
+        # Conexiones
         self.freq_input.valueChanged.connect(self.on_freq_changed)
-        form_layout.addRow(QLabel("FREQ CENTRAL:"), self.freq_input)
+        self.unit_combo.currentTextChanged.connect(self.on_unit_changed)
 
         # 2. SAMPLE RATE (Común, pero con opciones distintas según SDR)
         self.sr_combo = QComboBox()
@@ -334,6 +433,18 @@ class MainWindow(QMainWindow):
         self.avg_buffer = None
         self.avg_index = 0
         self.avg_count = 0
+
+    def set_wbfm_mode(self):
+        # Muestra los 4 cuadrantes
+        self.q2_widget.show()
+        self.q3_widget.show()
+        self.q4_widget.show()
+
+    def set_normal_mode(self):
+        # Oculta los cuadrantes extra, dejando solo el espectro en grande
+        self.q2_widget.hide()
+        self.q3_widget.hide()
+        self.q4_widget.hide()
 
     def select_marker(self, key):
         self.current_moving_marker = key
@@ -535,14 +646,51 @@ class MainWindow(QMainWindow):
         print("Reproducción finalizada o detenida. Volviendo a la antena.")
         self.sdr.pyhackrf_start_rx()
 
-    def on_freq_changed(self, val_mhz):
-        state['center_freq'] = val_mhz * 1e6
+    def update_spinbox_step(self):
+        # Ajusta cuánto salta el valor al apretar las flechitas según la unidad
+        if self.current_freq_multiplier == 1:       # Hz
+            self.freq_input.setSingleStep(10000.0)
+            self.freq_input.setDecimals(0)
+        elif self.current_freq_multiplier == 1e3:   # kHz
+            self.freq_input.setSingleStep(10.0)
+            self.freq_input.setDecimals(3)
+        elif self.current_freq_multiplier == 1e6:   # MHz
+            self.freq_input.setSingleStep(0.1)
+            self.freq_input.setDecimals(6)
+        elif self.current_freq_multiplier == 1e9:   # GHz
+            self.freq_input.setSingleStep(0.0001)
+            self.freq_input.setDecimals(9)
+
+    def on_unit_changed(self, unit_text):
+        # Diccionario con los multiplicadores
+        multipliers = {"Hz": 1, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9}
+        new_multiplier = multipliers[unit_text]
+        
+        # Bloqueamos las señales temporalmente para que cambiar la vista 
+        # no mande comandos locos a la SDR
+        self.freq_input.blockSignals(True)
+        
+        # Calculamos cómo se tiene que ver la frecuencia absoluta en la nueva unidad
+        display_val = state['center_freq'] / new_multiplier
+        self.current_freq_multiplier = new_multiplier
+        
+        self.update_spinbox_step()
+        self.freq_input.setValue(display_val)
+        
+        # Volvemos a habilitar las señales
+        self.freq_input.blockSignals(False)
+
+    def on_freq_changed(self, val):
+        # Ahora multiplicamos el valor de la cajita por la unidad seleccionada
+        state['center_freq'] = val * self.current_freq_multiplier
+        
         if self.device_type == "hackrf":
             self.sdr.pyhackrf_set_freq(int(state['center_freq']))
         elif self.device_type == "rtlsdr":
             self.sdr.center_freq = state['center_freq']
         elif self.device_type == "bladerf":
             self.rx_ch.frequency = int(state['center_freq'])
+            
         self.update_x_axis()
 
     def on_sr_changed(self, text):
