@@ -37,7 +37,8 @@ state = {
     # --- SUAVIZADO DE MÉTRICAS ---
     'fm_avg_pico_max': None,
     'fm_avg_pico_min': None,
-    'fm_avg_pico_rms': None
+    'fm_avg_pico_rms': None,
+    'fm_avg_dc_offset': None
 }
 
 # Buffer global para acumular las muestras de FM
@@ -102,6 +103,9 @@ def process_iq_samples(c_samples):
             inst_pico_max = np.max(demod_khz)
             inst_pico_min = np.min(demod_khz)
             inst_pico_rms = np.max(np.abs(demod_khz)) / np.sqrt(2)
+
+            # El DC Offset es el promedio de la desviación a lo largo del tiempo
+            inst_dc_offset = np.mean(demod_khz)
             
             # El RMS true ya es estable porque es un promedio cuadrático de todo el bloque (1 segundo)
             desv_rms_true = np.sqrt(np.mean(demod_khz**2)) 
@@ -112,6 +116,7 @@ def process_iq_samples(c_samples):
                 state['fm_avg_pico_max'] = inst_pico_max
                 state['fm_avg_pico_min'] = inst_pico_min
                 state['fm_avg_pico_rms'] = inst_pico_rms
+                state['fm_avg_dc_offset'] = inst_dc_offset
             else:
                 # Factor de suavizado: 0.3 significa 30% valor nuevo, 70% valor histórico.
                 # Podés bajar este valor a 0.1 para que sea súper lento y estable, o subirlo a 0.8 para que sea más reactivo.
@@ -120,13 +125,15 @@ def process_iq_samples(c_samples):
                 state['fm_avg_pico_max'] = alpha * inst_pico_max + (1 - alpha) * state['fm_avg_pico_max']
                 state['fm_avg_pico_min'] = alpha * inst_pico_min + (1 - alpha) * state['fm_avg_pico_min']
                 state['fm_avg_pico_rms'] = alpha * inst_pico_rms + (1 - alpha) * state['fm_avg_pico_rms']
+                state['fm_avg_dc_offset'] = alpha * inst_dc_offset + (1 - alpha) * state['fm_avg_dc_offset']
             
             # 3. Empaquetar las métricas suavizadas
             fm_metrics = {
                 'pico_max': state['fm_avg_pico_max'],
                 'pico_min': state['fm_avg_pico_min'],
                 'rms': desv_rms_true,
-                'pico_rms': state['fm_avg_pico_rms']
+                'pico_rms': state['fm_avg_pico_rms'],
+                'dc_offset': state['fm_avg_dc_offset']
             }
             
             # --- 4. AUDIO EN EL TIEMPO (Para gráfico 2-1) ---
@@ -700,6 +707,7 @@ class MainWindow(QMainWindow):
         state['fm_avg_pico_max'] = None
         state['fm_avg_pico_min'] = None
         state['fm_avg_pico_rms'] = None
+        state['fm_avg_dc_offset'] = None
         
         # Re-ajustamos los ejes y el zoom del gráfico principal
         self.update_x_axis()
@@ -1160,7 +1168,8 @@ class MainWindow(QMainWindow):
                         f"<span style='color: #FFFFFF'><b>Desviación Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
                         f"<span style='color: #FFFFFF'><b>Desviación Pico Mín:</b></span> <span style='color: #FF3333;'>{fm_metrics['pico_min']:+.2f} kHz</span><br>"
                         f"<span style='color: #FFFFFF'><b>Desviación Pico RMS:</b></span> <span style='color: #FFD500;'>{fm_metrics['pico_rms']:.2f} kHz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Desviación RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span>"
+                        f"<span style='color: #FFFFFF'><b>Desviación RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Error de Sintonía (DC Offset):</b></span> <span style='color: #00FFFF;'>{fm_metrics['dc_offset']:+.2f} kHz</span>"
                     )
                     self.fm_text_item.setHtml(html_text)
 
