@@ -8,6 +8,7 @@ dependencies = [
     "bladerf",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
+    "pandas>=3.0.3",
     "pyqt6>=6.11.0",
     "pyqtgraph>=0.14.0",
     "pyrtlsdr==0.2.93",
