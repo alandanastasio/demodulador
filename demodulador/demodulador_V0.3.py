@@ -29,18 +29,22 @@ state = {
     'demod_mode': 'none',
     # --- VARIABLES DE AUDIO ---
     'play_audio': False,
-    'audio_queue': queue.Queue(maxsize=5), # Buffer para evitar cortes (hasta 5 segundos)
-    'audio_buffer': np.array([], dtype=np.float32), # Buffer temporal para la placa de sonido
+    'audio_queue': queue.Queue(maxsize=5), 
+    'audio_buffer': np.array([], dtype=np.float32), 
     # --- VARIABLES DE GRABACIÓN ---
     'is_recording': False,
-    'recorded_samples': []
+    'recorded_samples': [],
+    # --- SUAVIZADO DE MÉTRICAS ---
+    'fm_avg_pico_max': None,
+    'fm_avg_pico_min': None,
+    'fm_avg_pico_rms': None
 }
 
 # Buffer global para acumular las muestras de FM
 fm_buffer = np.array([], dtype=np.complex128)
 
 class SignalEmitter(QObject):
-    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object)
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object, object)
 
 emitter = SignalEmitter()
 
@@ -90,6 +94,40 @@ def process_iq_samples(c_samples):
             PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio_pos, 1e-12))
             
             f_axis_audio = np.linspace(0, (sr/2)/1e3, mitad)
+
+            # --- MÉTRICAS DE DESVIACIÓN FM ---
+            demod_khz = demod / 1000.0 
+            
+            # 1. Cálculos instantáneos del bloque
+            inst_pico_max = np.max(demod_khz)
+            inst_pico_min = np.min(demod_khz)
+            inst_pico_rms = np.max(np.abs(demod_khz)) / np.sqrt(2)
+            
+            # El RMS true ya es estable porque es un promedio cuadrático de todo el bloque (1 segundo)
+            desv_rms_true = np.sqrt(np.mean(demod_khz**2)) 
+            
+            # 2. Aplicar Promedio Móvil Exponencial (EMA)
+            if state['fm_avg_pico_max'] is None:
+                # Inicialización en la primera corrida
+                state['fm_avg_pico_max'] = inst_pico_max
+                state['fm_avg_pico_min'] = inst_pico_min
+                state['fm_avg_pico_rms'] = inst_pico_rms
+            else:
+                # Factor de suavizado: 0.3 significa 30% valor nuevo, 70% valor histórico.
+                # Podés bajar este valor a 0.1 para que sea súper lento y estable, o subirlo a 0.8 para que sea más reactivo.
+                alpha = 0.3 
+                
+                state['fm_avg_pico_max'] = alpha * inst_pico_max + (1 - alpha) * state['fm_avg_pico_max']
+                state['fm_avg_pico_min'] = alpha * inst_pico_min + (1 - alpha) * state['fm_avg_pico_min']
+                state['fm_avg_pico_rms'] = alpha * inst_pico_rms + (1 - alpha) * state['fm_avg_pico_rms']
+            
+            # 3. Empaquetar las métricas suavizadas
+            fm_metrics = {
+                'pico_max': state['fm_avg_pico_max'],
+                'pico_min': state['fm_avg_pico_min'],
+                'rms': desv_rms_true,
+                'pico_rms': state['fm_avg_pico_rms']
+            }
             
             # --- 4. AUDIO EN EL TIEMPO (Para gráfico 2-1) ---
             muestras_10ms = int(sr * 0.01)
@@ -113,7 +151,7 @@ def process_iq_samples(c_samples):
                 if not state['audio_queue'].full():
                     state['audio_queue'].put(audio_norm)
             
-            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio)
+            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio, fm_metrics)
             
     else:
         # Lógica Normal
@@ -126,7 +164,7 @@ def process_iq_samples(c_samples):
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
-            emitter.data_updated.emit(PSD, chunk, None, None, None, None)
+            emitter.data_updated.emit(PSD, chunk, None, None, None, None, None)
 
 def rx_callback(device, buffer, buffer_length, valid_length):
     try:
@@ -285,6 +323,11 @@ class MainWindow(QMainWindow):
         self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
         self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
         self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
+    
+        # --- TEXTO PARA MÉTRICAS FM ---
+  
+        self.fm_text_item = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(0, 0))
+        self.q4_widget.addItem(self.fm_text_item)
 
         # Dejamos la curva creada genéricamente
         self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
@@ -557,6 +600,14 @@ class MainWindow(QMainWindow):
         self.q3_widget.setLabel('left', 'Amplitud')
         self.q3_widget.setXRange(0, 10) # Mostramos 10 ms
         self.q3_widget.setYRange(-3.14, 3.14) # np.angle devuelve valores entre -pi y pi
+
+        # Configuración del panel de métricas (2-2)
+        self.q4_widget.setTitle("Métricas de Desviación FM")
+        self.q4_widget.hideAxis('bottom')
+        self.q4_widget.hideAxis('left')
+        self.q4_widget.setXRange(0, 1) 
+        self.q4_widget.setYRange(0, 1)
+        self.fm_text_item.setPos(0.02, 0.98)
         
         # Mostrar los cuadrantes
         self.q2_widget.show()
@@ -607,6 +658,10 @@ class MainWindow(QMainWindow):
         self.q2_curve.setData([], []) 
         self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
+        self.q4_widget.setTitle("2-2 (Vacío)")
+        self.q4_widget.showAxis('bottom')
+        self.q4_widget.showAxis('left')
+        self.fm_text_item.setHtml("")
         
         # --- APAGAR AUDIO SI ESTABA PRENDIDO ---
         if hasattr(self, 'audio_stream') and self.audio_stream:
@@ -640,6 +695,11 @@ class MainWindow(QMainWindow):
         
         # Re-aplicamos la configuración de Sample Rate original a la radio
         self.on_sr_changed(self.sr_combo.currentText()) 
+
+        # Reseteamos los promedios para que arranque limpio la próxima vez
+        state['fm_avg_pico_max'] = None
+        state['fm_avg_pico_min'] = None
+        state['fm_avg_pico_rms'] = None
         
         # Re-ajustamos los ejes y el zoom del gráfico principal
         self.update_x_axis()
@@ -820,7 +880,7 @@ class MainWindow(QMainWindow):
         PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
 
         # Enviar los datos al gráfico
-        emitter.data_updated.emit(PSD, chunk, None, None, None, None)
+        emitter.data_updated.emit(PSD, chunk, None, None, None, None, None)
     
     def stop_playback(self):
         self.playback_timer.stop()
@@ -1005,7 +1065,7 @@ class MainWindow(QMainWindow):
         except: pass
         event.accept()
 
-    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_time=None, t_axis=None):
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_time=None, t_axis=None, fm_metrics=None):
         if self.is_paused:
             return
         
@@ -1088,16 +1148,21 @@ class MainWindow(QMainWindow):
                 self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
             
 
-            # Graficar la FM demodulada si estamos en ese modo
-            if state.get('demod_mode') == 'wbfm' and PSD_audio is not None:
-                self.q2_curve.setData(f_axis_audio, PSD_audio)
-
-            #Graficar la FM demodulada en el tiempo si estamos en ese modo
             if state.get('demod_mode') == 'wbfm':
                 if PSD_audio is not None:
                     self.q2_curve.setData(f_axis_audio, PSD_audio)
                 if audio_time is not None:
                     self.q3_curve.setData(t_axis, audio_time)
+                
+                # Renderizar las métricas en HTML
+                if fm_metrics is not None:
+                    html_text = (
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico Mín:</b></span> <span style='color: #FF3333;'>{fm_metrics['pico_min']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico RMS:</b></span> <span style='color: #FFD500;'>{fm_metrics['pico_rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span>"
+                    )
+                    self.fm_text_item.setHtml(html_text)
 
 class StartupWindow(QMainWindow):
     def __init__(self):
