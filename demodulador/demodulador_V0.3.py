@@ -16,7 +16,7 @@ import usb.core
 import threading
 from rtlsdr import RtlSdr
 import bladerf
-from scipy.signal import butter, lfilter, resample
+from scipy.signal import butter, lfilter, resample, resample_poly
 import sounddevice as sd
 import queue
 
@@ -30,7 +30,10 @@ state = {
     # --- VARIABLES DE AUDIO ---
     'play_audio': False,
     'audio_queue': queue.Queue(maxsize=5), # Buffer para evitar cortes (hasta 5 segundos)
-    'audio_buffer': np.array([], dtype=np.float32) # Buffer temporal para la placa de sonido
+    'audio_buffer': np.array([], dtype=np.float32), # Buffer temporal para la placa de sonido
+    # --- VARIABLES DE GRABACIÓN ---
+    'is_recording': False,
+    'recorded_samples': []
 }
 
 # Buffer global para acumular las muestras de FM
@@ -43,17 +46,29 @@ emitter = SignalEmitter()
 
 def process_iq_samples(c_samples):
     global fm_buffer
+
+    if state['is_recording']:
+        state['recorded_samples'].append(c_samples.copy())
     
     if state['demod_mode'] == 'wbfm':
+        # 1. ACUMULAMOS EN BRUTO (A la velocidad de hardware, ej: 2.4 MHz)
         fm_buffer = np.append(fm_buffer, c_samples)
-        sr = int(state['sample_rate'])
+        hw_sr = int(state['sample_rate'])
         
-        if len(fm_buffer) >= sr:
-            chunk_1s = fm_buffer[:sr]
-            fm_buffer = fm_buffer[sr:] # Guardamos el excedente para el próximo segundo
+        # 2. CUANDO COMPLETAMOS 1 SEGUNDO DE DATOS FÍSICOS...
+        if len(fm_buffer) >= hw_sr:
+            chunk_hw = fm_buffer[:hw_sr]
+            fm_buffer = fm_buffer[hw_sr:] # Guardamos el excedente
+            
+            # 3. DECIMACIÓN DSP EN BLOQUE
+            # Comprimimos el segundo entero de 2.4 MHz a 300 kHz todo junto.
+            # Esto evita las discontinuidades de fase en los bordes de los paquetes USB.
+            factor_bajada = int(hw_sr / 300000)
+            chunk_1s = resample_poly(chunk_hw, 1, factor_bajada)
+            
+            sr = 300000 # A partir de acá, la matemática vuelve a ser de 300k
             
             # --- 1. ESPECTRO RF CRUDO (Para gráfico 1-1) ---
-            # Hacemos la FFT directo de las muestras que entraron SIN filtrar
             raw_rf = chunk_1s - np.mean(chunk_1s)
             potencia = np.abs(np.fft.fftshift(np.fft.fft(raw_rf)))**2 / sr
             PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
@@ -64,51 +79,40 @@ def process_iq_samples(c_samples):
             filtered_chunk = lfilter(b, a, chunk_1s)
             
             # --- 3. DEMODULACIÓN (AUDIO MPX para gráfico 1-2) ---
-            # Discriminador polar para extraer frecuencia instantánea de la señal FILTRADA
             demod = np.angle(filtered_chunk[1:] * np.conj(filtered_chunk[:-1]))
             
-            # FFT de la señal de audio
             demod = demod - np.mean(demod)
             fs_audio = len(demod)
             potencia_audio = np.abs(np.fft.fft(demod))**2 / fs_audio
             
-            # Como la señal de audio es real, nos quedamos solo con la mitad positiva
             mitad = fs_audio // 2
             potencia_audio_pos = potencia_audio[:mitad]
             PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio_pos, 1e-12))
             
-            # Eje X del audio de 0 a 150 kHz
             f_axis_audio = np.linspace(0, (sr/2)/1e3, mitad)
             
             # --- 4. AUDIO EN EL TIEMPO (Para gráfico 2-1) ---
-            # Agarramos solo 10 ms para poder visualizar la onda sin que sea una mancha sólida
             muestras_10ms = int(sr * 0.01)
             audio_time_snippet = demod[:muestras_10ms]
-            t_axis_audio = np.linspace(0, 10, muestras_10ms) # Eje X en milisegundos
+            t_axis_audio = np.linspace(0, 10, muestras_10ms)
 
             # --- 5. REPRODUCCIÓN DE AUDIO ---
             if state.get('play_audio', False):
-                # 1. Decimación: Bajamos de 300 kHz a los 48 kHz que entiende la placa de sonido
                 muestras_48k = 48000 
                 audio_48k = resample(demod, muestras_48k)
                 
-                # 2. De-énfasis: La FM comercial pre-amplifica los agudos al transmitir. 
-                # Acá usamos un pasabajos de 1er orden (~2.1 kHz) para atenuarlos y que no suene chirriante.
                 b_aud, a_aud = butter(1, 2122 / (48000/2), btype='low')
                 audio_filtrado = lfilter(b_aud, a_aud, audio_48k)
                 
-                # 3. Normalización: Evita que el audio sature (clipping) o suene muy despacio
                 max_val = np.max(np.abs(audio_filtrado))
                 if max_val > 0:
                     audio_norm = np.float32(audio_filtrado / max_val)
                 else:
                     audio_norm = np.float32(audio_filtrado)
                 
-                # 4. Lo mandamos a la cola para que el hilo de sonido lo agarre
                 if not state['audio_queue'].full():
                     state['audio_queue'].put(audio_norm)
             
-            # Emitimos mandando los 6 parámetros
             emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio)
             
     else:
@@ -122,7 +126,6 @@ def process_iq_samples(c_samples):
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
-            # En modo normal, los datos de audio van como None
             emitter.data_updated.emit(PSD, chunk, None, None, None, None)
 
 def rx_callback(device, buffer, buffer_length, valid_length):
@@ -561,23 +564,19 @@ class MainWindow(QMainWindow):
         self.q4_widget.show()
 
         # --- MANEJO DEL SAMPLE RATE VISUAL ---
-        # Guardamos el valor que estaba seleccionado para restaurarlo después
         self.previous_sr_text = self.sr_combo.currentText()
-        
-        # Bloqueamos las señales para no mandar comandos accidentales a la SDR
         self.sr_combo.blockSignals(True)
         
-        # Agregamos "300 kHz" si no existe, lo seleccionamos y lo desactivamos
-        if self.sr_combo.findText("300 kHz") == -1:
-            self.sr_combo.addItem("300 kHz")
-        self.sr_combo.setCurrentText("300 kHz")
+        # Cambiamos la etiqueta para reflejar la realidad
+        if self.sr_combo.findText("2.4 MHz (Decimado a 300k)") == -1:
+            self.sr_combo.addItem("2.4 MHz (Decimado a 300k)")
+        self.sr_combo.setCurrentText("2.4 MHz (Decimado a 300k)")
         self.sr_combo.setEnabled(False) 
-        
         self.sr_combo.blockSignals(False)
         # --------------------------------------
 
         state['demod_mode'] = 'wbfm'
-        state['sample_rate'] = 300e3 # Forzamos a 300 ksps
+        state['sample_rate'] = 2.4e6 # Hardware SR (2.4 MHz reales)
         
         # Aplicar el cambio a la SDR seleccionada
         if self.device_type == "hackrf":
@@ -598,38 +597,51 @@ class MainWindow(QMainWindow):
         self.freq_input.setValue(display_val)
 
     def set_normal_mode(self):
+        # 1. Ocultamos los cuadrantes extra
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_widget.hide()
 
-        # Limpiamos los títulos visualmente (por si otra función los vuelve a mostrar sin configurar)
+        # 2. Limpiamos visualmente los títulos y los datos de las curvas
         self.q2_widget.setTitle("1-2 (Vacío)")
-        self.q2_curve.setData([], []) # Borra la línea verde de la pantalla
-
+        self.q2_curve.setData([], []) 
         self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
+        
+        # --- APAGAR AUDIO SI ESTABA PRENDIDO ---
+        if hasattr(self, 'audio_stream') and self.audio_stream:
+            if self.audio_btn.isChecked():
+                self.audio_btn.setChecked(False)
+                self.toggle_audio() # Esto detiene el stream y resetea el botón
         
         # --- MANEJO DEL SAMPLE RATE VISUAL ---
         self.sr_combo.blockSignals(True)
         
-        # Eliminamos el "300 kHz" temporal de la lista
-        idx = self.sr_combo.findText("300 kHz")
+        # Buscamos y eliminamos el item temporal de la HackRF (el de 2.4 MHz)
+        idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
         if idx != -1:
             self.sr_combo.removeItem(idx)
             
-        # Restauramos el valor que el usuario tenía antes de entrar a WBFM
+        # También buscamos el "300 kHz" viejo por si quedó de la versión anterior
+        idx_old = self.sr_combo.findText("300 kHz")
+        if idx_old != -1:
+            self.sr_combo.removeItem(idx_old)
+            
+        # Restauramos el valor que el usuario tenía seleccionado originalmente
         if hasattr(self, 'previous_sr_text'):
             self.sr_combo.setCurrentText(self.previous_sr_text)
             
-        # Volvemos a habilitar el control
+        # Volvemos a habilitar el menú desplegable
         self.sr_combo.setEnabled(True) 
         self.sr_combo.blockSignals(False)
         # --------------------------------------
         
         state['demod_mode'] = 'none'
         
-        # Leemos lo que dice el combo restaurado y aplicamos a la radio
+        # Re-aplicamos la configuración de Sample Rate original a la radio
         self.on_sr_changed(self.sr_combo.currentText()) 
+        
+        # Re-ajustamos los ejes y el zoom del gráfico principal
         self.update_x_axis()
 
     def select_marker(self, key):
@@ -684,9 +696,9 @@ class MainWindow(QMainWindow):
             self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
 
     def toggle_recording(self):
-        if not self.is_recording:
-            self.is_recording = True
-            self.recorded_samples = [] # <-- Limpiamos la lista correcta
+        if not state['is_recording']:
+            state['is_recording'] = True
+            state['recorded_samples'] = [] # Limpiar memoria
             
             self.record_action.setText("⏹ Detener y Guardar")
             self.rec_play_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
@@ -696,22 +708,21 @@ class MainWindow(QMainWindow):
             self.sr_combo.setEnabled(False)
             self.fft_combo.setEnabled(False)
         else:
-            self.is_recording = False
+            state['is_recording'] = False
             
             # 1. Cambiar estado visual y FORZAR a la GUI a actualizarse
             self.record_action.setText("⏳ Guardando...")
             self.rec_play_btn.setText("⏳ Guardando...")
             self.rec_play_btn.setStyleSheet("background-color: #ff8c00; color: black; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
-            QApplication.processEvents() # <- Esto actualiza la pantalla ANTES de que se congele
+            QApplication.processEvents() 
 
-            if len(self.recorded_samples) > 0:
+            if len(state['recorded_samples']) > 0:
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"muestras_iq_{timestamp}.npz"
                 
-                # Unir todos los fragmentos en un único array gigante 1D
-                todas_las_muestras = np.concatenate(self.recorded_samples)
+                # Unir todos los fragmentos interceptados
+                todas_las_muestras = np.concatenate(state['recorded_samples'])
                 
-                # 2. Guardar SIN COMPRESIÓN. Es muchísimo más rápido para ruido de RF.
                 np.savez(
                     filename,
                     raw_iq=todas_las_muestras,
@@ -720,9 +731,9 @@ class MainWindow(QMainWindow):
                 )
                 print(f"Grabación guardada exitosamente en: {filename}")
                 print(f"Muestras totales grabadas: {len(todas_las_muestras)}")
-                self.recorded_samples = []
+                state['recorded_samples'] = [] # Liberar RAM gigante
 
-            # 3. Restaurar apariencia original de los botones y controles
+            # 3. Restaurar apariencia
             self.record_action.setText("🔴 Iniciar Grabación")
             self.rec_play_btn.setText("Rec/Play")
             self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
@@ -809,7 +820,7 @@ class MainWindow(QMainWindow):
         PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
 
         # Enviar los datos al gráfico
-        emitter.data_updated.emit(PSD, chunk)
+        emitter.data_updated.emit(PSD, chunk, None, None, None, None)
     
     def stop_playback(self):
         self.playback_timer.stop()
@@ -961,15 +972,17 @@ class MainWindow(QMainWindow):
 
     def update_x_axis(self):
         cf = state['center_freq']
-        sr = state['sample_rate']
         
         if state.get('demod_mode') == 'wbfm':
-            fs = int(sr) # Eje X de 300,000 puntos (1 segundo)
+            fs = 300000 
+            sr_visual = 300000 
+            self.f_axis = np.linspace(cf - sr_visual/2, cf + sr_visual/2, fs) / 1e6
+            self.freq_plot.setXRange((cf - sr_visual/2)/1e6, (cf + sr_visual/2)/1e6)
         else:
-            fs = state['fft_size'] # Eje X normal dictado por la interfaz
-            
-        self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
-        self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
+            sr = state['sample_rate']
+            fs = state['fft_size']
+            self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
+            self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
 
     def closeEvent(self, event):
         print(f"Cerrando demodulador y apagando {self.device_type}...")
@@ -1074,8 +1087,6 @@ class MainWindow(QMainWindow):
                 view_rect = self.freq_plot.viewRange()
                 self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
             
-            if self.is_recording:
-                self.recorded_samples.append(raw_samples.copy())
 
             # Graficar la FM demodulada si estamos en ese modo
             if state.get('demod_mode') == 'wbfm' and PSD_audio is not None:
