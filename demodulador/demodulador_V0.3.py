@@ -76,12 +76,12 @@ def process_iq_samples(c_samples):
             # --- 2. FILTRADO (Solo para la demodulación) ---
             nyq = 0.5 * sr
             b, a = butter(4, 100e3 / nyq, btype='low')
-            filtered_chunk = lfilter(b, a, chunk_1s)
+            filtered_chunk = lfilter(b, a, raw_rf)
             
             # --- 3. DEMODULACIÓN (AUDIO MPX para gráfico 1-2) ---
-            demod = np.angle(filtered_chunk[1:] * np.conj(filtered_chunk[:-1]))
+            demod = np.angle(filtered_chunk[1:] * np.conj(filtered_chunk[:-1]))*sr/(2*np.pi)
             
-            demod = demod - np.mean(demod)
+          
             fs_audio = len(demod)
             potencia_audio = np.abs(np.fft.fft(demod))**2 / fs_audio
             
@@ -591,8 +591,8 @@ class MainWindow(QMainWindow):
 
         self.update_x_axis() 
         
-        # Sintonizamos el centro de FM (97.75 MHz)
-        freq_fm_centro_hz = 97.75 * 1e6 
+        # Sintonizamos el centro de FM (100 MHz)
+        freq_fm_centro_hz = 100 * 1e6 
         display_val = freq_fm_centro_hz / self.current_freq_multiplier
         self.freq_input.setValue(display_val)
 
