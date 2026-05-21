@@ -5,7 +5,7 @@ echo "📻 Iniciando setup del Demodulador SDR..."
 # 1. Instalar dependencias del sistema
 echo "📦 Instalando drivers y librerías base..."
 sudo apt update
-sudo apt install -y bladerf libbladerf-dev rtl-sdr librtlsdr-dev hackrf libhackrf-dev
+sudo apt install -y bladerf libbladerf-dev rtl-sdr librtlsdr-dev hackrf libhackrf-dev libportaudio2
 
 # 2. Configurar el bitstream de la FPGA (Específico para bladeRF x40)
 echo "🧠 Descargando bitstream (FPGA) de la bladeRF x40..."
@@ -36,4 +36,4 @@ else
 fi
 
 echo ""
-echo "🚀 ¡Setup terminado! Ejecutá 'uv sync' si todavía no lo hiciste, y luego 'uv run python demodulador/demodulador_V0.1.py'."
+echo "🚀 ¡Setup terminado! Ejecutá 'uv sync' si todavía no lo hiciste, y luego 'uv run python demodulador/demodulador_V0.3.py'."
