@@ -1,0 +1,1071 @@
+import sys
+import numpy as np
+import pyqtgraph as pg
+import datetime
+import usb.core
+import queue
+import sounddevice as sd
+
+from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
+                             QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
+                             QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
+                             QPushButton, QListWidgetItem, QGridLayout)
+
+# --- IMPORTACIÓN DE NUESTROS MÓDULOS MODULARES ---
+# Hardware
+from hardware.hackrf_handler import HackRFHandler
+from hardware.rtlsdr_handler import RtlSdrHandler
+from hardware.nuand_bladerf_handler import BladeRFHandler
+# DSP (Plugins)
+from dsp.demoduladores.wbfm import DemoduladorWBFM
+from dsp.demoduladores.sa import SpectrumAnalyzer
+
+# --- ESTADO GLOBAL (Solo cosas de la UI y configuración general) ---
+state = {
+    'fft_size': 4096,
+    'center_freq': 100e6,
+    'sample_rate': 10e6,
+    'demod_mode': 'none',
+    'play_audio': False,
+    'audio_queue': queue.Queue(maxsize=20),
+    'is_recording': False,
+    'recorded_samples': []
+}
+
+class SignalEmitter(QObject):
+    # Definimos la señal para actualizar los gráficos desde otros hilos
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object, object)
+
+emitter = SignalEmitter()
+
+class MainWindow(QMainWindow):
+    def __init__(self, radio_handler): 
+        super().__init__()
+        
+        # 1. HARDWARE Y DSP SETUP
+        self.radio = radio_handler
+        self.radio.rx_callback = self.procesar_muestras_iq # Conectamos la radio a nuestro puente
+        self.demodulador_actual = SpectrumAnalyzer() 
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        
+        # 2. CONFIGURACIÓN DE LA VENTANA
+        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}]")
+        self.resize(QSize(1200, 600))
+        self.setMinimumSize(QSize(800, 400))
+        self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
+
+        # --- VARIABLES INTERNAS DE LA UI ---
+        self.is_paused = False
+        self.trace_mode = "White clear"
+        self.max_hold_data = None
+        self.avg_buffer = None
+        self.avg_index = 0
+        self.avg_count = 0
+        self.AVG_MAX = 100
+        self.current_freq_multiplier = 1e6
+
+        # Construimos la interfaz gráfica
+        self._build_ui()
+
+        # Conectamos el actualizador de gráficos
+        emitter.data_updated.connect(self.update_plot)
+        
+        # 3. ENCENDIDO DE LA RADIO
+        self.radio.configurar(state['sample_rate'], state['center_freq'])
+        self.radio.start_rx()
+
+    def procesar_muestras_iq(self, c_samples):
+        # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
+        if state['is_recording']:
+            state['recorded_samples'].append(c_samples.copy())
+
+        # 2. Procesamiento a través del plugin DSP activo (SpectrumAnalyzer o DemoduladorWBFM)
+        if self.demodulador_actual is not None:
+            resultados = self.demodulador_actual.procesar(c_samples)
+            
+            # El plugin devuelve None si todavía está acumulando muestras en su buffer 
+            # para cumplir con el bloque de tiempo mínimo (ej: los 100ms de la FM)
+            if resultados is not None:
+                
+                # 3. Gestión de Audio: Enviamos a la cola de sounddevice solo si la escucha 
+                # está activa y si el plugin actual realmente generó muestras de audio.
+                if state.get('play_audio', False) and resultados.get('audio_out') is not None:
+                    if not state['audio_queue'].full():
+                        state['audio_queue'].put(resultados['audio_out'])
+                
+                # 4. Actualización de la Interfaz: Despachamos todos los vectores procesados 
+                # hacia el hilo principal de PyQt usando el emisor de señales genérico.
+                emitter.data_updated.emit(
+                    resultados['psd_rf'],
+                    resultados['rf_chunk'],
+                    resultados['psd_mpx'],
+                    resultados['f_axis_mpx'],
+                    resultados['audio_time'],
+                    resultados['t_axis_audio'],
+                    resultados['metricas']
+                )
+
+    # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
+
+    def set_wbfm_mode(self):
+        # Configuramos las pantallas
+        self.q2_widget.setTitle("Espectro MPX (Audio Demodulado)")
+        self.q2_widget.setLabel('bottom', 'Frecuencia [kHz]')
+        self.q2_widget.setLabel('left', 'Magnitud [dB]')
+        self.q2_widget.setXRange(0, 100)
+        self.q2_widget.setYRange(-80, 20)
+
+        self.q3_widget.setTitle("Señal Demodulada en el Tiempo")
+        self.q3_widget.setLabel('bottom', 'Tiempo [ms]')
+        self.q3_widget.setLabel('left', 'Desviación [kHz]') 
+        self.q3_widget.setXRange(0, 10) 
+        self.q3_widget.setYRange(-100, 100)
+
+        self.q4_widget.setTitle("Métricas de Desviación FM")
+        self.q4_widget.hideAxis('bottom')
+        self.q4_widget.hideAxis('left')
+        self.fm_text_item.setPos(0.02, 0.98)
+        
+        self.q2_widget.show()
+        self.q3_widget.show()
+        self.q4_widget.show()
+
+        # Ajustamos Sample Rate Visual (Decimado)
+        self.previous_sr_text = self.sr_combo.currentText()
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("2.4 MHz (Decimado a 300k)") == -1:
+            self.sr_combo.addItem("2.4 MHz (Decimado a 300k)")
+        self.sr_combo.setCurrentText("2.4 MHz (Decimado a 300k)")
+        self.sr_combo.setEnabled(False) 
+        self.sr_combo.blockSignals(False)
+
+        # --- CAMBIO DE ARQUITECTURA DSP Y HARDWARE ---
+        state['demod_mode'] = 'wbfm'
+        state['sample_rate'] = 2.4e6 
+        
+        # 1. Cargamos el Plugin DSP
+        self.demodulador_actual = DemoduladorWBFM()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        
+        # 2. Configuramos la Radio
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        # 3. Sintonizamos centro de FM
+        self.freq_input.setValue(100.0) # Se dispara on_freq_changed
+        self.update_x_axis()
+
+    def set_normal_mode(self):
+        self.q2_widget.hide()
+        self.q3_widget.hide()
+        self.q4_widget.hide()
+        self.q2_widget.setTitle("1-2 (Vacío)")
+        self.q2_curve.setData([], []) 
+        self.q3_widget.setTitle("2-1 (Vacío)")
+        self.q3_curve.setData([], [])
+        self.q4_widget.setTitle("2-2 (Vacío)")
+        self.fm_text_item.setHtml("")
+        
+        if self.audio_btn.isChecked():
+            self.audio_btn.setChecked(False)
+            self.toggle_audio()
+        
+        self.sr_combo.blockSignals(True)
+        idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
+        if idx != -1: self.sr_combo.removeItem(idx)
+        if hasattr(self, 'previous_sr_text'):
+            self.sr_combo.setCurrentText(self.previous_sr_text)
+        self.sr_combo.setEnabled(True) 
+        self.sr_combo.blockSignals(False)
+        
+        # --- LIMPIEZA DE ARQUITECTURA ---
+        state['demod_mode'] = 'none'
+        self.demodulador_actual = SpectrumAnalyzer()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        
+        # Restauramos Hardware
+        self.on_sr_changed(self.sr_combo.currentText()) 
+        self.update_x_axis()
+
+    def on_freq_changed(self, val):
+        state['center_freq'] = val * self.current_freq_multiplier
+        self.radio.set_freq(state['center_freq'])
+        self.update_x_axis()
+
+    def on_sr_changed(self, text):
+        if not text: return
+        val_mhz = float(text.replace(" MHz", ""))
+        state['sample_rate'] = val_mhz * 1e6
+        
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        # Si hay un plugin activo, le avisamos que cambió el sample rate
+        if self.demodulador_actual is not None:
+            self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            
+        self.update_x_axis()
+    
+    def on_lna_changed(self, text):
+        if not text: return
+        val = int(text.replace(" dB", ""))
+        self.radio.set_gain(val) # Esto controla el LNA en HackRF o la ganancia global en bladeRF
+
+    def on_vga_changed(self, text):
+        if not text: return
+        val = int(text.replace(" dB", ""))
+        
+        # Le preguntamos a la radio si tiene la capacidad de ajustar el VGA
+        if hasattr(self.radio, 'set_vga_gain'):
+            self.radio.set_vga_gain(val)
+        else:
+            # Esto es solo un log de seguridad, en la práctica el botón 
+            # de VGA ni siquiera va a aparecer si no es una HackRF
+            print(f"El equipo {self.radio.nombre} no soporta ajuste de VGA independiente.")
+
+    def on_trace_changed(self, text):
+        self.trace_mode = text
+        self.reset_traces()
+
+    def on_fft_changed(self, text):
+        state['fft_size'] = int(text)
+        self.reset_traces()
+        if self.demodulador_actual is not None:
+            self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self.update_x_axis()
+            
+    def update_spinbox_step(self):
+        # Ajusta cuánto salta el valor al apretar las flechitas según la unidad
+        if self.current_freq_multiplier == 1:       # Hz
+            self.freq_input.setSingleStep(10000.0)
+            self.freq_input.setDecimals(0)
+        elif self.current_freq_multiplier == 1e3:   # kHz
+            self.freq_input.setSingleStep(10.0)
+            self.freq_input.setDecimals(3)
+        elif self.current_freq_multiplier == 1e6:   # MHz
+            self.freq_input.setSingleStep(0.1)
+            self.freq_input.setDecimals(6)
+        elif self.current_freq_multiplier == 1e9:   # GHz
+            self.freq_input.setSingleStep(0.0001)
+            self.freq_input.setDecimals(9)
+
+    def on_unit_changed(self, unit_text):
+        # Diccionario con los multiplicadores
+        multipliers = {"Hz": 1, "kHz": 1e3, "MHz": 1e6, "GHz": 1e9}
+        new_multiplier = multipliers[unit_text]
+        
+        # Bloqueamos las señales temporalmente para que cambiar la vista 
+        # no mande comandos locos a la SDR
+        self.freq_input.blockSignals(True)
+        
+        # Calculamos cómo se tiene que ver la frecuencia absoluta en la nueva unidad
+        display_val = state['center_freq'] / new_multiplier
+        self.current_freq_multiplier = new_multiplier
+        
+        self.update_spinbox_step()
+        self.freq_input.setValue(display_val)
+        
+        # Volvemos a habilitar las señales
+        self.freq_input.blockSignals(False)
+
+    def update_x_axis(self):
+        cf = state['center_freq']
+        if state.get('demod_mode') == 'wbfm':
+            fs = state['fft_size'] 
+            sr_visual = 300000 
+            self.f_axis = np.linspace(cf - sr_visual/2, cf + sr_visual/2, fs) / 1e6
+            self.freq_plot.setXRange((cf - sr_visual/2)/1e6, (cf + sr_visual/2)/1e6)
+        else:
+            sr = state['sample_rate']
+            fs = state['fft_size']
+            self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
+            self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
+
+    def closeEvent(self, event):
+        print("Cerrando aplicación SDR...")
+        state['play_audio'] = False
+        self.radio.close()
+        event.accept()
+        
+    def select_marker(self, key):
+        self.current_moving_marker = key
+        if key is not None:
+            # Si el marker no estaba activo, lo prendemos y lo mostramos
+            if not self.markers_info[key]['active']:
+                self.markers_info[key]['active'] = True
+                self.freq_plot.addItem(self.markers_info[key]['item'])
+                self.marker_text_box.show()
+
+    def clear_markers(self):
+        for key, data in self.markers_info.items():
+            if data['active']:
+                self.freq_plot.removeItem(data['item'])
+            data['active'] = False
+        
+        self.marker_text_box.hide()
+        self.action_none.setChecked(True)
+        self.current_moving_marker = None
+
+    def delete_marker(self, key):
+        # 1. Si el marker estaba activo, lo sacamos de la pantalla y lo marcamos apagado
+        if self.markers_info[key]['active']:
+            self.freq_plot.removeItem(self.markers_info[key]['item'])
+            self.markers_info[key]['active'] = False
+        
+        # 2. Si justo estábamos moviendo el marker que acabamos de borrar, reseteamos la selección
+        if self.current_moving_marker == key:
+            self.action_none.setChecked(True)
+            self.current_moving_marker = None
+        
+        # 3. Si ya no queda NINGÚN marker activo en pantalla, ocultamos el cuadro de texto negro
+        if not any(m['active'] for m in self.markers_info.values()):
+            self.marker_text_box.hide()
+
+    def on_mouse_clicked(self, event):
+        # Mueve únicamente el marker que está seleccionado en el menú
+        if event.button() == Qt.MouseButton.LeftButton and self.current_moving_marker is not None:
+            if self.freq_plot.sceneBoundingRect().contains(event.scenePos()):
+                mouse_point = self.freq_plot.getViewBox().mapSceneToView(event.scenePos())
+                self.markers_info[self.current_moving_marker]['freq'] = mouse_point.x()
+
+    def toggle_pause(self):
+        self.is_paused = self.pause_btn.isChecked()
+        
+        if self.is_paused:
+            self.pause_btn.setText("▶")
+            self.pause_btn.setStyleSheet("background-color: #488BD8; color: black; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
+        else:
+            self.pause_btn.setText("⏸")
+            self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
+
+    def toggle_recording(self):
+        if not state['is_recording']:
+            state['is_recording'] = True
+            state['recorded_samples'] = [] # Limpiar memoria
+            
+            self.record_action.setText("⏹ Detener y Guardar")
+            self.rec_play_btn.setStyleSheet("background-color: #8b0000; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            print("Grabación de muestras IQ iniciada...")
+            
+            self.freq_input.setEnabled(False)
+            self.sr_combo.setEnabled(False)
+            self.fft_combo.setEnabled(False)
+        else:
+            state['is_recording'] = False
+            
+            # 1. Cambiar estado visual y FORZAR a la GUI a actualizarse
+            self.record_action.setText("⏳ Guardando...")
+            self.rec_play_btn.setText("⏳ Guardando...")
+            self.rec_play_btn.setStyleSheet("background-color: #ff8c00; color: black; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            QApplication.processEvents() 
+
+            if len(state['recorded_samples']) > 0:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"muestras_iq_{timestamp}.npz"
+                
+                # Unir todos los fragmentos interceptados
+                todas_las_muestras = np.concatenate(state['recorded_samples'])
+                
+                np.savez(
+                    filename,
+                    raw_iq=todas_las_muestras,
+                    center_freq=state['center_freq'],
+                    sample_rate=state['sample_rate']
+                )
+                print(f"Grabación guardada exitosamente en: {filename}")
+                print(f"Muestras totales grabadas: {len(todas_las_muestras)}")
+                state['recorded_samples'] = [] # Liberar RAM gigante
+
+            # 3. Restaurar apariencia
+            self.record_action.setText("🔴 Iniciar Grabación")
+            self.rec_play_btn.setText("Rec/Play")
+            self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+            
+            self.freq_input.setEnabled(True)
+            self.sr_combo.setEnabled(True)
+            self.fft_combo.setEnabled(True)
+
+    def load_and_play(self, loop=False): # <-- Agregamos el flag
+        filename, _ = QFileDialog.getOpenFileName(self, "Seleccionar Grabación IQ", "", "Numpy Archives (*.npz)")
+        if not filename:
+            return
+
+        self.sdr.pyhackrf_stop_rx()
+        print(f"Cargando archivo: {filename}...")
+        QApplication.processEvents()
+
+        try:
+            data = np.load(filename)
+            self.playback_data = data['raw_iq']
+            cf = data['center_freq']
+            sr = data['sample_rate']
+        except Exception as e:
+            print(f"Error al leer el archivo: {e}")
+            self.sdr.pyhackrf_start_rx()
+            return
+
+        self.is_looping = loop # <-- Guardamos el flag en la clase
+        state['center_freq'] = float(cf)
+        state['sample_rate'] = float(sr)
+        self.freq_input.setValue(cf / 1e6)
+        self.update_x_axis()
+
+        # Bloquear y desbloquear controles
+        self.freq_input.setEnabled(False)
+        self.sr_combo.setEnabled(False)
+        self.fft_combo.setEnabled(False)
+        self.record_action.setEnabled(False)
+        self.play_action.setEnabled(False)
+        self.loop_action.setEnabled(False)        # Bloquear Play en Loop
+        self.stop_play_action.setEnabled(True)    # Habilitar botón de Parar
+        
+        # Cambiar el texto del botón principal según el modo
+        if self.is_looping:
+            self.rec_play_btn.setText("🔁 Reproduciendo Loop...")
+        else:
+            self.rec_play_btn.setText("▶ Reproduciendo...")
+            
+        self.rec_play_btn.setStyleSheet("background-color: #004d99; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+        self.freq_plot_curve.setPen(pg.mkPen(color="#FF8C00", width=1.5))
+
+        self.playback_index = 0
+        self.playback_timer.start(33) 
+        print("Reproducción iniciada.")
+
+
+    def playback_step(self):
+        fs = state['fft_size']
+        
+        # Calcular cuántas muestras saltar para simular la velocidad real
+        # Avance = Sample Rate (muestras/seg) * tiempo del frame (0.033 seg)
+        avance = int(state['sample_rate'] * 0.033) 
+
+        if self.playback_index + fs > len(self.playback_data):
+            if self.is_looping:
+                # Si estamos en loop, simplemente rebobinamos al índice 0
+                self.playback_index = 0 
+            else:
+                # Si es reproducción normal, detenemos todo
+                self.stop_playback() 
+                return
+
+        # Agarrar el pedacito de muestras crudas correspondiente a este frame
+        chunk = self.playback_data[self.playback_index : self.playback_index + fs].copy()
+        
+        # Avanzar el puntero en el tiempo
+        self.playback_index += avance
+
+        # Hacer la misma matemática de la FFT que hace el rx_callback
+        chunk = chunk - np.mean(chunk)
+        potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk)))**2 / fs
+        PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+        centro = fs // 2
+        PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
+
+        # Enviar los datos al gráfico
+        emitter.data_updated.emit(PSD, chunk, None, None, None, None, None)
+    
+    def stop_playback(self):
+        self.playback_timer.stop()
+        self.is_looping = False
+        
+        # Rehabilitar todo
+        self.freq_input.setEnabled(True)
+        self.sr_combo.setEnabled(True)
+        self.fft_combo.setEnabled(True)
+        self.record_action.setEnabled(True)
+        self.play_action.setEnabled(True)
+        self.loop_action.setEnabled(True)
+        self.stop_play_action.setEnabled(False)
+        
+        # Restaurar botón principal y color del gráfico
+        self.rec_play_btn.setText("Rec/Play")
+        self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+        self.freq_plot_curve.setPen(pg.mkPen(color='#FFD500', width=1.5))
+        
+        # Volver a encender la HackRF en vivo
+        print("Reproducción finalizada o detenida. Volviendo a la antena.")
+        self.sdr.pyhackrf_start_rx()
+
+    def toggle_audio(self):
+        if self.audio_btn.isChecked():
+            self.audio_btn.setText("🔇 Detener Audio")
+            self.audio_btn.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+            state['play_audio'] = True
+            
+            # Limpiamos buffers viejos por si había quedado audio colgado de antes
+            state['audio_buffer'] = np.array([], dtype=np.float32)
+            while not state['audio_queue'].empty():
+                state['audio_queue'].get()
+
+            # Callback exigido por sounddevice para escupir audio al hardware
+            def audio_callback(outdata, frames, time, status):
+                try:
+                    # Si nos faltan datos, sacamos del Queue de 1 segundo
+                    while len(state['audio_buffer']) < frames:
+                        state['audio_buffer'] = np.append(state['audio_buffer'], state['audio_queue'].get_nowait())
+                except queue.Empty:
+                    pass
+                
+                # Llenamos el requerimiento de la placa de sonido
+                if len(state['audio_buffer']) >= frames:
+                    outdata[:, 0] = state['audio_buffer'][:frames]
+                    state['audio_buffer'] = state['audio_buffer'][frames:]
+                else:
+                    outdata[:, 0] = np.zeros(frames) # Silencio si hay micro-cortes
+                    state['audio_buffer'] = np.array([], dtype=np.float32)
+
+            # Iniciamos el stream mono a 48 kHz
+            self.audio_stream = sd.OutputStream(samplerate=48000, channels=1, callback=audio_callback)
+            self.audio_stream.start()
+        else:
+            # Apagamos todo
+            self.audio_btn.setText("🔊 Escuchar Audio")
+            self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+            state['play_audio'] = False
+            if self.audio_stream:
+                self.audio_stream.stop()
+                self.audio_stream.close()
+
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_time=None, t_axis=None, fm_metrics=None):
+        if self.is_paused:
+            return
+        
+        if len(self.f_axis) == len(PSD):
+            
+            # --- LÓGICA DE TRACE ---
+            display_psd = PSD # Por defecto, "White clear" usa la señal directa
+            
+            if self.trace_mode == "Max Hold":
+                if self.max_hold_data is None or len(self.max_hold_data) != len(PSD):
+                    self.max_hold_data = PSD.copy()
+                else:
+                    # Compara punto por punto y se queda con el más alto
+                    self.max_hold_data = np.maximum(self.max_hold_data, PSD) 
+                display_psd = self.max_hold_data
+
+            elif self.trace_mode == "Average":
+                if self.avg_buffer is None or self.avg_buffer.shape[1] != len(PSD):
+                    # Matriz de 100 filas (muestras) x N columnas (frecuencias)
+                    self.avg_buffer = np.zeros((self.AVG_MAX, len(PSD)))
+                    self.avg_index = 0
+                    self.avg_count = 0
+                
+                # Guarda la muestra actual en la posición del índice y avanza cíclicamente
+                self.avg_buffer[self.avg_index] = PSD
+                self.avg_index = (self.avg_index + 1) % self.AVG_MAX
+                if self.avg_count < self.AVG_MAX:
+                    self.avg_count += 1
+                
+                # Promedia sobre las muestras recolectadas hasta el momento
+                display_psd = np.mean(self.avg_buffer[:self.avg_count], axis=0)
+
+            # Graficamos la señal procesada
+            self.freq_plot_curve.setData(self.f_axis, display_psd)
+            
+            # --- LÓGICA DE MARKERS Y DELTAS ---
+            any_active = any(m['active'] for m in self.markers_info.values())
+            if any_active:
+                texto_global = ""
+                current_frame_data = {} # Para guardar X e Y y poder restar
+
+                # 1. Posicionar los gráficos de los que están activos
+                for key, data in self.markers_info.items():
+                    if data['active']:
+                        idx = (np.abs(self.f_axis - data['freq'])).argmin()
+                        x_val = self.f_axis[idx]
+                        y_val = display_psd[idx]
+                        data['item'].setData([x_val], [y_val])
+                        current_frame_data[key] = {'x': x_val, 'y': y_val, 'color': data['color']}
+
+                # 2. Armar el texto para M1 y Delta 1
+                if 'M1' in current_frame_data:
+                    m1 = current_frame_data['M1']
+                    texto_global += f"<span style='color:{m1['color']}'><b>M1:</b> {m1['x']:.3f} MHz | {m1['y']:.2f} dB</span><br>"
+                if 'D1' in current_frame_data:
+                    d1 = current_frame_data['D1']
+                    if 'M1' in current_frame_data: # Si M1 existe, Delta 1 es relativo a M1
+                        dx = d1['x'] - m1['x']
+                        dy = d1['y'] - m1['y']
+                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
+                    else: # Si prendieron D1 pero M1 está apagado, muestra valores absolutos
+                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {d1['x']:.3f} MHz | {d1['y']:.2f} dB (Falta M1)</span><br>"
+
+                # 3. Armar el texto para M2 y Delta 2
+                if 'M2' in current_frame_data:
+                    m2 = current_frame_data['M2']
+                    texto_global += f"<span style='color:{m2['color']}'><b>M2:</b> {m2['x']:.3f} MHz | {m2['y']:.2f} dB</span><br>"
+                if 'D2' in current_frame_data:
+                    d2 = current_frame_data['D2']
+                    if 'M2' in current_frame_data:
+                        dx = d2['x'] - m2['x']
+                        dy = d2['y'] - m2['y']
+                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
+                    else:
+                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {d2['x']:.3f} MHz | {d2['y']:.2f} dB (Falta M2)</span><br>"
+
+                # 4. Actualizar el cuadro
+                self.marker_text_box.setHtml(texto_global)
+                view_rect = self.freq_plot.viewRange()
+                self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
+            
+
+            if state.get('demod_mode') == 'wbfm':
+                if PSD_audio is not None:
+                    self.q2_curve.setData(f_axis_audio, PSD_audio)
+                if audio_time is not None:
+                    self.q3_curve.setData(t_axis, audio_time)
+                
+                # Renderizar las métricas en HTML
+                if fm_metrics is not None:
+                    html_text = (
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico Mín:</b></span> <span style='color: #FF3333;'>{fm_metrics['pico_min']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación Pico RMS:</b></span> <span style='color: #FFD500;'>{fm_metrics['pico_rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desviación RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Error de Sintonía (DC Offset):</b></span> <span style='color: #00FFFF;'>{fm_metrics['dc_offset']:+.2f} kHz</span>"
+                    )
+                    self.fm_text_item.setHtml(html_text)
+    
+    def _build_ui(self):
+        # --- BARRA SUPERIOR  ---
+        self.toolbar = QToolBar("Barra Principal")
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
+        self.toolbar.setMovable(False)
+
+        # 1 Rec/Play
+        self.rec_play_btn = QToolButton()
+        self.rec_play_btn.setText("Rec/Play")
+        self.rec_play_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.rec_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.rec_play_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        # Botón Pausa/Reanudar
+        self.pause_btn = QToolButton()
+        self.pause_btn.setText("⏸")
+        self.pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pause_btn.setCheckable(True)
+        self.pause_btn.setFixedSize(QSize(45, 40))
+        self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        self.toolbar.addWidget(self.pause_btn)
+
+        # 2. Crear el Menú que va a contener las opciones
+        self.rec_play_menu = QMenu()
+        self.rec_play_menu.setStyleSheet("""
+            QMenu {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: 1px solid #444;
+            }
+            QMenu::item:selected {
+                background-color: #555555;
+            }
+        """)
+
+        # 3. Crear las acciones (Opciones del menú)
+        self.record_action = QAction("🔴 Iniciar Grabación", self)
+        self.record_action.triggered.connect(self.toggle_recording)
+        
+        self.play_action = QAction(" ▶ Reproducir Archivo", self)
+        self.play_action.triggered.connect(lambda: self.load_and_play(loop=False))
+        
+        # Boton de reproducir en loop y de detener
+        self.loop_action = QAction("🔁 Reproducir archivo en loop", self)
+        self.loop_action.triggered.connect(lambda: self.load_and_play(loop=True))
+
+        self.stop_play_action = QAction("⏹ Detener Reproducción", self)
+        self.stop_play_action.triggered.connect(self.stop_playback)
+        self.stop_play_action.setEnabled(False) # Arranca deshabilitado
+        
+        # 4. Agregar al menú
+        self.rec_play_menu.addAction(self.record_action)
+        self.rec_play_menu.addAction(self.play_action)
+        self.rec_play_menu.addAction(self.loop_action)
+        self.rec_play_menu.addSeparator() # Una rayita separadora queda linda
+        self.rec_play_menu.addAction(self.stop_play_action)
+
+        self.rec_play_btn.setMenu(self.rec_play_menu)
+        self.toolbar.addWidget(self.rec_play_btn)
+
+        self.toolbar.addSeparator() # Una barrita vertical para separar
+
+        main_layout = QHBoxLayout()
+    
+        # --- LADO IZQUIERDO: GRÁFICO ---
+        self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
+        self.freq_plot.setMouseEnabled(x=True, y=True)
+        self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
+
+        # --- SISTEMA DE MARKERS ---
+        # Diccionario con la configuración y estado de cada marker/delta
+        self.markers_info = {
+            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00B000', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00B000'), symbol='d')},
+            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#00B000", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#007E00"), symbol='t')}, # 't' es triángulo
+            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0077FF"), symbol='d')},
+            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0054C2"), symbol='t')}
+        }
+        self.current_moving_marker = None # Cuál se mueve al hacer clic
+        
+        self.marker_text_box = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(1, 0))
+        self.freq_plot.addItem(self.marker_text_box)
+        self.marker_text_box.hide()
+
+        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+        self.freq_plot.setYRange(-70, 10)
+        self.update_x_axis()
+
+        # CONTENEDOR GRILLA (2x2)
+        self.plot_container = QWidget()
+        self.plot_layout = QGridLayout(self.plot_container)
+        self.plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.plot_layout.setSpacing(5) # Un pequeño margen entre los gráficos
+
+        # Agregamos el espectro original a la grilla [Fila 0, Columna 0] (1-1)
+        self.plot_layout.addWidget(self.freq_plot, 0, 0)
+
+        # Creamos los cuadrantes genericos
+        self.q2_widget = pg.PlotWidget(title="1-2 (Vacío)")
+        self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
+        self.q4_widget = pg.PlotWidget(title="2-2 (Vacío)")
+
+        # Agregamos los vacíos a sus respectivas posiciones
+        self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
+        self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
+        self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
+    
+        # --- TEXTO PARA MÉTRICAS FM ---
+  
+        self.fm_text_item = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(0, 0))
+        self.q4_widget.addItem(self.fm_text_item)
+
+        # Dejamos la curva creada genéricamente
+        self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
+        self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
+
+        # Los ocultamos por defecto al iniciar el programa
+        self.q2_widget.hide()
+        self.q3_widget.hide()
+        self.q4_widget.hide()
+
+        # En vez de agregar solo freq_plot, agregamos el contenedor entero al layout principal
+        main_layout.addWidget(self.plot_container, stretch=4)
+
+        # --- MENÚ DE MARKERS ---
+        self.markers_btn = QToolButton()
+        self.markers_btn.setText("Markers")
+        self.markers_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.markers_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.markers_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        self.markers_menu = QMenu()
+        self.markers_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        # Grupo de acciones (Radio buttons para elegir qué marker mover)
+        self.marker_group = QActionGroup(self)
+        self.marker_group.setExclusive(True)
+
+        def create_marker_action(text, key):
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked, k=key: self.select_marker(k))
+            self.marker_group.addAction(action)
+            self.markers_menu.addAction(action)
+            return action
+
+        self.action_m1 = create_marker_action("📍 Seleccionar M1", 'M1')
+        self.action_d1 = create_marker_action("📍 Seleccionar Delta 1", 'D1')
+        self.action_m2 = create_marker_action("📍 Seleccionar M2", 'M2')
+        self.action_d2 = create_marker_action("📍 Seleccionar Delta 2", 'D2')
+
+        self.markers_menu.addSeparator()
+        
+        self.action_none = QAction("🚫 Mover Ninguno", self)
+        self.action_none.setCheckable(True)
+        self.action_none.setChecked(True) # Por defecto no se mueve ninguno
+        self.action_none.triggered.connect(lambda: self.select_marker(None))
+        self.marker_group.addAction(self.action_none)
+        self.markers_menu.addAction(self.action_none)
+
+        self.markers_menu.addSeparator()
+        
+        # --- SUBMENÚ DE ELIMINACIÓN ---
+        self.delete_menu = QMenu("🗑️ Eliminar...", self)
+        self.delete_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #8b0000; } /* Un rojito oscuro al seleccionar */
+        """)
+
+        def create_delete_action(text, key):
+            action = QAction(text, self)
+            action.triggered.connect(lambda checked, k=key: self.delete_marker(k))
+            self.delete_menu.addAction(action)
+            return action
+
+        create_delete_action("❌ Eliminar M1", 'M1')
+        create_delete_action("❌ Eliminar Delta 1", 'D1')
+        create_delete_action("❌ Eliminar M2", 'M2')
+        create_delete_action("❌ Eliminar Delta 2", 'D2')
+        
+        self.delete_menu.addSeparator()
+        
+        self.clear_markers_action = QAction("💥 Limpiar Todos", self)
+        self.clear_markers_action.triggered.connect(self.clear_markers)
+        self.delete_menu.addAction(self.clear_markers_action)
+
+        # Agregar el submenú al menú principal
+        self.markers_menu.addMenu(self.delete_menu)
+
+        self.markers_btn.setMenu(self.markers_menu)
+        self.toolbar.addWidget(self.markers_btn)
+    
+
+        # --- MENÚ DE DEMODULACIONES ---
+        self.demod_btn = QToolButton()
+        self.demod_btn.setText("Demodulación")
+        self.demod_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.demod_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.demod_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+
+        self.demod_menu = QMenu()
+        self.demod_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        # Grupo de acciones para que solo una demodulación esté activa a la vez en toda la app
+        self.demod_group = QActionGroup(self)
+        self.demod_group.setExclusive(True)
+
+        # Acción: Sin Demodular (Por defecto)
+        self.action_demod_none = QAction("Sin Demodular", self)
+        self.action_demod_none.setCheckable(True)
+        self.action_demod_none.setChecked(True)
+        self.action_demod_none.triggered.connect(self.set_normal_mode)
+        self.demod_group.addAction(self.action_demod_none)
+        self.demod_menu.addAction(self.action_demod_none)
+
+        self.demod_menu.addSeparator()
+
+        # --- SUBMENÚ: FM ---
+        self.fm_menu = QMenu("FM", self)
+        self.fm_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        # Opciones dentro del submenú FM
+        self.action_wbfm = QAction("WBFM (Radio Comercial)", self)
+        self.action_wbfm.setCheckable(True)
+        self.action_wbfm.triggered.connect(self.set_wbfm_mode)
+        self.demod_group.addAction(self.action_wbfm)
+        self.fm_menu.addAction(self.action_wbfm)
+
+        self.action_nbfm = QAction("Custom FM", self)
+        self.action_nbfm.setCheckable(True)
+        # self.action_nbfm.triggered.connect(...)
+        self.demod_group.addAction(self.action_nbfm)
+        self.fm_menu.addAction(self.action_nbfm)
+
+        # Agregamos el submenú FM al menú principal de Demodulación
+        self.demod_menu.addMenu(self.fm_menu)
+
+        # Asignar menú al botón y agregar a la barra principal
+        self.demod_btn.setMenu(self.demod_menu)
+        self.toolbar.addWidget(self.demod_btn)
+
+        # --- LADO DERECHO: CONTROLES ---
+        controls_layout = QVBoxLayout()
+        controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        form_layout = QFormLayout()
+
+       # 1. FRECUENCIA CENTRAL (Común a todos)
+        freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
+
+        self.freq_input = QDoubleSpinBox()
+        self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
+        self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
+        
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["Hz", "kHz", "MHz", "GHz"])
+        self.unit_combo.setCurrentText("MHz")
+        
+        # Agregamos los dos elementos al layout horizontal
+        freq_layout.addWidget(self.freq_input)
+        freq_layout.addWidget(self.unit_combo)
+
+        # Agregamos el layout compuesto al formulario
+        form_layout.addRow(QLabel("FREQ CENTRAL:"), freq_layout)
+
+        # Variables de estado para las unidades
+        self.current_freq_multiplier = 1e6
+        self.freq_input.setValue(state['center_freq'] / self.current_freq_multiplier)
+        self.update_spinbox_step() # Ajusta el salto de las flechitas
+
+        # Conexiones
+        self.freq_input.valueChanged.connect(self.on_freq_changed)
+        self.unit_combo.currentTextChanged.connect(self.on_unit_changed)
+
+        # 2. SAMPLE RATE (Común, pero con opciones distintas según SDR)
+        self.sr_label = QLabel("SAMP RATE:")
+        self.sr_combo = QComboBox()
+        if "HackRF One" in self.radio.nombre:
+            self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "12.5 MHz", "16 MHz", "20 MHz"])
+            self.sr_combo.setCurrentText("10 MHz")
+        elif "RTL-SDR" in self.radio.nombre:
+            self.sr_combo.addItems(["1.024 MHz", "2.048 MHz", "2.4 MHz", "2.88 MHz"])
+            self.sr_combo.setCurrentText("2.4 MHz")
+        elif "Nuand bladeRF x40" in self.radio.nombre:
+            self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
+            self.sr_combo.setCurrentText("20 MHz")
+            
+        self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
+        form_layout.addRow(self.sr_label, self.sr_combo)
+
+        # 3. GANANCIAS (Aparecen, cambian de nombre o desaparecen)
+        self.lna_combo = QComboBox() # Creamos las variables para no romper callbacks
+        self.vga_combo = QComboBox()
+
+        if "HackRF One" in self.radio.nombre:
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 48, 8)])
+            self.lna_combo.setCurrentText("8 dB")
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            form_layout.addRow(QLabel("LNA GAIN:"), self.lna_combo)
+
+            self.vga_combo.addItems([f"{g} dB" for g in range(0, 64, 2)])
+            self.vga_combo.setCurrentText("16 dB")
+            self.vga_combo.currentTextChanged.connect(self.on_vga_changed)
+            form_layout.addRow(QLabel("VGA GAIN:"), self.vga_combo)
+
+        elif "Nuand bladeRF x40" in self.radio.nombre:
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)])
+            self.lna_combo.setCurrentText("0 dB") # Arrancamos en 0 para no tener tanto ruido al inicio
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            # Lo llamamos GLOBAL GAIN porque la bladeRF maneja una sola etapa unificada
+            form_layout.addRow(QLabel("GLOBAL GAIN:"), self.lna_combo)
+            
+        # Si es "rtlsdr", directamente NO agregamos los botones de ganancia al layout.
+
+        # 4. FFT y TRACE (Común a todos)
+        self.fft_combo = QComboBox()
+        self.fft_combo.addItems(["512", "1024", "2048", "4096", "8192"])
+        self.fft_combo.setCurrentText("4096")
+        self.fft_combo.currentTextChanged.connect(self.on_fft_changed)
+        form_layout.addRow(QLabel("TAMAÑO FFT:"), self.fft_combo)
+
+        self.trace_combo = QComboBox()
+        self.trace_combo.addItems(["White clear", "Max Hold", "Average"])
+        self.trace_combo.setCurrentText("White clear")
+        self.trace_combo.currentTextChanged.connect(self.on_trace_changed)
+        form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
+
+        controls_layout.addLayout(form_layout)
+
+        # 5. BOTÓN DE AUDIO
+        self.audio_btn = QPushButton("🔊 Escuchar Audio")
+        self.audio_btn.setCheckable(True)
+        self.audio_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
+        self.audio_btn.clicked.connect(self.toggle_audio)
+        controls_layout.addWidget(self.audio_btn)
+        
+        self.audio_stream = None # Guardamos la referencia para poder apagarlo después
+        
+        controls_widget = QWidget()
+        controls_widget.setLayout(controls_layout)
+        controls_widget.setFixedWidth(300)
+        main_layout.addWidget(controls_widget, stretch=1)
+
+        central_widget = QWidget()
+        central_widget.setLayout(main_layout)
+        self.setCentralWidget(central_widget)
+   
+    
+    def reset_traces(self):
+        self.max_hold_data = None
+        self.avg_buffer = None
+        self.avg_index = 0
+        self.avg_count = 0
+
+
+class StartupWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("DEMODULADOR SDR")
+        self.resize(QSize(400, 350))
+        self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
+
+        layout = QVBoxLayout()
+        label = QLabel("Dispositivos SDR detectados por USB:")
+        label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(label)
+
+        self.scan_btn = QPushButton("🔄 Escanear Puertos USB")
+        self.scan_btn.clicked.connect(self.scan_devices)
+        layout.addWidget(self.scan_btn)
+
+        self.device_list = QListWidget()
+        self.device_list.itemClicked.connect(self.launch_main_window)
+        layout.addWidget(self.device_list)
+
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+        self.scan_devices()
+
+    def scan_devices(self):
+        self.device_list.clear()
+        devices_found = 0
+
+        try:
+            if usb.core.find(idVendor=0x1d50, idProduct=0x6089):
+                self.device_list.addItem("HackRF One")
+                devices_found += 1
+        except: pass
+        try:
+            if usb.core.find(idVendor=0x0bda, idProduct=0x2838):
+                self.device_list.addItem("RTL-SDR")
+                devices_found += 1
+        except: pass
+        try:
+            if usb.core.find(idVendor=0x2cf0) or usb.core.find(idVendor=0x1d50, idProduct=0x6066):
+                self.device_list.addItem("Nuand bladeRF x40")
+                devices_found += 1
+        except: pass
+
+        if devices_found == 0:
+            item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.device_list.addItem(item)
+
+    def launch_main_window(self, item):
+        device_name = item.text()
+        radio_handler = None
+        
+        # --- INSTANCIACIÓN MODULAR DEL HARDWARE ---
+        if "HackRF" in device_name:
+            print("Iniciando HackRF...")
+            radio_handler = HackRFHandler(rx_callback=None)
+        elif "RTL-SDR" in device_name:
+            print("Iniciando RTL-SDR...")
+            radio_handler = RtlSdrHandler(rx_callback=None)
+        elif "bladeRF" in device_name:
+            print("Iniciando bladeRF...")
+            radio_handler = BladeRFHandler(rx_callback=None)
+        else:
+            return
+
+        # Pasamos el handler a la ventana principal
+        self.main_app_window = MainWindow(radio_handler)
+        self.main_app_window.show()
+        self.close()
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    startup_window = StartupWindow()
+    startup_window.show()
+    sys.exit(app.exec())
