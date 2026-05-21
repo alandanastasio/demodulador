@@ -16,7 +16,7 @@ import usb.core
 import threading
 from rtlsdr import RtlSdr
 import bladerf
-from scipy.signal import butter, lfilter, resample, resample_poly
+from scipy.signal import butter, lfilter, resample, resample_poly, lfilter_zi, firwin
 import sounddevice as sd
 import queue
 
@@ -29,7 +29,7 @@ state = {
     'demod_mode': 'none',
     # --- VARIABLES DE AUDIO ---
     'play_audio': False,
-    'audio_queue': queue.Queue(maxsize=5), 
+    'audio_queue': queue.Queue(maxsize=20), # Aumentado a 20 por los fragmentos más pequeños
     'audio_buffer': np.array([], dtype=np.float32), 
     # --- VARIABLES DE GRABACIÓN ---
     'is_recording': False,
@@ -38,7 +38,16 @@ state = {
     'fm_avg_pico_max': None,
     'fm_avg_pico_min': None,
     'fm_avg_pico_rms': None,
-    'fm_avg_dc_offset': None
+    'fm_avg_dc_offset': None,
+    # --- Z-STATES (MEMORIA PARA STREAMING) ---
+    'fm_last_iq': 1+0j,
+    'lpf_zi': None,
+    'deemph_zi': None,
+    'mpx_zi': None,
+    # --- CACHÉ DE COEFICIENTES FIR ---
+    'bb_lpf_kernel': None,
+    'mpx_lpf_kernel': None,
+    'last_hw_sr': None
 }
 
 # Buffer global para acumular las muestras de FM
@@ -56,78 +65,106 @@ def process_iq_samples(c_samples):
         state['recorded_samples'].append(c_samples.copy())
     
     if state['demod_mode'] == 'wbfm':
-        # 1. ACUMULAMOS EN BRUTO (A la velocidad de hardware, ej: 2.4 MHz)
         fm_buffer = np.append(fm_buffer, c_samples)
         hw_sr = int(state['sample_rate'])
         
-        # 2. CUANDO COMPLETAMOS 1 SEGUNDO DE DATOS FÍSICOS...
-        if len(fm_buffer) >= hw_sr:
-            chunk_hw = fm_buffer[:hw_sr]
-            fm_buffer = fm_buffer[hw_sr:] # Guardamos el excedente
+        # Procesamos en bloques de 100 ms (baja latencia en tiempo real)
+        chunk_size_hw = int(hw_sr * 0.1) 
+        
+        if len(fm_buffer) >= chunk_size_hw:
+            chunk_hw = fm_buffer[:chunk_size_hw]
+            fm_buffer = fm_buffer[chunk_size_hw:] 
             
-            # 3. DECIMACIÓN DSP EN BLOQUE
-            # Comprimimos el segundo entero de 2.4 MHz a 300 kHz todo junto.
-            # Esto evita las discontinuidades de fase en los bordes de los paquetes USB.
+            hw_sr = int(state['sample_rate'])
+            
+            # Calculamos los factores de downsampling una sola vez por chunk
             factor_bajada = int(hw_sr / 300000)
-            chunk_1s = resample_poly(chunk_hw, 1, factor_bajada)
+            nueva_fs = hw_sr / factor_bajada 
+
+            # === OPTIMIZACIÓN: CÁLCULO LAZY DE COEFICIENTES FIR ===
+            # Solo se calculan si no existen, o si el usuario cambió el Sample Rate
+            if state.get('last_hw_sr') != hw_sr or state.get('bb_lpf_kernel') is None:
+                # 1. Filtro pasabajos de banda base (RF)
+                state['bb_lpf_kernel'] = firwin(201, 200e3 / (hw_sr / 2.0))
+                
+                # 2. Filtro MPX de audio
+                state['mpx_lpf_kernel'] = firwin(65, 80000, fs=nueva_fs)
+                
+                state['last_hw_sr'] = hw_sr
+                
+                # Al cambiar los filtros, los retardos de memoria previos quedan inválidos
+                state['lpf_zi'] = None
+                state['mpx_zi'] = None
+                state['deemph_zi'] = None
+
+            # Rescatamos los coeficientes ya procesados desde la RAM
+            kernel = state['bb_lpf_kernel']
+            taps_mpx = state['mpx_lpf_kernel']
+
+            # === PASO 1: LLEVAR A BANDA BASE ===
+            bb = chunk_hw - np.mean(chunk_hw)
+
+            # === PASO 2: FILTRADO PASABAJOS FIR ===
+            if state['lpf_zi'] is None:
+                state['lpf_zi'] = lfilter_zi(kernel, [1.0]) * bb[0]
             
-            sr = 300000 # A partir de acá, la matemática vuelve a ser de 300k
+            bb_filt, state['lpf_zi'] = lfilter(kernel, [1.0], bb, zi=state['lpf_zi'])
+
+            # === PASO 3: DOWNSAMPLING ===
+            bb_resample = resample_poly(bb_filt, up=1, down=factor_bajada, window=('kaiser', 8.6))
+
+            # --- ESPECTRO RF CRUDO ---
+            fs_fft = state['fft_size']
+            if len(bb_resample) >= fs_fft:
+                rf_fft_chunk = bb_resample[:fs_fft] - np.mean(bb_resample[:fs_fft])
+                potencia = np.abs(np.fft.fftshift(np.fft.fft(rf_fft_chunk)))**2 / fs_fft
+                PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            else:
+                PSD = None
+
+            # === PASO 4: DEMODULACIÓN FM ===
+            chunk_with_last = np.insert(bb_resample, 0, state['fm_last_iq'])
+            state['fm_last_iq'] = bb_resample[-1] 
+
+            msj = np.angle(chunk_with_last[1:] * np.conjugate(chunk_with_last[:-1])) * (nueva_fs / (2*np.pi))
+            demod_khz_raw = msj / 1000.0
             
-            # --- 1. ESPECTRO RF CRUDO (Para gráfico 1-1) ---
-            raw_rf = chunk_1s - np.mean(chunk_1s)
-            potencia = np.abs(np.fft.fftshift(np.fft.fft(raw_rf)))**2 / sr
-            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            # === FILTRO MPX FIR ===
+            if state['mpx_zi'] is None:
+                state['mpx_zi'] = lfilter_zi(taps_mpx, [1.0]) * demod_khz_raw[0]
             
-            # --- 2. FILTRADO (Solo para la demodulación) ---
-            nyq = 0.5 * sr
-            b, a = butter(4, 100e3 / nyq, btype='low')
-            filtered_chunk = lfilter(b, a, raw_rf)
-            
-            # --- 3. DEMODULACIÓN (AUDIO MPX para gráfico 1-2) ---
-            demod = np.angle(filtered_chunk[1:] * np.conj(filtered_chunk[:-1]))*sr/(2*np.pi)
-            
-          
-            fs_audio = len(demod)
-            potencia_audio = np.abs(np.fft.fft(demod))**2 / fs_audio
-            
-            mitad = fs_audio // 2
-            potencia_audio_pos = potencia_audio[:mitad]
-            PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio_pos, 1e-12))
-            
-            f_axis_audio = np.linspace(0, (sr/2)/1e3, mitad)
+            demod_khz_clean, state['mpx_zi'] = lfilter(taps_mpx, [1.0], demod_khz_raw, zi=state['mpx_zi'])
+
+            # --- ESPECTRO MPX DE AUDIO ---
+            if len(demod_khz_clean) >= fs_fft:
+                potencia_audio = np.abs(np.fft.fft(demod_khz_clean[:fs_fft]))**2 / fs_fft
+                mitad = fs_fft // 2
+                PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio[:mitad], 1e-12))
+                # CORRECCIÓN 1: Usar nueva_fs en lugar de sr
+                f_axis_audio = np.linspace(0, (nueva_fs/2)/1e3, mitad)
+            else:
+                PSD_audio, f_axis_audio = None, None
 
             # --- MÉTRICAS DE DESVIACIÓN FM ---
-            demod_khz = demod / 1000.0 
+            inst_pico_max = np.percentile(demod_khz_clean, 99)
+            inst_pico_min = np.percentile(demod_khz_clean, 1)
             
-            # 1. Cálculos instantáneos del bloque
-            inst_pico_max = np.max(demod_khz)
-            inst_pico_min = np.min(demod_khz)
-            inst_pico_rms = np.max(np.abs(demod_khz)) / np.sqrt(2)
-
-            # El DC Offset es el promedio de la desviación a lo largo del tiempo
-            inst_dc_offset = np.mean(demod_khz)
+            desv_rms_true = np.sqrt(np.mean(demod_khz_clean**2)) 
+            inst_pico_rms = max(abs(inst_pico_max), abs(inst_pico_min)) / np.sqrt(2)
+            inst_dc_offset = np.mean(demod_khz_clean)
             
-            # El RMS true ya es estable porque es un promedio cuadrático de todo el bloque (1 segundo)
-            desv_rms_true = np.sqrt(np.mean(demod_khz**2)) 
-            
-            # 2. Aplicar Promedio Móvil Exponencial (EMA)
             if state['fm_avg_pico_max'] is None:
-                # Inicialización en la primera corrida
                 state['fm_avg_pico_max'] = inst_pico_max
                 state['fm_avg_pico_min'] = inst_pico_min
                 state['fm_avg_pico_rms'] = inst_pico_rms
                 state['fm_avg_dc_offset'] = inst_dc_offset
             else:
-                # Factor de suavizado: 0.3 significa 30% valor nuevo, 70% valor histórico.
-                # Podés bajar este valor a 0.1 para que sea súper lento y estable, o subirlo a 0.8 para que sea más reactivo.
                 alpha = 0.3 
-                
                 state['fm_avg_pico_max'] = alpha * inst_pico_max + (1 - alpha) * state['fm_avg_pico_max']
                 state['fm_avg_pico_min'] = alpha * inst_pico_min + (1 - alpha) * state['fm_avg_pico_min']
                 state['fm_avg_pico_rms'] = alpha * inst_pico_rms + (1 - alpha) * state['fm_avg_pico_rms']
                 state['fm_avg_dc_offset'] = alpha * inst_dc_offset + (1 - alpha) * state['fm_avg_dc_offset']
             
-            # 3. Empaquetar las métricas suavizadas
             fm_metrics = {
                 'pico_max': state['fm_avg_pico_max'],
                 'pico_min': state['fm_avg_pico_min'],
@@ -136,32 +173,42 @@ def process_iq_samples(c_samples):
                 'dc_offset': state['fm_avg_dc_offset']
             }
             
-            # --- 4. AUDIO EN EL TIEMPO (Para gráfico 2-1) ---
-            muestras_10ms = int(sr * 0.01)
-            audio_time_snippet = demod[:muestras_10ms]
-            t_axis_audio = np.linspace(0, 10, muestras_10ms)
+            # --- 4. AUDIO EN EL TIEMPO ---
+            # CORRECCIÓN 2: Usar nueva_fs en lugar de sr
+            muestras_10ms = int(nueva_fs * 0.01)
+            audio_time_snippet = demod_khz_clean[:muestras_10ms]
+            t_axis_audio = np.linspace(0, 10, len(audio_time_snippet))
 
-            # --- 5. REPRODUCCIÓN DE AUDIO ---
+            # --- 5. PROCESAMIENTO DE AUDIO FIEL ---
             if state.get('play_audio', False):
-                muestras_48k = 48000 
-                audio_48k = resample(demod, muestras_48k)
+                # CORRECCIÓN 3: Pasar demod_khz_clean al resampler en vez de demod
+                audio_48k = resample_poly(demod_khz_clean, 4, 25)
                 
+                # Filtro de de-énfasis preservando la memoria (Z-States)
                 b_aud, a_aud = butter(1, 2122 / (48000/2), btype='low')
-                audio_filtrado = lfilter(b_aud, a_aud, audio_48k)
+                if state['deemph_zi'] is None:
+                    state['deemph_zi'] = lfilter_zi(b_aud, a_aud) * audio_48k[0]
                 
+                audio_filtrado, state['deemph_zi'] = lfilter(b_aud, a_aud, audio_48k, zi=state['deemph_zi'])
+                
+                # Bloqueador de DC Offset
+                audio_filtrado = audio_filtrado - np.mean(audio_filtrado)
+                
+                # Normalización con control de ganancia básico
                 max_val = np.max(np.abs(audio_filtrado))
                 if max_val > 0:
-                    audio_norm = np.float32(audio_filtrado / max_val)
+                    audio_norm = np.float32(audio_filtrado / max(max_val, 15.0))
                 else:
                     audio_norm = np.float32(audio_filtrado)
                 
                 if not state['audio_queue'].full():
                     state['audio_queue'].put(audio_norm)
             
-            emitter.data_updated.emit(PSD, chunk_1s, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio, fm_metrics)
+            if PSD is not None:
+                emitter.data_updated.emit(PSD, rf_fft_chunk, PSD_audio, f_axis_audio, audio_time_snippet, t_axis_audio, fm_metrics)
             
     else:
-        # Lógica Normal
+        # Lógica Normal original
         fs = state['fft_size']
         if len(c_samples) >= fs:
             chunk = c_samples[:fs].copy()
@@ -172,6 +219,7 @@ def process_iq_samples(c_samples):
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
             emitter.data_updated.emit(PSD, chunk, None, None, None, None, None)
+
 
 def rx_callback(device, buffer, buffer_length, valid_length):
     try:
@@ -604,9 +652,9 @@ class MainWindow(QMainWindow):
         # Configuración del osciloscopio de audio
         self.q3_widget.setTitle("Señal Demodulada en el Tiempo")
         self.q3_widget.setLabel('bottom', 'Tiempo [ms]')
-        self.q3_widget.setLabel('left', 'Amplitud')
-        self.q3_widget.setXRange(0, 10) # Mostramos 10 ms
-        self.q3_widget.setYRange(-3.14, 3.14) # np.angle devuelve valores entre -pi y pi
+        self.q3_widget.setLabel('left', 'Desviación [kHz]') 
+        self.q3_widget.setXRange(0, 10) 
+        self.q3_widget.setYRange(-100, 100) # <-- WBFM opera cómodamente en +- 75 kHz
 
         # Configuración del panel de métricas (2-2)
         self.q4_widget.setTitle("Métricas de Desviación FM")
@@ -1042,7 +1090,7 @@ class MainWindow(QMainWindow):
         cf = state['center_freq']
         
         if state.get('demod_mode') == 'wbfm':
-            fs = 300000 
+            fs = state['fft_size'] 
             sr_visual = 300000 
             self.f_axis = np.linspace(cf - sr_visual/2, cf + sr_visual/2, fs) / 1e6
             self.freq_plot.setXRange((cf - sr_visual/2)/1e6, (cf + sr_visual/2)/1e6)
