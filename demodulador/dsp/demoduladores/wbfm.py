@@ -85,6 +85,8 @@ class DemoduladorWBFM(DemoduladorBase):
             rf_fft_chunk = bb_resample[:fs_fft] - np.mean(bb_resample[:fs_fft])
             potencia = np.abs(np.fft.fftshift(np.fft.fft(rf_fft_chunk)))**2 / fs_fft
             PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            centro = fs_fft // 2
+            PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
         # === PASO 4: DEMODULACIÓN FM (Ángulo del producto conjugado) ===
         chunk_with_last = np.insert(bb_resample, 0, self.fm_last_iq)
