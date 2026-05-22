@@ -126,6 +126,8 @@ class MainWindow(QMainWindow):
         self.q4_widget.setTitle("Métricas de Desviación FM")
         self.q4_widget.hideAxis('bottom')
         self.q4_widget.hideAxis('left')
+        self.q4_widget.setXRange(0, 1, padding=0)
+        self.q4_widget.setYRange(0, 1, padding=0)
         self.fm_text_item.setPos(0.02, 0.98)
         
         self.q2_widget.show()
@@ -729,6 +731,11 @@ class MainWindow(QMainWindow):
         self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
         self.q4_widget = pg.PlotWidget(title="2-2 (Vacío)")
 
+        #para que las metricas se queden quietitas
+        self.q4_widget.setMouseEnabled(x=False, y=False) 
+        self.q4_widget.hideButtons()                     
+        self.q4_widget.setMenuEnabled(False)
+
         # Agregamos los vacíos a sus respectivas posiciones
         self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
         self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
@@ -1000,14 +1007,39 @@ class StartupWindow(QMainWindow):
 
         layout = QVBoxLayout()
         label = QLabel("Dispositivos SDR detectados por USB:")
-        label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
+        label.setStyleSheet("font-size: 17px; font-weight: bold; margin-bottom: 10px;")
         layout.addWidget(label)
 
         self.scan_btn = QPushButton("🔄 Escanear Puertos USB")
+        self.scan_btn.setCursor(Qt.CursorShape.PointingHandCursor) # Cambia la flecha por la manito
+        self.scan_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444444; 
+                color: white; 
+                font-weight: bold; 
+                padding: 10px 15px; 
+                border-radius: 6px; 
+                border: 1px solid #5a5a5a;
+            }
+            QPushButton:hover {
+                background-color: #555555;
+                border: 1px solid #777777;
+            }
+            QPushButton:pressed {
+                background-color: #2b2b2b;
+                border: 1px solid #222222;
+            }
+        """)
         self.scan_btn.clicked.connect(self.scan_devices)
         layout.addWidget(self.scan_btn)
 
         self.device_list = QListWidget()
+        self.device_list.setStyleSheet("""
+            QListWidget { background-color: #1e1e1e; border: 1px solid #444; font-size: 14px; outline: none; }
+            QListWidget::item { padding: 15px; }
+            QListWidget::item:selected { background-color: #0077FF; color: white; }
+            QListWidget::item:hover { background-color: #444444; }
+        """)
         self.device_list.itemClicked.connect(self.launch_main_window)
         layout.addWidget(self.device_list)
 
