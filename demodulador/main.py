@@ -123,16 +123,26 @@ class MainWindow(QMainWindow):
         self.q3_widget.setXRange(0, 10) 
         self.q3_widget.setYRange(-100, 100)
 
-        self.q4_widget.setTitle("Métricas de Desviación FM")
-        self.q4_widget.hideAxis('bottom')
-        self.q4_widget.hideAxis('left')
-        self.q4_widget.setXRange(0, 1, padding=0)
-        self.q4_widget.setYRange(0, 1, padding=0)
-        self.fm_text_item.setPos(0.02, 0.98)
+        # Configurar gráfico Canal L
+        self.q4L_widget.setTitle("Canal Izquierdo (L)")
+        self.q4L_widget.hideAxis('bottom') # Ocultamos el eje X de arriba para que quede más limpio
+        self.q4L_widget.setLabel('left', 'Amplitud')
+        self.q4L_widget.setXRange(0, 10) # 10 ms (mismo tiempo que el MPX)
+        self.q4L_widget.setYRange(-1.5, 1.5)
+        
+        # Configurar gráfico Canal R
+        self.q4R_widget.setTitle("Canal Derecho (R)")
+        self.q4R_widget.setLabel('bottom', 'Tiempo [ms]')
+        self.q4R_widget.setLabel('left', 'Amplitud')
+        self.q4R_widget.setXRange(0, 10)
+        self.q4R_widget.setYRange(-1.5, 1.5)
+
+        self.fm_metrics_label.show() 
         
         self.q2_widget.show()
         self.q3_widget.show()
-        self.q4_widget.show()
+        self.q4_container.show() # Mostramos el contenedor entero
+        self.plot_layout.setRowStretch(1, 1)
 
         # Ajustamos Sample Rate Visual (Decimado)
         self.previous_sr_text = self.sr_combo.currentText()
@@ -161,13 +171,23 @@ class MainWindow(QMainWindow):
     def set_normal_mode(self):
         self.q2_widget.hide()
         self.q3_widget.hide()
-        self.q4_widget.hide()
+        self.q4_container.hide() # Ocultamos el contenedor
+
+        self.plot_layout.setRowStretch(1, 0)
+        
         self.q2_widget.setTitle("1-2 (Vacío)")
         self.q2_curve.setData([], []) 
         self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
-        self.q4_widget.setTitle("2-2 (Vacío)")
-        self.fm_text_item.setHtml("")
+        
+        # Vaciamos L y R
+        self.q4L_widget.setTitle("Canal Izquierdo (L) - Vacío")
+        self.q4R_widget.setTitle("Canal Derecho (R) - Vacío")
+        self.q4L_curve.setData([], [])
+        self.q4R_curve.setData([], [])
+
+        self.fm_metrics_label.hide()
+        self.fm_metrics_label.setText("")
         
         if self.audio_btn.isChecked():
             self.audio_btn.setChecked(False)
@@ -618,16 +638,18 @@ class MainWindow(QMainWindow):
                 if audio_time is not None:
                     self.q3_curve.setData(t_axis, audio_time)
                 
-                # Renderizar las métricas en HTML
+                # Renderizar las métricas en HTML en el panel derecho
                 if fm_metrics is not None:
                     html_text = (
-                        f"<span style='color: #FFFFFF'><b>Desviación Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Desviación Pico Mín:</b></span> <span style='color: #FF3333;'>{fm_metrics['pico_min']:+.2f} kHz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Desviación Pico RMS:</b></span> <span style='color: #FFD500;'>{fm_metrics['pico_rms']:.2f} kHz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Desviación RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Error de Sintonía (DC Offset):</b></span> <span style='color: #00FFFF;'>{fm_metrics['dc_offset']:+.2f} kHz</span>"
+                        f"<div style='line-height: 1.5;'>"
+                        f"<span style='color: #FFFFFF'><b>Desv. Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desv. Pico Mín:</b></span> <span style='color: #FF3333;'>{fm_metrics['pico_min']:+.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Desv. Pico RMS:</b></span> <span style='color: #FFD500;'>{fm_metrics['pico_rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>RMS (True):</b></span> <span style='color: #0077FF;'>{fm_metrics['rms']:.2f} kHz</span><br>"
+                        f"<span style='color: #FFFFFF'><b>DC Offset:</b></span> <span style='color: #00FFFF;'>{fm_metrics['dc_offset']:+.2f} kHz</span>"
+                        f"</div>"
                     )
-                    self.fm_text_item.setHtml(html_text)
+                    self.fm_metrics_label.setText(html_text)
     
     def _build_ui(self):
         # --- BARRA SUPERIOR  ---
@@ -722,38 +744,47 @@ class MainWindow(QMainWindow):
         self.plot_layout = QGridLayout(self.plot_container)
         self.plot_layout.setContentsMargins(0, 0, 0, 0)
         self.plot_layout.setSpacing(5) # Un pequeño margen entre los gráficos
+        self.plot_layout.setRowStretch(0, 1) # Fila superior (Fila 0)
+        self.plot_layout.setRowStretch(1, 0) # Fila inferior (Fila 1)
 
         # Agregamos el espectro original a la grilla [Fila 0, Columna 0] (1-1)
         self.plot_layout.addWidget(self.freq_plot, 0, 0)
 
+
         # Creamos los cuadrantes genericos
         self.q2_widget = pg.PlotWidget(title="1-2 (Vacío)")
         self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
-        self.q4_widget = pg.PlotWidget(title="2-2 (Vacío)")
 
-        #para que las metricas se queden quietitas
-        self.q4_widget.setMouseEnabled(x=False, y=False) 
-        self.q4_widget.hideButtons()                     
-        self.q4_widget.setMenuEnabled(False)
+        # --- Cuadrante 4 (L y R apilados) ---
+        self.q4_container = QWidget()
+        self.q4_layout = QVBoxLayout(self.q4_container)
+        self.q4_layout.setContentsMargins(0, 0, 0, 0)
+        self.q4_layout.setSpacing(5) # Margen chiquito entre L y R
 
-        # Agregamos los vacíos a sus respectivas posiciones
-        self.plot_layout.addWidget(self.q2_widget, 0, 1) # [Fila 0, Columna 1] (1-2)
-        self.plot_layout.addWidget(self.q3_widget, 1, 0) # [Fila 1, Columna 0] (2-1)
-        self.plot_layout.addWidget(self.q4_widget, 1, 1) # [Fila 1, Columna 1] (2-2)
-    
-        # --- TEXTO PARA MÉTRICAS FM ---
-  
-        self.fm_text_item = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(0, 0))
-        self.q4_widget.addItem(self.fm_text_item)
+        self.q4L_widget = pg.PlotWidget(title="Canal Izquierdo (L)")
+        self.q4R_widget = pg.PlotWidget(title="Canal Derecho (R)")
+        
+        self.q4_layout.addWidget(self.q4L_widget)
+        self.q4_layout.addWidget(self.q4R_widget)
+        # ----------------------------------------
 
-        # Dejamos la curva creada genéricamente
+        # Agregamos a la grilla principal
+        self.plot_layout.addWidget(self.q2_widget, 0, 1) # 1-2
+        self.plot_layout.addWidget(self.q3_widget, 1, 0) # 2-1
+        self.plot_layout.addWidget(self.q4_container, 1, 1) # 2-2 (contenedor)
+
+        # Dejamos las curvas creadas
         self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
         self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
+        
+        # Curvas para L y R con distintos colores (Cyan y Magenta)
+        self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
+        self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
 
-        # Los ocultamos por defecto al iniciar el programa
+        # Ocultamos por defecto
         self.q2_widget.hide()
         self.q3_widget.hide()
-        self.q4_widget.hide()
+        self.q4_container.hide()
 
         # En vez de agregar solo freq_plot, agregamos el contenedor entero al layout principal
         main_layout.addWidget(self.plot_container, stretch=4)
@@ -980,6 +1011,13 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.audio_btn)
         
         self.audio_stream = None # Guardamos la referencia para poder apagarlo después
+
+        # --- MÉTRICAS FM EN EL PANEL DERECHO ---
+        self.fm_metrics_label = QLabel("")
+        self.fm_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.fm_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 15px;")
+        self.fm_metrics_label.hide() # Lo ocultamos por defecto
+        controls_layout.addWidget(self.fm_metrics_label)
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)
