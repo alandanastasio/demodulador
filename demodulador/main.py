@@ -20,6 +20,7 @@ from hardware.rtlsdr_handler import RtlSdrHandler
 from hardware.nuand_bladerf_handler import BladeRFHandler
 # DSP (Plugins)
 from dsp.demoduladores.wbfm import DemoduladorWBFM
+from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 
 # --- ESTADO GLOBAL (Solo cosas de la UI y configuración general) ---
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        self.audio_container.hide()
         # Configuramos las pantallas
         self.q2_widget.setTitle("Espectro MPX (Audio Demodulado)")
         self.q2_widget.setLabel('bottom', 'Frecuencia [kHz]')
@@ -170,6 +172,16 @@ class MainWindow(QMainWindow):
         self.freq_input.setValue(100.0) # Se dispara on_freq_changed
         self.update_x_axis()
 
+    def set_wbfm_audio_mode(self):
+        self.set_wbfm_mode() 
+        self.audio_container.show()
+        
+        state['demod_mode'] = 'wbfm_audio'
+        
+        # Cargamos el Plugin de Audio
+        self.demodulador_actual = DemoduladorWBFMAudio()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+
     def set_normal_mode(self):
         self.q2_widget.hide()
         self.q3_widget.hide()
@@ -187,7 +199,7 @@ class MainWindow(QMainWindow):
         self.q4R_widget.setTitle("Canal Derecho (R) - Vacío")
         self.q4L_curve.setData([], [])
         self.q4R_curve.setData([], [])
-
+        self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.fm_metrics_label.setText("")
         
@@ -518,8 +530,8 @@ class MainWindow(QMainWindow):
         play_r = self.audio_r_btn.isChecked()
         
         # Cambiamos los colores (Cyan para L, Magenta para R)
-        self.audio_l_btn.setStyleSheet("background-color: #00FFFF; color: black; font-weight: bold; padding: 10px; border-radius: 4px;" if play_l else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
-        self.audio_r_btn.setStyleSheet("background-color: #FF00FF; color: black; font-weight: bold; padding: 10px; border-radius: 4px;" if play_r else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_l_btn.setStyleSheet("background-color: #00FFFF; color: black; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #00CCCC;" if play_l else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
+        self.audio_r_btn.setStyleSheet("background-color: #FF00FF; color: black; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #CC00CC;" if play_r else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
 
         state['play_audio'] = play_l or play_r
         state['play_audio_L'] = play_l
@@ -661,7 +673,7 @@ class MainWindow(QMainWindow):
                 self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
             
 
-            if state.get('demod_mode') == 'wbfm':
+            if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
                 if PSD_audio is not None:
                     self.q2_curve.setData(f_axis_audio, PSD_audio)
                 if mpx_time is not None:                              
@@ -934,6 +946,12 @@ class MainWindow(QMainWindow):
         self.demod_group.addAction(self.action_wbfm)
         self.fm_menu.addAction(self.action_wbfm)
 
+        self.action_wbfm_audio = QAction("WBFM (Audio en Vivo)", self)
+        self.action_wbfm_audio.setCheckable(True)
+        self.action_wbfm_audio.triggered.connect(self.set_wbfm_audio_mode) # Usará una función nueva
+        self.demod_group.addAction(self.action_wbfm_audio)
+        self.fm_menu.addAction(self.action_wbfm_audio)
+
         self.action_nbfm = QAction("Custom FM", self)
         self.action_nbfm.setCheckable(True)
         # self.action_nbfm.triggered.connect(...)
@@ -1035,25 +1053,30 @@ class MainWindow(QMainWindow):
         controls_layout.addLayout(form_layout)
 
         # 5. BOTONES DE AUDIO ESTÉREO
-        audio_layout = QHBoxLayout()
-        audio_layout.setContentsMargins(0, 15, 0, 0) # Le da un margen arriba para separarlo
+        self.audio_container = QWidget() # Creamos un contenedor
+        audio_layout = QHBoxLayout(self.audio_container)
+        audio_layout.setContentsMargins(0, 15, 0, 0)
         
         self.audio_l_btn = QPushButton("🔊 Canal L")
         self.audio_l_btn.setCheckable(True)
         self.audio_l_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.audio_l_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_l_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
         self.audio_l_btn.clicked.connect(self.toggle_audio)
         
         self.audio_r_btn = QPushButton("🔊 Canal R")
         self.audio_r_btn.setCheckable(True)
         self.audio_r_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.audio_r_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_r_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
         self.audio_r_btn.clicked.connect(self.toggle_audio)
         
         audio_layout.addWidget(self.audio_l_btn)
         audio_layout.addWidget(self.audio_r_btn)
         
-        controls_layout.addLayout(audio_layout)
+        # Agregamos el contenedor al layout principal de controles
+        controls_layout.addWidget(self.audio_container)
+        
+        # Ocultamos el contenedor por defecto al iniciar la app
+        self.audio_container.hide() 
         
         self.audio_stream = None
 
