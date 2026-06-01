@@ -38,7 +38,7 @@ def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
             
     return portadora_38k, fase, filtro_integral
 
-class DemoduladorWBFM(DemoduladorBase):
+class DemoduladorWBFMAudio(DemoduladorBase):
     def __init__(self):
         # --- Buffers y memoria (Reemplaza las globales de tu state) ---
         self.fm_buffer = np.array([], dtype=np.complex128)
@@ -79,10 +79,10 @@ class DemoduladorWBFM(DemoduladorBase):
         self.pll_filtro_integral = 0.0
 
     @property
-    def id(self): return "wbfm"
+    def id(self): return "wbfm_audio"
 
     @property
-    def nombre_mostrar(self): return "WBFM (Radio Comercial)"
+    def nombre_mostrar(self): return "WBFM (Audio en Vivo)"
 
     def configurar(self, sample_rate: float, fft_size: int):
         self.sample_rate = sample_rate
