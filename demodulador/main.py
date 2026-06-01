@@ -36,7 +36,7 @@ state = {
 
 class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
-    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object, object)
+    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object, object, object,object)
 
 emitter = SignalEmitter()
 
@@ -100,11 +100,13 @@ class MainWindow(QMainWindow):
                 emitter.data_updated.emit(
                     resultados['psd_rf'],
                     resultados['rf_chunk'],
-                    resultados['psd_mpx'],
-                    resultados['f_axis_mpx'],
-                    resultados['audio_time'],
-                    resultados['t_axis_audio'],
-                    resultados['metricas']
+                    resultados.get('psd_mpx'),
+                    resultados.get('f_axis_mpx'),
+                    resultados.get('audio_time_L'), 
+                    resultados.get('audio_time_R'), 
+                    resultados.get('t_axis_audio'),
+                    resultados.get('metricas'),
+                    resultados.get('mpx_time')
                 )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
@@ -125,7 +127,7 @@ class MainWindow(QMainWindow):
 
         # Configurar gráfico Canal L
         self.q4L_widget.setTitle("Canal Izquierdo (L)")
-        self.q4L_widget.hideAxis('bottom') # Ocultamos el eje X de arriba para que quede más limpio
+        ##self.q4L_widget.hideAxis('bottom') # Ocultamos el eje X de arriba para que quede más limpio
         self.q4L_widget.setLabel('left', 'Amplitud')
         self.q4L_widget.setXRange(0, 10) # 10 ms (mismo tiempo que el MPX)
         self.q4L_widget.setYRange(-1.5, 1.5)
@@ -190,8 +192,10 @@ class MainWindow(QMainWindow):
         self.fm_metrics_label.setText("")
         
         if self.audio_btn.isChecked():
-            self.audio_btn.setChecked(False)
-            self.toggle_audio()
+            if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
+                self.audio_l_btn.setChecked(False)
+                self.audio_r_btn.setChecked(False)
+                self.toggle_audio()
         
         self.sr_combo.blockSignals(True)
         idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
@@ -485,7 +489,7 @@ class MainWindow(QMainWindow):
         PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
 
         # Enviar los datos al gráfico
-        emitter.data_updated.emit(PSD, chunk, None, None, None, None, None)
+        emitter.data_updated.emit(PSD, chunk, None, None, None, None, None, None, None)
     
     def stop_playback(self):
         self.playback_timer.stop()
@@ -510,46 +514,71 @@ class MainWindow(QMainWindow):
         self.sdr.pyhackrf_start_rx()
 
     def toggle_audio(self):
-        if self.audio_btn.isChecked():
-            self.audio_btn.setText("🔇 Detener Audio")
-            self.audio_btn.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
-            state['play_audio'] = True
-            
-            # Limpiamos buffers viejos por si había quedado audio colgado de antes
-            state['audio_buffer'] = np.array([], dtype=np.float32)
+        play_l = self.audio_l_btn.isChecked()
+        play_r = self.audio_r_btn.isChecked()
+        
+        # Cambiamos los colores (Cyan para L, Magenta para R)
+        self.audio_l_btn.setStyleSheet("background-color: #00FFFF; color: black; font-weight: bold; padding: 10px; border-radius: 4px;" if play_l else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_r_btn.setStyleSheet("background-color: #FF00FF; color: black; font-weight: bold; padding: 10px; border-radius: 4px;" if play_r else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+
+        state['play_audio'] = play_l or play_r
+        state['play_audio_L'] = play_l
+        state['play_audio_R'] = play_r
+
+        # Si hay alguno encendido y el stream no está corriendo, lo iniciamos
+        if state['play_audio'] and (self.audio_stream is None or not self.audio_stream.active):
+            # Limpiamos buffers (Ahora es una matriz vacía de 2 columnas)
+            state['audio_buffer'] = np.zeros((0, 2), dtype=np.float32)
             while not state['audio_queue'].empty():
                 state['audio_queue'].get()
 
-            # Callback exigido por sounddevice para escupir audio al hardware
             def audio_callback(outdata, frames, time, status):
                 try:
-                    # Si nos faltan datos, sacamos del Queue de 1 segundo
                     while len(state['audio_buffer']) < frames:
-                        state['audio_buffer'] = np.append(state['audio_buffer'], state['audio_queue'].get_nowait())
+                        new_data = state['audio_queue'].get_nowait()
+                        # Si recibimos mono por accidente, lo duplicamos a estéreo
+                        if new_data.ndim == 1:
+                            new_data = np.column_stack((new_data, new_data))
+                        # Apilamos las filas
+                        state['audio_buffer'] = np.vstack((state['audio_buffer'], new_data))
                 except queue.Empty:
                     pass
                 
-                # Llenamos el requerimiento de la placa de sonido
                 if len(state['audio_buffer']) >= frames:
-                    outdata[:, 0] = state['audio_buffer'][:frames]
+                    chunk = state['audio_buffer'][:frames].copy()
                     state['audio_buffer'] = state['audio_buffer'][frames:]
+                    
+                    # --- ASIGNACIÓN DIRECTA Y EXPLÍCITA AL HARDWARE ---
+                    if state.get('play_audio_L', False):
+                        outdata[:, 0] = chunk[:, 0] # Escribir audio al parlante L
+                    else:
+                        outdata[:, 0] = 0.0         # Forzar silencio en L
+                        
+                    if state.get('play_audio_R', False):
+                        outdata[:, 1] = chunk[:, 1] # Escribir audio al parlante R
+                    else:
+                        outdata[:, 1] = 0.0         # Forzar silencio en R
+                        
                 else:
-                    outdata[:, 0] = np.zeros(frames) # Silencio si hay micro-cortes
-                    state['audio_buffer'] = np.array([], dtype=np.float32)
+                    outdata.fill(0.0)
+                    state['audio_buffer'] = np.zeros((0, 2), dtype=np.float32)
 
-            # Iniciamos el stream mono a 48 kHz
-            self.audio_stream = sd.OutputStream(samplerate=48000, channels=1, callback=audio_callback)
+            # Iniciamos el stream (channels=2 para que el OS sepa que es estéreo)
+            self.audio_stream = sd.OutputStream(
+                samplerate=48000, 
+                channels=2, 
+                dtype='float32',
+                callback=audio_callback
+            )
             self.audio_stream.start()
-        else:
-            # Apagamos todo
-            self.audio_btn.setText("🔊 Escuchar Audio")
-            self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
-            state['play_audio'] = False
-            if self.audio_stream:
-                self.audio_stream.stop()
-                self.audio_stream.close()
+            
+        # Si apagamos ambos botones y el stream sigue corriendo, lo detenemos
+        elif not state['play_audio'] and self.audio_stream is not None:
+            self.audio_stream.stop()
+            self.audio_stream.close()
+            self.audio_stream = None
 
-    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_time=None, t_axis=None, fm_metrics=None):
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
         if self.is_paused:
             return
         
@@ -635,8 +664,11 @@ class MainWindow(QMainWindow):
             if state.get('demod_mode') == 'wbfm':
                 if PSD_audio is not None:
                     self.q2_curve.setData(f_axis_audio, PSD_audio)
-                if audio_time is not None:
-                    self.q3_curve.setData(t_axis, audio_time)
+                if mpx_time is not None:                              
+                    self.q3_curve.setData(t_axis, mpx_time)
+                if audio_L is not None and audio_R is not None:
+                    self.q4L_curve.setData(t_axis, audio_L)
+                    self.q4R_curve.setData(t_axis, audio_R)
                 
                 # Renderizar las métricas en HTML en el panel derecho
                 if fm_metrics is not None:
@@ -1002,15 +1034,28 @@ class MainWindow(QMainWindow):
 
         controls_layout.addLayout(form_layout)
 
-        # 5. BOTÓN DE AUDIO
-        self.audio_btn = QPushButton("🔊 Escuchar Audio")
-        self.audio_btn.setCheckable(True)
-        self.audio_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.audio_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; margin-top: 15px;")
-        self.audio_btn.clicked.connect(self.toggle_audio)
-        controls_layout.addWidget(self.audio_btn)
+        # 5. BOTONES DE AUDIO ESTÉREO
+        audio_layout = QHBoxLayout()
+        audio_layout.setContentsMargins(0, 15, 0, 0) # Le da un margen arriba para separarlo
         
-        self.audio_stream = None # Guardamos la referencia para poder apagarlo después
+        self.audio_l_btn = QPushButton("🔊 Canal L")
+        self.audio_l_btn.setCheckable(True)
+        self.audio_l_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.audio_l_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_l_btn.clicked.connect(self.toggle_audio)
+        
+        self.audio_r_btn = QPushButton("🔊 Canal R")
+        self.audio_r_btn.setCheckable(True)
+        self.audio_r_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.audio_r_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.audio_r_btn.clicked.connect(self.toggle_audio)
+        
+        audio_layout.addWidget(self.audio_l_btn)
+        audio_layout.addWidget(self.audio_r_btn)
+        
+        controls_layout.addLayout(audio_layout)
+        
+        self.audio_stream = None
 
         # --- MÉTRICAS FM EN EL PANEL DERECHO ---
         self.fm_metrics_label = QLabel("")

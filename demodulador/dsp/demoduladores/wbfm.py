@@ -1,6 +1,42 @@
 import numpy as np
 from scipy.signal import butter, lfilter, resample_poly, lfilter_zi, firwin
 from .base import DemoduladorBase
+from numba import jit
+
+
+@jit(nopython=True)
+def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
+    N = len(piloto)
+    portadora_38k = np.zeros(N)
+    
+    f_center = 19000.0
+    w_center = 2.0 * np.pi * f_center / fs
+    fase = fase_inicial
+    
+    alpha = 0.05
+    beta = 0.001
+    filtro_integral = integral_inicial
+    
+    for i in range(N):
+        # 1. Detector de fase
+        error = piloto[i] * -np.sin(fase)
+        
+        # 2. Filtro de lazo PI
+        filtro_integral += beta * error
+        ajuste_fase = alpha * error + filtro_integral
+        
+        # 3. Generar 38 kHz (doble de la fase)
+        # Usamos seno porque el filtro de 19kHz desplaza la fase 90 grados
+        portadora_38k[i] = np.sin(2.0 * fase)
+        
+        # 4. Actualizar NCO
+        fase += w_center + ajuste_fase
+        if fase > 2.0 * np.pi:
+            fase -= 2.0 * np.pi
+        elif fase < 0.0:
+            fase += 2.0 * np.pi
+            
+    return portadora_38k, fase, filtro_integral
 
 class DemoduladorWBFM(DemoduladorBase):
     def __init__(self):
@@ -27,6 +63,21 @@ class DemoduladorWBFM(DemoduladorBase):
         self.sample_rate = 10e6
         self.fft_size = 4096
 
+        # Filtros y Estados para FM Estéreo ---
+        self.stereo_lpr_kernel = None # LPF para L+R (15 kHz)
+        self.stereo_pilot_kernel = None # BPF para Piloto (19 kHz)
+        self.stereo_lmr_kernel = None # BPF para L-R modulado (23-53 kHz)
+        self.stereo_audio_lpf_kernel = None # LPF para L-R demodulado (15 kHz)
+        
+        self.lpr_zi = None
+        self.pilot_zi = None
+        self.lmr_zi = None
+        self.audio_lpf_zi = None
+        
+        # Variables de estado para el PLL de 19kHz -> 38kHz
+        self.pll_fase = 0.0
+        self.pll_filtro_integral = 0.0
+
     @property
     def id(self): return "wbfm"
 
@@ -48,8 +99,33 @@ class DemoduladorWBFM(DemoduladorBase):
         # Limpiamos los estados de memoria
         self.lpf_zi = None
         self.mpx_zi = None
-        self.deemph_zi = None
+        self.deemph_l_zi = None
+        self.deemph_r_zi = None
         self.fm_buffer = np.array([], dtype=np.complex128)
+
+        # ---  Diseñar Filtros Estéreo ---
+        # freq_nyquist = nueva_fs / 2.0 (usaremos fs = nueva_fs que es ~300k o 240k)
+        freq_nyq = nueva_fs / 2.0
+        
+        # 1. Filtro L+R (Pasa Bajos 15 kHz) - 101 taps
+        self.stereo_lpr_kernel = firwin(101, 15000 / freq_nyq)
+        
+        # 2. Filtro Tono Piloto (Pasa Banda 18.5k - 19.5k) - 201 taps (muy selectivo)
+        self.stereo_pilot_kernel = firwin(201, [18500 / freq_nyq, 19500 / freq_nyq], pass_zero=False)
+        
+        # 3. Filtro L-R Modulado (Pasa Banda 23k - 53k) - 101 taps
+        self.stereo_lmr_kernel = firwin(101, [23000 / freq_nyq, 53000 / freq_nyq], pass_zero=False)
+        
+        # 4. Filtro para limpiar el L-R ya bajado a banda base (Pasa Bajos 15 kHz)
+        self.stereo_audio_lpf_kernel = firwin(101, 15000 / freq_nyq)
+        
+        # Limpiar estados
+        self.lpr_zi = None
+        self.pilot_zi = None
+        self.lmr_zi = None
+        self.audio_lpf_zi = None
+        self.pll_fase = 0.0
+        self.pll_filtro_integral = 0.0
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
         self.fm_buffer = np.append(self.fm_buffer, muestras_iq)
@@ -99,7 +175,43 @@ class DemoduladorWBFM(DemoduladorBase):
             self.mpx_zi = lfilter_zi(self.mpx_lpf_kernel, [1.0]) * demod_khz_raw[0]
         demod_khz_clean, self.mpx_zi = lfilter(self.mpx_lpf_kernel, [1.0], demod_khz_raw, zi=self.mpx_zi)
         
-        # --- ESPECTRO MPX ---
+        # === PASO 5: EXTRACCIÓN ESTÉREO ===
+        
+        # A. Extraer L+R (Mono)
+        if self.lpr_zi is None:
+            self.lpr_zi = lfilter_zi(self.stereo_lpr_kernel, [1.0]) * demod_khz_clean[0]
+        senal_L_plus_R, self.lpr_zi = lfilter(self.stereo_lpr_kernel, [1.0], demod_khz_clean, zi=self.lpr_zi)
+        
+        # B. Extraer Piloto 19 kHz
+        if self.pilot_zi is None:
+            self.pilot_zi = lfilter_zi(self.stereo_pilot_kernel, [1.0]) * demod_khz_clean[0]
+        piloto_19k, self.pilot_zi = lfilter(self.stereo_pilot_kernel, [1.0], demod_khz_clean, zi=self.pilot_zi)
+        
+        # C. Extraer Banda L-R Modulada (23-53 kHz)
+        if self.lmr_zi is None:
+            self.lmr_zi = lfilter_zi(self.stereo_lmr_kernel, [1.0]) * demod_khz_clean[0]
+        lmr_modulado, self.lmr_zi = lfilter(self.stereo_lmr_kernel, [1.0], demod_khz_clean, zi=self.lmr_zi)
+        
+        # D. Regenerar Portadora 38 kHz con PLL
+        portadora_38k, self.pll_fase, self.pll_filtro_integral = correr_pll_38k(
+            piloto_19k, nueva_fs, self.pll_fase, self.pll_filtro_integral
+        )
+        
+        # E. Demodular L-R (Multiplicador Síncrono)
+        # Se multiplica por 2.0 para recuperar la amplitud perdida en el DSB
+        lmr_mezclado = lmr_modulado * portadora_38k * 2.0
+        
+        # F. Limpiar el L-R demodulado (Pasa Bajos 15 kHz)
+        if self.audio_lpf_zi is None:
+            self.audio_lpf_zi = lfilter_zi(self.stereo_audio_lpf_kernel, [1.0]) * lmr_mezclado[0]
+        senal_L_minus_R, self.audio_lpf_zi = lfilter(self.stereo_audio_lpf_kernel, [1.0], lmr_mezclado, zi=self.audio_lpf_zi)
+        
+        # G. MATRIZ ESTÉREO
+        canal_L = (senal_L_plus_R + senal_L_minus_R) / 2.0
+        canal_R = (senal_L_plus_R - senal_L_minus_R) / 2.0
+        
+        # --- ESPECTRO MPX (Se usa demod_khz_clean original para ver todo el panorama) ---
+        fs_fft = self.fft_size
         PSD_audio, f_axis_audio = None, None
         if len(demod_khz_clean) >= fs_fft:
             potencia_audio = np.abs(np.fft.fft(demod_khz_clean[:fs_fft]))**2 / fs_fft
@@ -133,31 +245,48 @@ class DemoduladorWBFM(DemoduladorBase):
             'pico_rms': self.avg_pico_rms,
             'dc_offset': self.avg_dc_offset
         }
+
+       # --- DE-ÉNFASIS PARA CANALES L Y R ---
+        L_48k = resample_poly(canal_L, 4, 25)
+        R_48k = resample_poly(canal_R, 4, 25)
         
-        # --- PROCESAMIENTO FINAL DE AUDIO (DE-ÉNFASIS Y NORMALIZACIÓN) ---
-        audio_48k = resample_poly(demod_khz_clean, 4, 25)
-        b_aud, a_aud = butter(1, 2122 / (48000/2), btype='low')
-        if self.deemph_zi is None:
-            self.deemph_zi = lfilter_zi(b_aud, a_aud) * audio_48k[0]
-        audio_filtrado, self.deemph_zi = lfilter(b_aud, a_aud, audio_48k, zi=self.deemph_zi)
+        # Filtro de de-énfasis de 50µs (Constante de tiempo para Argentina/Europa)
+        b_aud, a_aud = butter(1, 3183 / (48000/2), btype='low')
         
-        audio_filtrado = audio_filtrado - np.mean(audio_filtrado)
-        max_val = np.max(np.abs(audio_filtrado))
-        audio_norm = np.float32(audio_filtrado / max(max_val, 15.0)) if max_val > 0 else np.float32(audio_filtrado)
+        if self.deemph_l_zi is None:
+            self.deemph_l_zi = lfilter_zi(b_aud, a_aud) * L_48k[0]
+            self.deemph_r_zi = lfilter_zi(b_aud, a_aud) * R_48k[0]
+            
+        L_filtrado, self.deemph_l_zi = lfilter(b_aud, a_aud, L_48k, zi=self.deemph_l_zi)
+        R_filtrado, self.deemph_r_zi = lfilter(b_aud, a_aud, R_48k, zi=self.deemph_r_zi)
         
-        # Generación del snippet de tiempo para el osciloscopio
+        L_filtrado = L_filtrado - np.mean(L_filtrado)
+        R_filtrado = R_filtrado - np.mean(R_filtrado)
+        
+        # Buscamos el pico máximo entre los DOS canales para normalizar balanceado
+        max_val = max(np.max(np.abs(L_filtrado)), np.max(np.abs(R_filtrado)), 15.0)
+        
+        audio_L_norm = np.float32(L_filtrado / max_val) if max_val > 0 else np.float32(L_filtrado)
+        audio_R_norm = np.float32(R_filtrado / max_val) if max_val > 0 else np.float32(R_filtrado)
+        
+        # Juntamos L y R en un array de 2D (Columnas)
+        audio_stereo = np.column_stack((audio_L_norm, audio_R_norm))
+        
+        # --- PREPARAR SALIDA PARA GRÁFICOS (Canales estéreo) ---
         muestras_10ms = int(nueva_fs * 0.01)
-        audio_time_snippet = demod_khz_clean[:muestras_10ms]
-        t_axis_audio = np.linspace(0, 10, len(audio_time_snippet))
+        # Usamos canal_L y canal_R puros (sin de-énfasis) para ver el nivel de baseband
+        t_axis_audio = np.linspace(0, 10, muestras_10ms)
         
-        # Empaquetamos todo y lo escupimos
+        # Empaquetamos todo
         return {
             'psd_rf': PSD,
             'rf_chunk': rf_fft_chunk,
             'psd_mpx': PSD_audio,
             'f_axis_mpx': f_axis_audio,
-            'audio_time': audio_time_snippet,
+            'audio_time_L': canal_L[:muestras_10ms], 
+            'audio_time_R': canal_R[:muestras_10ms], 
             't_axis_audio': t_axis_audio,
-            'audio_out': audio_norm,
+            'mpx_time': demod_khz_clean[:muestras_10ms],
+            'audio_out': audio_stereo, # Sigue saliendo solo el L por los parlantes por ahora
             'metricas': fm_metrics
         }
