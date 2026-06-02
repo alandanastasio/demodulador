@@ -72,6 +72,9 @@ class MainWindow(QMainWindow):
 
         # Conectamos el actualizador de gráficos
         emitter.data_updated.connect(self.update_plot)
+
+        # --- Creamos el eje X matemático en memoria ANTES de encender el SDR ---
+        self.update_x_axis()
         
         # 3. ENCENDIDO DE LA RADIO
         self.radio.configurar(state['sample_rate'], state['center_freq'])
@@ -332,43 +335,78 @@ class MainWindow(QMainWindow):
     def select_marker(self, key):
         self.current_moving_marker = key
         if key is not None:
-            # Si el marker no estaba activo, lo prendemos y lo mostramos
             if not self.markers_info[key]['active']:
                 self.markers_info[key]['active'] = True
-                self.freq_plot.addItem(self.markers_info[key]['item'])
-                self.marker_text_box.show()
+                plot_target = self.markers_info[key]['current_plot']
+                if plot_target == 'rf':
+                    self.freq_plot.addItem(self.markers_info[key]['item'])
+                    self.marker_text_box.show()
+                else:
+                    self.q2_widget.addItem(self.markers_info[key]['item'])
+                    self.mpx_marker_text_box.show()
 
     def clear_markers(self):
         for key, data in self.markers_info.items():
             if data['active']:
-                self.freq_plot.removeItem(data['item'])
+                if data['current_plot'] == 'rf':
+                    self.freq_plot.removeItem(data['item'])
+                else:
+                    self.q2_widget.removeItem(data['item'])
             data['active'] = False
         
         self.marker_text_box.hide()
+        self.mpx_marker_text_box.hide()
         self.action_none.setChecked(True)
         self.current_moving_marker = None
 
     def delete_marker(self, key):
-        # 1. Si el marker estaba activo, lo sacamos de la pantalla y lo marcamos apagado
         if self.markers_info[key]['active']:
-            self.freq_plot.removeItem(self.markers_info[key]['item'])
+            if self.markers_info[key]['current_plot'] == 'rf':
+                self.freq_plot.removeItem(self.markers_info[key]['item'])
+            else:
+                self.q2_widget.removeItem(self.markers_info[key]['item'])
             self.markers_info[key]['active'] = False
         
-        # 2. Si justo estábamos moviendo el marker que acabamos de borrar, reseteamos la selección
         if self.current_moving_marker == key:
             self.action_none.setChecked(True)
             self.current_moving_marker = None
         
-        # 3. Si ya no queda NINGÚN marker activo en pantalla, ocultamos el cuadro de texto negro
-        if not any(m['active'] for m in self.markers_info.values()):
+        if not any(m['active'] and m['current_plot'] == 'rf' for m in self.markers_info.values()):
             self.marker_text_box.hide()
+        if not any(m['active'] and m['current_plot'] == 'mpx' for m in self.markers_info.values()):
+            self.mpx_marker_text_box.hide()
 
     def on_mouse_clicked(self, event):
-        # Mueve únicamente el marker que está seleccionado en el menú
         if event.button() == Qt.MouseButton.LeftButton and self.current_moving_marker is not None:
             if self.freq_plot.sceneBoundingRect().contains(event.scenePos()):
                 mouse_point = self.freq_plot.getViewBox().mapSceneToView(event.scenePos())
-                self.markers_info[self.current_moving_marker]['freq'] = mouse_point.x()
+                marker = self.markers_info[self.current_moving_marker]
+                marker['freq'] = mouse_point.x()
+                
+                # Si el marker estaba en MPX, lo mudamos a RF
+                if marker['current_plot'] != 'rf':
+                    self.q2_widget.removeItem(marker['item'])
+                    self.freq_plot.addItem(marker['item'])
+                    marker['current_plot'] = 'rf'
+                    self.marker_text_box.show()
+                    if not any(m['active'] and m['current_plot'] == 'mpx' for m in self.markers_info.values()):
+                        self.mpx_marker_text_box.hide()
+
+    def on_mpx_mouse_clicked(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.current_moving_marker is not None:
+            if self.q2_widget.sceneBoundingRect().contains(event.scenePos()):
+                mouse_point = self.q2_widget.getViewBox().mapSceneToView(event.scenePos())
+                marker = self.markers_info[self.current_moving_marker]
+                marker['freq'] = mouse_point.x()
+                
+                # Si el marker estaba en RF, lo mudamos a MPX
+                if marker['current_plot'] != 'mpx':
+                    self.freq_plot.removeItem(marker['item'])
+                    self.q2_widget.addItem(marker['item'])
+                    marker['current_plot'] = 'mpx'
+                    self.mpx_marker_text_box.show()
+                    if not any(m['active'] and m['current_plot'] == 'rf' for m in self.markers_info.values()):
+                        self.marker_text_box.hide()
 
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
@@ -629,52 +667,81 @@ class MainWindow(QMainWindow):
 
             # Graficamos la señal procesada
             self.freq_plot_curve.setData(self.f_axis, display_psd)
+
+            # --- Cacheamos los datos de MPX para que los markers no parpadeen ---
+            if PSD_audio is not None:
+                self.last_f_axis_audio = f_axis_audio
+                self.last_PSD_audio = PSD_audio
             
             # --- LÓGICA DE MARKERS Y DELTAS ---
             any_active = any(m['active'] for m in self.markers_info.values())
             if any_active:
-                texto_global = ""
-                current_frame_data = {} # Para guardar X e Y y poder restar
+                
+                # Mini-función para dibujar texto según el gráfico
+                def procesar_markers_grafico(plot_name, axis_x, axis_y, text_box_item, plot_widget):
+                    texto_global = ""
+                    current_frame_data = {} 
+                    
+                    if axis_x is None or axis_y is None or len(axis_x) == 0:
+                        text_box_item.hide()
+                        return
 
-                # 1. Posicionar los gráficos de los que están activos
-                for key, data in self.markers_info.items():
-                    if data['active']:
-                        idx = (np.abs(self.f_axis - data['freq'])).argmin()
-                        x_val = self.f_axis[idx]
-                        y_val = display_psd[idx]
-                        data['item'].setData([x_val], [y_val])
-                        current_frame_data[key] = {'x': x_val, 'y': y_val, 'color': data['color']}
+                    for key, data in self.markers_info.items():
+                        if data['active'] and data['current_plot'] == plot_name:
+                            idx = (np.abs(axis_x - data['freq'])).argmin()
+                            x_val = axis_x[idx]
+                            y_val = axis_y[idx]
+                            data['item'].setData([x_val], [y_val])
+                            current_frame_data[key] = {'x': x_val, 'y': y_val, 'color': data['color']}
 
-                # 2. Armar el texto para M1 y Delta 1
-                if 'M1' in current_frame_data:
-                    m1 = current_frame_data['M1']
-                    texto_global += f"<span style='color:{m1['color']}'><b>M1:</b> {m1['x']:.3f} MHz | {m1['y']:.2f} dB</span><br>"
-                if 'D1' in current_frame_data:
-                    d1 = current_frame_data['D1']
-                    if 'M1' in current_frame_data: # Si M1 existe, Delta 1 es relativo a M1
-                        dx = d1['x'] - m1['x']
-                        dy = d1['y'] - m1['y']
-                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
-                    else: # Si prendieron D1 pero M1 está apagado, muestra valores absolutos
-                        texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {d1['x']:.3f} MHz | {d1['y']:.2f} dB (Falta M1)</span><br>"
+                    if not current_frame_data:
+                        text_box_item.hide()
+                        return
 
-                # 3. Armar el texto para M2 y Delta 2
-                if 'M2' in current_frame_data:
-                    m2 = current_frame_data['M2']
-                    texto_global += f"<span style='color:{m2['color']}'><b>M2:</b> {m2['x']:.3f} MHz | {m2['y']:.2f} dB</span><br>"
-                if 'D2' in current_frame_data:
-                    d2 = current_frame_data['D2']
+                    unit = "MHz" if plot_name == 'rf' else "kHz"
+
+                    if 'M1' in current_frame_data:
+                        m1 = current_frame_data['M1']
+                        texto_global += f"<span style='color:{m1['color']}'><b>M1:</b> {m1['x']:.3f} {unit} | {m1['y']:.2f} dB</span><br>"
+                    if 'D1' in current_frame_data:
+                        d1 = current_frame_data['D1']
+                        if 'M1' in current_frame_data:
+                            dx = d1['x'] - m1['x']
+                            dy = d1['y'] - m1['y']
+                            texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {dx:+.3f} {unit} | {dy:+.2f} dB</span><br>"
+                        else:
+                            texto_global += f"<span style='color:{d1['color']}'><b>Δ1:</b> {d1['x']:.3f} {unit} | {d1['y']:.2f} dB (Falta M1)</span><br>"
+
                     if 'M2' in current_frame_data:
-                        dx = d2['x'] - m2['x']
-                        dy = d2['y'] - m2['y']
-                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {dx:+.3f} MHz | {dy:+.2f} dB</span><br>"
-                    else:
-                        texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {d2['x']:.3f} MHz | {d2['y']:.2f} dB (Falta M2)</span><br>"
+                        m2 = current_frame_data['M2']
+                        texto_global += f"<span style='color:{m2['color']}'><b>M2:</b> {m2['x']:.3f} {unit} | {m2['y']:.2f} dB</span><br>"
+                    if 'D2' in current_frame_data:
+                        d2 = current_frame_data['D2']
+                        if 'M2' in current_frame_data:
+                            dx = d2['x'] - m2['x']
+                            dy = d2['y'] - m2['y']
+                            texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {dx:+.3f} {unit} | {dy:+.2f} dB</span><br>"
+                        else:
+                            texto_global += f"<span style='color:{d2['color']}'><b>Δ2:</b> {d2['x']:.3f} {unit} | {d2['y']:.2f} dB (Falta M2)</span><br>"
 
-                # 4. Actualizar el cuadro
-                self.marker_text_box.setHtml(texto_global)
-                view_rect = self.freq_plot.viewRange()
-                self.marker_text_box.setPos(view_rect[0][1], view_rect[1][1])
+                    text_box_item.setHtml(texto_global)
+                    text_box_item.show()
+                    view_rect = plot_widget.viewRange()
+                    text_box_item.setPos(view_rect[0][1], view_rect[1][1])
+
+                # Procesar para RF
+                procesar_markers_grafico('rf', self.f_axis, display_psd, self.marker_text_box, self.freq_plot)
+                
+                # Procesar para MPX (solo si estamos en modo demodulación)
+                if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
+                    # Recuperamos los últimos datos válidos
+                    f_aud_mem = getattr(self, 'last_f_axis_audio', None)
+                    psd_aud_mem = getattr(self, 'last_PSD_audio', None)
+                    procesar_markers_grafico('mpx', f_aud_mem, psd_aud_mem, self.mpx_marker_text_box, self.q2_widget)
+            else:
+                self.marker_text_box.hide()
+                if hasattr(self, 'mpx_marker_text_box'):
+                    self.mpx_marker_text_box.hide()
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -800,37 +867,7 @@ class MainWindow(QMainWindow):
         self.freq_plot.setMouseEnabled(x=True, y=True)
         self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
 
-        # --- SISTEMA DE MARKERS ---
-        # Diccionario con la configuración y estado de cada marker/delta
-        self.markers_info = {
-            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'color': '#00B000', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00B000'), symbol='d')},
-            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#00B000", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#007E00"), symbol='t')}, # 't' es triángulo
-            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0077FF"), symbol='d')},
-            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0054C2"), symbol='t')}
-        }
-        self.current_moving_marker = None # Cuál se mueve al hacer clic
-        
-        self.marker_text_box = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(1, 0))
-        self.freq_plot.addItem(self.marker_text_box)
-        self.marker_text_box.hide()
-
-        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
-        self.freq_plot.setYRange(-70, 10)
-        self.update_x_axis()
-
-        # CONTENEDOR GRILLA (2x2)
-        self.plot_container = QWidget()
-        self.plot_layout = QGridLayout(self.plot_container)
-        self.plot_layout.setContentsMargins(0, 0, 0, 0)
-        self.plot_layout.setSpacing(5) # Un pequeño margen entre los gráficos
-        self.plot_layout.setRowStretch(0, 1) # Fila superior (Fila 0)
-        self.plot_layout.setRowStretch(1, 0) # Fila inferior (Fila 1)
-
-        # Agregamos el espectro original a la grilla [Fila 0, Columna 0] (1-1)
-        self.plot_layout.addWidget(self.freq_plot, 0, 0)
-
-
-        # Creamos los cuadrantes genericos
+        # --- CREACIÓN DE CUADRANTES  ---
         self.q2_widget = pg.PlotWidget(title="1-2 (Vacío)")
         self.q3_widget = pg.PlotWidget(title="2-1 (Vacío)")
 
@@ -838,25 +875,55 @@ class MainWindow(QMainWindow):
         self.q4_container = QWidget()
         self.q4_layout = QVBoxLayout(self.q4_container)
         self.q4_layout.setContentsMargins(0, 0, 0, 0)
-        self.q4_layout.setSpacing(5) # Margen chiquito entre L y R
+        self.q4_layout.setSpacing(2)
 
         self.q4L_widget = pg.PlotWidget(title="Canal Izquierdo (L)")
         self.q4R_widget = pg.PlotWidget(title="Canal Derecho (R)")
-        
+        self.q4R_widget.setXLink(self.q4L_widget)
+        self.q4R_widget.setYLink(self.q4L_widget)
         self.q4_layout.addWidget(self.q4L_widget)
         self.q4_layout.addWidget(self.q4R_widget)
-        # ----------------------------------------
+
+        # --- SISTEMA DE MARKERS ---
+        self.markers_info = {
+            'M1': {'active': False, 'freq': state['center_freq']/1e6, 'current_plot': 'rf', 'color': '#00B000', 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush('#00B000'), symbol='d')},
+            'D1': {'active': False, 'freq': state['center_freq']/1e6, 'current_plot': 'rf', 'color': "#00B000", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#007E00"), symbol='t')}, 
+            'M2': {'active': False, 'freq': state['center_freq']/1e6, 'current_plot': 'rf', 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0077FF"), symbol='d')},
+            'D2': {'active': False, 'freq': state['center_freq']/1e6, 'current_plot': 'rf', 'color': "#0077FF", 'item': pg.ScatterPlotItem(size=15, pen=pg.mkPen(None), brush=pg.mkBrush("#0054C2"), symbol='t')}
+        }
+        self.current_moving_marker = None 
+        
+        # Caja de texto para RF (Gráfico 1)
+        self.marker_text_box = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(1, 0))
+        self.freq_plot.addItem(self.marker_text_box)
+        self.marker_text_box.hide()
+
+        # Caja de texto para MPX (Gráfico 2)
+        self.mpx_marker_text_box = pg.TextItem(text="", color='#FFFFFF', fill=pg.mkBrush(0, 0, 0, 200), anchor=(1, 0))
+        self.q2_widget.addItem(self.mpx_marker_text_box)
+        self.mpx_marker_text_box.hide()
+
+        # Conectar los clics de ambos gráficos
+        self.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
+        self.q2_widget.scene().sigMouseClicked.connect(self.on_mpx_mouse_clicked)
+
+        # --- CONTENEDOR GRILLA (2x2) ---
+        self.plot_container = QWidget()
+        self.plot_layout = QGridLayout(self.plot_container)
+        self.plot_layout.setContentsMargins(0, 0, 0, 0)
+        self.plot_layout.setSpacing(5) 
+        self.plot_layout.setRowStretch(0, 1) 
+        self.plot_layout.setRowStretch(1, 0) 
 
         # Agregamos a la grilla principal
-        self.plot_layout.addWidget(self.q2_widget, 0, 1) # 1-2
-        self.plot_layout.addWidget(self.q3_widget, 1, 0) # 2-1
-        self.plot_layout.addWidget(self.q4_container, 1, 1) # 2-2 (contenedor)
+        self.plot_layout.addWidget(self.freq_plot, 0, 0)
+        self.plot_layout.addWidget(self.q2_widget, 0, 1) 
+        self.plot_layout.addWidget(self.q3_widget, 1, 0) 
+        self.plot_layout.addWidget(self.q4_container, 1, 1) 
 
         # Dejamos las curvas creadas
         self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
         self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
-        
-        # Curvas para L y R con distintos colores (Cyan y Magenta)
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
 
@@ -865,7 +932,7 @@ class MainWindow(QMainWindow):
         self.q3_widget.hide()
         self.q4_container.hide()
 
-        # En vez de agregar solo freq_plot, agregamos el contenedor entero al layout principal
+        # Agregamos el contenedor entero al layout principal
         main_layout.addWidget(self.plot_container, stretch=4)
 
         # --- MENÚ DE MARKERS ---
