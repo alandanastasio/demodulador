@@ -141,7 +141,9 @@ class MainWindow(QMainWindow):
         self.q4R_widget.setXRange(0, 10)
         self.q4R_widget.setYRange(-1.5, 1.5)
 
+        # Mostrar las metricas
         self.fm_metrics_label.show() 
+        self.stereo_metrics_label.show()
         
         self.q2_widget.show()
         self.q3_widget.show()
@@ -194,7 +196,7 @@ class MainWindow(QMainWindow):
         self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
         
-        # Vaciamos L y R
+        # Vaciamos L y R y las metricas
         self.q4L_widget.setTitle("Canal Izquierdo (L) - Vacío")
         self.q4R_widget.setTitle("Canal Derecho (R) - Vacío")
         self.q4L_curve.setData([], [])
@@ -202,6 +204,8 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.fm_metrics_label.setText("")
+        self.stereo_metrics_label.hide()
+        self.stereo_metrics_label.setText("")
         
         if self.audio_btn.isChecked():
             if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
@@ -694,6 +698,37 @@ class MainWindow(QMainWindow):
                         f"</div>"
                     )
                     self.fm_metrics_label.setText(html_text)
+                    
+                # ---  Cálculo y renderizado de Separación Estéreo ---
+                    if 'rms_L' in fm_metrics and 'rms_R' in fm_metrics:
+                        # Protegemos el logaritmo por si hay silencio absoluto
+                        rms_L_val = max(fm_metrics['rms_L'], 1e-12)
+                        rms_R_val = max(fm_metrics['rms_R'], 1e-12)
+                        
+                        db_L = 20 * np.log10(rms_L_val)
+                        db_R = 20 * np.log10(rms_R_val)
+                        
+                        # La separación es la diferencia absoluta de energía
+                        separacion_db = abs(db_L - db_R)
+                        
+                        # Código de colores (50dB+ es excelente para grado laboratorio)
+                        if separacion_db >= 50:
+                            color_sep = "#00B000" # Verde
+                        elif separacion_db >= 30:
+                            color_sep = "#FFD500" # Amarillo
+                        else:
+                            color_sep = "#FF3333" # Rojo (Música normal o mal filtrado)
+                            
+                        html_stereo = (
+                            f"<div style='line-height: 1.5;'>"
+                            f"<span style='color: #FFFFFF'><b>Potencia RMS (L):</b></span> <span style='color: #00FFFF;'>{db_L:+.2f} dB</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Potencia RMS (R):</b></span> <span style='color: #FF00FF;'>{db_R:+.2f} dB</span><br>"
+                            f"<span style='color: #555555;'>─────────────────────────────</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Crosstalk (Separación):</b></span> "
+                            f"<span style='color: {color_sep}; font-weight: bold;'>{separacion_db:.2f} dB</span>"
+                            f"</div>"
+                        )
+                        self.stereo_metrics_label.setText(html_stereo)
     
     def _build_ui(self):
         # --- BARRA SUPERIOR  ---
@@ -1086,6 +1121,13 @@ class MainWindow(QMainWindow):
         self.fm_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 15px;")
         self.fm_metrics_label.hide() # Lo ocultamos por defecto
         controls_layout.addWidget(self.fm_metrics_label)
+
+        # --- MÉTRICAS ESTÉREO (SEPARACIÓN) ---
+        self.stereo_metrics_label = QLabel("")
+        self.stereo_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.stereo_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+        self.stereo_metrics_label.hide()
+        controls_layout.addWidget(self.stereo_metrics_label)
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)

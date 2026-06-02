@@ -23,7 +23,7 @@ def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
         ajuste_fase = alpha * error + filtro_integral
         
         # Generar 38 kHz
-        portadora_38k[i] = np.sin(2.0 * fase)
+        portadora_38k[i] = -np.sin(2.0 * fase)
         
         fase += w_center + ajuste_fase
         if fase > 2.0 * np.pi: fase -= 2.0 * np.pi
@@ -149,12 +149,17 @@ class DemoduladorWBFM(DemoduladorBase):
         canal_R = (senal_L_plus_R - senal_L_minus_R) / 2.0
         
         # I. Métricas Absolutas
+        rms_L = np.sqrt(np.mean(canal_L**2))
+        rms_R = np.sqrt(np.mean(canal_R**2))
+
         fm_metrics = {
             'pico_max': np.max(demod_khz_clean),
             'pico_min': np.min(demod_khz_clean),
             'rms': np.sqrt(np.mean(demod_khz_clean**2)),
             'pico_rms': max(abs(np.max(demod_khz_clean)), abs(np.min(demod_khz_clean))) / np.sqrt(2),
-            'dc_offset': np.mean(demod_khz_clean)
+            'dc_offset': np.mean(demod_khz_clean),
+            'rms_L': rms_L,
+            'rms_R': rms_R
         }
         
         # J. Recorte del buffer para graficar estable
