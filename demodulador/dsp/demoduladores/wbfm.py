@@ -1,6 +1,6 @@
 import numpy as np
 import threading
-from scipy.signal import resample_poly, firwin, fftconvolve
+from scipy.signal import resample_poly, firwin, fftconvolve, hilbert
 from .base import DemoduladorBase
 from numba import jit
 
@@ -8,7 +8,7 @@ from numba import jit
 @jit(nopython=True)
 def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
     N = len(piloto)
-    portadora_38k = np.zeros(N)
+    fases_19k = np.zeros(N)
     
     f_center = 19000.0
     w_center = 2.0 * np.pi * f_center / fs
@@ -23,14 +23,15 @@ def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
         filtro_integral += beta * error
         ajuste_fase = alpha * error + filtro_integral
         
-        # Generar 38 kHz (Fase geométrica corregida)
-        portadora_38k[i] = -np.sin(2.0 * fase)
-        
+        # 3. Aplicamos la corrección
         fase += w_center + ajuste_fase
         if fase > 2.0 * np.pi: fase -= 2.0 * np.pi
         elif fase < 0.0: fase += 2.0 * np.pi
             
-    return portadora_38k, fase, filtro_integral
+        # 4. Guardamos la fase instantánea
+        fases_19k[i] = fase 
+            
+    return fases_19k, fase, filtro_integral
 
 class DemoduladorWBFM(DemoduladorBase):
     def __init__(self):
@@ -50,6 +51,7 @@ class DemoduladorWBFM(DemoduladorBase):
         # Estados PLL
         self.pll_fase = 0.0
         self.pll_filtro_integral = 0.0
+        self.fase_estereo_memoria = None
         
         # ---  Control de Hilos (Asincronismo) ---
         self.is_processing = False
@@ -83,6 +85,7 @@ class DemoduladorWBFM(DemoduladorBase):
         
         self.pll_fase = 0.0
         self.pll_filtro_integral = 0.0
+        self.ajuste_fase_estereo = 0.0
         self.is_processing = False
         self.last_heavy_results = {}
 
@@ -149,22 +152,70 @@ class DemoduladorWBFM(DemoduladorBase):
             PSD_audio = 10.0 * np.log10(np.maximum(potencia_audio[:mitad], 1e-12))
             f_axis_audio = np.linspace(0, (self.nueva_fs/2)/1e3, mitad)
             
-            # === 4. EXTRACCIÓN ESTÉREO ===
+            # === 4. EXTRACCIÓN ESTÉREO (FUERZA BRUTA VECTORIZADA) ===
+            # Ruta Mono (L+R)
             senal_L_plus_R = fftconvolve(demod_khz_clean, self.stereo_lpr_kernel, mode='same')
+            
+            # Extracción del piloto de 19 kHz y su fase analítica exacta
             piloto_19k = fftconvolve(demod_khz_clean, self.stereo_pilot_kernel, mode='same')
-            lmr_modulado = fftconvolve(demod_khz_clean, self.stereo_lmr_kernel, mode='same')
+            fase_piloto = np.unwrap(np.angle(hilbert(piloto_19k)))
             
-            portadora_38k, pll_f_nuevo, pll_i_nuevo = correr_pll_38k(
-                piloto_19k, self.nueva_fs, self.pll_fase, self.pll_filtro_integral
-            )
-            self.pll_fase = pll_f_nuevo
-            self.pll_filtro_integral = pll_i_nuevo
+            # 1. Crear componentes In-Phase (I) y Quadrature (Q) de la portadora
+            portadora_I = np.cos(2.0 * fase_piloto)
+            portadora_Q = np.sin(2.0 * fase_piloto)
             
-            lmr_mezclado = lmr_modulado * portadora_38k * 2.0
-            senal_L_minus_R = fftconvolve(lmr_mezclado, self.stereo_audio_lpf_kernel, mode='same')
+            # 2. Mezclar y filtrar AMBAS ramas (Solo 2 convoluciones pesadas)
+            mezcla_I = demod_khz_clean * portadora_I * 2.0
+            mezcla_Q = demod_khz_clean * portadora_Q * 2.0
             
-            canal_L = (senal_L_plus_R + senal_L_minus_R) / 2.0
-            canal_R = (senal_L_plus_R - senal_L_minus_R) / 2.0
+            lr_I = fftconvolve(mezcla_I, self.stereo_audio_lpf_kernel, mode='same')
+            lr_Q = fftconvolve(mezcla_Q, self.stereo_audio_lpf_kernel, mode='same')
+            
+            # 3. Barrido de 360 grados súper rápido
+            # Usamos muestras del MEDIO del bloque (100 ms) para evitar transitorios de la convolución
+            inicio_eval = int(self.nueva_fs * 0.1) 
+            fin_eval = int(self.nueva_fs * 0.2)
+            
+            lr_I_eval = lr_I[inicio_eval:fin_eval]
+            lr_Q_eval = lr_Q[inicio_eval:fin_eval]
+            
+            mejor_fase = 0
+            max_var = -1
+            
+            for phi in np.linspace(0, 2*np.pi, 360):
+                # Rotación matemática sin volver a filtrar
+                demod_candidata = lr_I_eval * np.cos(phi) - lr_Q_eval * np.sin(phi)
+                varianza = np.var(demod_candidata)
+                
+                if varianza > max_var:
+                    max_var = varianza
+                    mejor_fase = phi
+                
+            # --- CORRECCIÓN DE AMBIGÜEDAD DE 180 GRADOS ---
+            if self.fase_estereo_memoria is None:
+                # Primer bloque de la historia: confiamos ciegamente
+                self.fase_estereo_memoria = mejor_fase 
+            else:
+                # 1. Calculamos la distancia circular entre la fase nueva y la anterior
+                diferencia = (mejor_fase - self.fase_estereo_memoria)
+                
+                # 2. Normalizamos la diferencia al rango [-pi, pi]
+                diferencia = (diferencia + np.pi) % (2 * np.pi) - np.pi
+                
+                # 3. Si la distancia es mayor a 90 grados (pi/2), se cruzaron los canales
+                if abs(diferencia) > (np.pi / 2.0):
+                    # Lo obligamos a rotar 180 grados de vuelta al lóbulo correcto
+                    mejor_fase = (mejor_fase + np.pi) % (2 * np.pi)
+                
+                # Guardamos la fase corregida para el siguiente bloque de 500ms
+                self.fase_estereo_memoria = mejor_fase
+                    
+            # 4. Reconstruir el canal L-R definitivo para todo el bloque de 500ms
+            senal_L_minus_R = lr_I * np.cos(mejor_fase) - lr_Q * np.sin(mejor_fase)
+            
+            # Matriz Estéreo Final. Tiene los signos invertidos porque el barrido de 360° encuentra primero un pico negativo por el group delay
+            canal_L = (senal_L_plus_R - senal_L_minus_R) / 2.0
+            canal_R = (senal_L_plus_R + senal_L_minus_R) / 2.0
             
             # === 5. MÉTRICAS Y PREPARACIÓN FINAL ===
             inicio_plot = len(canal_L) // 2 
