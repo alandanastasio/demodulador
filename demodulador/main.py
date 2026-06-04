@@ -325,6 +325,7 @@ class MainWindow(QMainWindow):
             fs = state['fft_size']
             self.f_axis = np.linspace(cf - sr/2, cf + sr/2, fs) / 1e6
             self.freq_plot.setXRange((cf - sr/2)/1e6, (cf + sr/2)/1e6)
+    
 
     def closeEvent(self, event):
         print("Cerrando aplicación SDR...")
@@ -407,6 +408,46 @@ class MainWindow(QMainWindow):
                     self.mpx_marker_text_box.show()
                     if not any(m['active'] and m['current_plot'] == 'rf' for m in self.markers_info.values()):
                         self.marker_text_box.hide()
+    
+    def keyPressEvent(self, event):
+        # 1. Verificamos si hay algún marcador seleccionado para mover
+        if self.current_moving_marker is None:
+            super().keyPressEvent(event)
+            return
+
+        marker = self.markers_info[self.current_moving_marker]
+        
+        # 2. Filtramos para que solo reaccione a las flechas izquierda y derecha
+        if event.key() not in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            super().keyPressEvent(event)
+            return
+
+        # 3. Determinamos en qué gráfico está el marcador para usar el eje X correcto
+        axis_x = None
+        if marker['current_plot'] == 'rf':
+            axis_x = self.f_axis
+        elif marker['current_plot'] == 'mpx':
+            # Usamos getattr por si la variable aún no fue creada en el primer ciclo
+            axis_x = getattr(self, 'last_f_axis_audio', None) 
+        
+        if axis_x is None or len(axis_x) == 0:
+            return
+
+        # 4. Buscamos el índice exacto en el que se encuentra el marcador actualmente
+        current_idx = (np.abs(axis_x - marker['freq'])).argmin()
+
+        # Extra: Si el usuario mantiene presionada la tecla Shift (Mayús), hacemos un salto más rápido
+        step = 10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
+
+        # 5. Calculamos el nuevo índice limitándolo a los bordes del array
+        if event.key() == Qt.Key.Key_Left:
+            new_idx = max(0, current_idx - step)
+        elif event.key() == Qt.Key.Key_Right:
+            new_idx = min(len(axis_x) - 1, current_idx + step)
+
+        # 6. Actualizamos la frecuencia. 
+        # El método update_plot() se encargará de reubicarlo gráficamente en el próximo frame.
+        marker['freq'] = axis_x[new_idx]
 
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
