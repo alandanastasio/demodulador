@@ -25,6 +25,7 @@ from dsp.demoduladores.sa import SpectrumAnalyzer
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
+from trace_manager import TraceManager
 
 # --- ESTADO GLOBAL (Solo cosas de la UI y configuración general) ---
 state = {
@@ -61,14 +62,11 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
         # --- VARIABLES INTERNAS DE LA UI ---
-        self.is_paused = False
-        self.trace_mode = "White clear"
-        self.max_hold_data = None
-        self.avg_buffer = None
-        self.avg_index = 0
-        self.avg_count = 0
-        self.AVG_MAX = 100
         self.current_freq_multiplier = 1e6
+        self.is_paused = False
+
+        # Iniciamos el manager de trazos
+        self.trace_manager = TraceManager()
 
         # Inicializamos el gestor de grabación/reproducción
         self.playback_manager = PlaybackManager(self, state, emitter)
@@ -273,13 +271,9 @@ class MainWindow(QMainWindow):
             # de VGA ni siquiera va a aparecer si no es una HackRF
             print(f"El equipo {self.radio.nombre} no soporta ajuste de VGA independiente.")
 
-    def on_trace_changed(self, text):
-        self.trace_mode = text
-        self.reset_traces()
-
     def on_fft_changed(self, text):
         state['fft_size'] = int(text)
-        self.reset_traces()
+        self.trace_manager.reset()
         if self.demodulador_actual is not None:
             self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.update_x_axis()
@@ -432,31 +426,7 @@ class MainWindow(QMainWindow):
         if len(self.f_axis) == len(PSD):
             
             # --- LÓGICA DE TRACE ---
-            display_psd = PSD # Por defecto, "White clear" usa la señal directa
-            
-            if self.trace_mode == "Max Hold":
-                if self.max_hold_data is None or len(self.max_hold_data) != len(PSD):
-                    self.max_hold_data = PSD.copy()
-                else:
-                    # Compara punto por punto y se queda con el más alto
-                    self.max_hold_data = np.maximum(self.max_hold_data, PSD) 
-                display_psd = self.max_hold_data
-
-            elif self.trace_mode == "Average":
-                if self.avg_buffer is None or self.avg_buffer.shape[1] != len(PSD):
-                    # Matriz de 100 filas (muestras) x N columnas (frecuencias)
-                    self.avg_buffer = np.zeros((self.AVG_MAX, len(PSD)))
-                    self.avg_index = 0
-                    self.avg_count = 0
-                
-                # Guarda la muestra actual en la posición del índice y avanza cíclicamente
-                self.avg_buffer[self.avg_index] = PSD
-                self.avg_index = (self.avg_index + 1) % self.AVG_MAX
-                if self.avg_count < self.AVG_MAX:
-                    self.avg_count += 1
-                
-                # Promedia sobre las muestras recolectadas hasta el momento
-                display_psd = np.mean(self.avg_buffer[:self.avg_count], axis=0)
+            display_psd = self.trace_manager.process(PSD)
 
             # Graficamos la señal procesada
             self.freq_plot_curve.setData(self.f_axis, display_psd)
@@ -863,7 +833,7 @@ class MainWindow(QMainWindow):
         self.trace_combo = QComboBox()
         self.trace_combo.addItems(["White clear", "Max Hold", "Average"])
         self.trace_combo.setCurrentText("White clear")
-        self.trace_combo.currentTextChanged.connect(self.on_trace_changed)
+        self.trace_combo.currentTextChanged.connect(self.trace_manager.set_mode)
         form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
 
         controls_layout.addLayout(form_layout)
@@ -919,14 +889,6 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
    
-    
-    def reset_traces(self):
-        self.max_hold_data = None
-        self.avg_buffer = None
-        self.avg_index = 0
-        self.avg_count = 0
-
-
 class StartupWindow(QMainWindow):
     def __init__(self):
         super().__init__()
