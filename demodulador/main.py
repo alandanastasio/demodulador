@@ -3,17 +3,13 @@ import numpy as np
 import pyqtgraph as pg
 import datetime
 import usb.core
-import queue
-import sounddevice as sd
-
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                              QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
                              QPushButton, QListWidgetItem, QGridLayout)
-
-# --- IMPORTACIÓN DE NUESTROS MÓDULOS MODULARES ---
+# --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
 from hardware.rtlsdr_handler import RtlSdrHandler
@@ -26,6 +22,7 @@ from dsp.demoduladores.sa import SpectrumAnalyzer
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from trace_manager import TraceManager
+from audio_manager import AudioManager
 
 # --- ESTADO GLOBAL (Solo cosas de la UI y configuración general) ---
 state = {
@@ -33,8 +30,6 @@ state = {
     'center_freq': 100e6,
     'sample_rate': 10e6,
     'demod_mode': 'none',
-    'play_audio': False,
-    'audio_queue': queue.Queue(maxsize=20),
     'is_recording': False,
     'recorded_samples': []
 }
@@ -65,10 +60,9 @@ class MainWindow(QMainWindow):
         self.current_freq_multiplier = 1e6
         self.is_paused = False
 
-        # Iniciamos el manager de trazos
+        # Iniciamos managers
         self.trace_manager = TraceManager()
-
-        # Inicializamos el gestor de grabación/reproducción
+        self.audio_manager = AudioManager(self, state)
         self.playback_manager = PlaybackManager(self, state, emitter)
 
         # Construimos la interfaz gráfica
@@ -97,11 +91,8 @@ class MainWindow(QMainWindow):
             # para cumplir con el bloque de tiempo mínimo (ej: los 100ms de la FM)
             if resultados is not None:
                 
-                # 3. Gestión de Audio: Enviamos a la cola de sounddevice solo si la escucha 
-                # está activa y si el plugin actual realmente generó muestras de audio.
-                if state.get('play_audio', False) and resultados.get('audio_out') is not None:
-                    if not state['audio_queue'].full():
-                        state['audio_queue'].put(resultados['audio_out'])
+                # 3. Gestión de Audio:
+                self.audio_manager.enqueue_audio(resultados.get('audio_out'))
                 
                 # 4. Actualización de la Interfaz: Despachamos todos los vectores procesados 
                 # hacia el hilo principal de PyQt usando el emisor de señales genérico.
@@ -217,7 +208,7 @@ class MainWindow(QMainWindow):
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
             self.audio_r_btn.setChecked(False)
-            self.toggle_audio()
+            self.audio_manager.toggle_audio()
         
         self.sr_combo.blockSignals(True)
         idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
@@ -328,7 +319,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         print("Cerrando aplicación SDR...")
-        state['play_audio'] = False
+        self.audio_manager.stop_all()
         self.radio.close()
         event.accept()
         
@@ -353,71 +344,6 @@ class MainWindow(QMainWindow):
             self.pause_btn.setText("⏸")
             self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
 
-
-    def toggle_audio(self):
-        play_l = self.audio_l_btn.isChecked()
-        play_r = self.audio_r_btn.isChecked()
-        
-        # Cambiamos los colores (Cyan para L, Magenta para R)
-        self.audio_l_btn.setStyleSheet("background-color: #00FFFF; color: black; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #00CCCC;" if play_l else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
-        self.audio_r_btn.setStyleSheet("background-color: #FF00FF; color: black; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #CC00CC;" if play_r else "background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
-
-        state['play_audio'] = play_l or play_r
-        state['play_audio_L'] = play_l
-        state['play_audio_R'] = play_r
-
-        # Si hay alguno encendido y el stream no está corriendo, lo iniciamos
-        if state['play_audio'] and (self.audio_stream is None or not self.audio_stream.active):
-            # Limpiamos buffers (Ahora es una matriz vacía de 2 columnas)
-            state['audio_buffer'] = np.zeros((0, 2), dtype=np.float32)
-            while not state['audio_queue'].empty():
-                state['audio_queue'].get()
-
-            def audio_callback(outdata, frames, time, status):
-                try:
-                    while len(state['audio_buffer']) < frames:
-                        new_data = state['audio_queue'].get_nowait()
-                        # Si recibimos mono por accidente, lo duplicamos a estéreo
-                        if new_data.ndim == 1:
-                            new_data = np.column_stack((new_data, new_data))
-                        # Apilamos las filas
-                        state['audio_buffer'] = np.vstack((state['audio_buffer'], new_data))
-                except queue.Empty:
-                    pass
-                
-                if len(state['audio_buffer']) >= frames:
-                    chunk = state['audio_buffer'][:frames].copy()
-                    state['audio_buffer'] = state['audio_buffer'][frames:]
-                    
-                    # --- ASIGNACIÓN DIRECTA Y EXPLÍCITA AL HARDWARE ---
-                    if state.get('play_audio_L', False):
-                        outdata[:, 0] = chunk[:, 0] # Escribir audio al parlante L
-                    else:
-                        outdata[:, 0] = 0.0         # Forzar silencio en L
-                        
-                    if state.get('play_audio_R', False):
-                        outdata[:, 1] = chunk[:, 1] # Escribir audio al parlante R
-                    else:
-                        outdata[:, 1] = 0.0         # Forzar silencio en R
-                        
-                else:
-                    outdata.fill(0.0)
-                    state['audio_buffer'] = np.zeros((0, 2), dtype=np.float32)
-
-            # Iniciamos el stream (channels=2 para que el OS sepa que es estéreo)
-            self.audio_stream = sd.OutputStream(
-                samplerate=48000, 
-                channels=2, 
-                dtype='float32',
-                callback=audio_callback
-            )
-            self.audio_stream.start()
-            
-        # Si apagamos ambos botones y el stream sigue corriendo, lo detenemos
-        elif not state['play_audio'] and self.audio_stream is not None:
-            self.audio_stream.stop()
-            self.audio_stream.close()
-            self.audio_stream = None
 
     def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
         if self.is_paused:
@@ -847,13 +773,13 @@ class MainWindow(QMainWindow):
         self.audio_l_btn.setCheckable(True)
         self.audio_l_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.audio_l_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
-        self.audio_l_btn.clicked.connect(self.toggle_audio)
+        self.audio_l_btn.clicked.connect(self.audio_manager.toggle_audio)
         
         self.audio_r_btn = QPushButton("🔊 Canal R")
         self.audio_r_btn.setCheckable(True)
         self.audio_r_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.audio_r_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 10px; border-radius: 4px; border: 1px solid #555;")
-        self.audio_r_btn.clicked.connect(self.toggle_audio)
+        self.audio_r_btn.clicked.connect(self.audio_manager.toggle_audio)
         
         audio_layout.addWidget(self.audio_l_btn)
         audio_layout.addWidget(self.audio_r_btn)
@@ -863,8 +789,6 @@ class MainWindow(QMainWindow):
         
         # Ocultamos el contenedor por defecto al iniciar la app
         self.audio_container.hide() 
-        
-        self.audio_stream = None
 
         # --- MÉTRICAS FM EN EL PANEL DERECHO ---
         self.fm_metrics_label = QLabel("")
