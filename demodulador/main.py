@@ -210,11 +210,10 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.hide()
         self.stereo_metrics_label.setText("")
         
-        if self.audio_btn.isChecked():
-            if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
-                self.audio_l_btn.setChecked(False)
-                self.audio_r_btn.setChecked(False)
-                self.toggle_audio()
+        if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
+            self.audio_l_btn.setChecked(False)
+            self.audio_r_btn.setChecked(False)
+            self.toggle_audio()
         
         self.sr_combo.blockSignals(True)
         idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
@@ -906,6 +905,7 @@ class MainWindow(QMainWindow):
         # --- LADO IZQUIERDO: GRÁFICO ---
         self.freq_plot = pg.PlotWidget(labels={'left': 'Potencia [dB]', 'bottom': 'Frecuencia [MHz]'})
         self.freq_plot.setMouseEnabled(x=True, y=True)
+        self.freq_plot.setYRange(-130, 10)
         self.freq_plot_curve = self.freq_plot.plot([], pen=pg.mkPen(color='#FFD500', width=1.5))
 
         # --- CREACIÓN DE CUADRANTES  ---
