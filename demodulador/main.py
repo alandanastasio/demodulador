@@ -31,7 +31,8 @@ state = {
     'sample_rate': 10e6,
     'demod_mode': 'none',
     'is_recording': False,
-    'recorded_samples': []
+    'recorded_samples': [],
+    'zero_span': False
 }
 
 class SignalEmitter(QObject):
@@ -344,6 +345,18 @@ class MainWindow(QMainWindow):
             self.pause_btn.setText("⏸")
             self.pause_btn.setStyleSheet("background-color: #444; color: white; font-size: 16px; font-weight: bold; border-radius: 4px; margin: 4px;")
 
+    def toggle_zero_span(self):
+        state['zero_span'] = self.zero_span_btn.isChecked()
+        
+        if state['zero_span']:
+            # Botón activo (Azul)
+            self.zero_span_btn.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #0055FF;")
+            self.freq_plot.setLabel('bottom', 'Tiempo [us]')
+        else:
+            # Botón inactivo (Gris)
+            self.zero_span_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555;")
+            self.freq_plot.setLabel('bottom', 'Frecuencia [MHz]')
+            self.update_x_axis() # Restaura la vista de frecuencia
 
     def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
         if self.is_paused:
@@ -352,24 +365,38 @@ class MainWindow(QMainWindow):
         if len(self.f_axis) == len(PSD):
             
             # --- LÓGICA DE TRACE ---
-            display_psd = self.trace_manager.process(PSD)
+            if state.get('zero_span', False):
+                if raw_samples is not None:
+                    # 1. Calculamos la envolvente de potencia en el tiempo (dB)
+                    # |I + jQ|^2 nos da la potencia. Sumamos 1e-12 para evitar log(0)
+                    power_time = 10.0 * np.log10(np.abs(raw_samples)**2 + 1e-12)
+                    
+                    # 2. Generamos el eje de tiempo en microsegundos (us)
+                    t_axis = (np.arange(len(raw_samples)) / state['sample_rate']) * 1e6
+                    
+                    # 3. Graficamos la señal temporal
+                    self.freq_plot_curve.setData(t_axis, power_time)
+                    
+                    # Fijamos la ventana temporal para que no baile el gráfico
+                    self.freq_plot.setXRange(0, t_axis[-1])
+                    
+                    # Nota: En Zero Span no llamamos a self.marker_manager.update_render
+                    # porque los markers están atados a coordenadas de frecuencia.
+            else:
+                # FLUJO NORMAL (Dominio de Frecuencia)
+                if len(self.f_axis) == len(PSD):
+                    # --- LÓGICA DE TRACE ---
+                    display_psd = self.trace_manager.process(PSD)
+                    self.freq_plot_curve.setData(self.f_axis, display_psd)
 
-            # Graficamos la señal procesada
-            self.freq_plot_curve.setData(self.f_axis, display_psd)
-
-            # --- Cacheamos los datos de MPX para que los markers no parpadeen ---
-            if PSD_audio is not None:
-                self.last_f_axis_audio = f_axis_audio
-                self.last_PSD_audio = PSD_audio
-            
-            # --- LÓGICA DE MARKERS Y DELTAS ---
-            self.marker_manager.update_render(
-                display_psd, 
-                self.f_axis, 
-                PSD_audio, 
-                getattr(self, 'last_f_axis_audio', None), 
-                state.get('demod_mode')
-            )
+                    # --- LÓGICA DE MARKERS Y DELTAS ---
+                    self.marker_manager.update_render(
+                        display_psd, 
+                        self.f_axis, 
+                        PSD_audio, 
+                        getattr(self, 'last_f_axis_audio', None), 
+                        state.get('demod_mode')
+                    )
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -762,6 +789,14 @@ class MainWindow(QMainWindow):
         self.trace_combo.currentTextChanged.connect(self.trace_manager.set_mode)
         form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
 
+        # ---  BOTÓN ZERO SPAN ---
+        self.zero_span_btn = QPushButton("Spam Cero")
+        self.zero_span_btn.setCheckable(True)
+        self.zero_span_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.zero_span_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555;")
+        self.zero_span_btn.clicked.connect(self.toggle_zero_span)
+        form_layout.addRow(QLabel("MODO SA:"), self.zero_span_btn)
+
         controls_layout.addLayout(form_layout)
 
         # 5. BOTONES DE AUDIO ESTÉREO
@@ -812,6 +847,7 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
+
    
 class StartupWindow(QMainWindow):
     def __init__(self):
