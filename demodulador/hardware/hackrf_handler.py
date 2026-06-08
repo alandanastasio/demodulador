@@ -43,11 +43,18 @@ class HackRFHandler(SDRBase):
         self.sdr.pyhackrf_set_freq(int(freq_hz))
 
     def set_sample_rate(self, sr_hz: float):
-        self.sdr.pyhackrf_stop_rx()
+        # 1. Solo detenemos la recepción si ya estaba corriendo
+        was_running = getattr(self, 'is_running', False)
+        if was_running:
+            self.sdr.pyhackrf_stop_rx()
+            
+        # 2. Aplicamos la nueva configuración
         self.sdr.pyhackrf_set_sample_rate(int(sr_hz))
         bw = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(sr_hz * 0.75)
         self.sdr.pyhackrf_set_baseband_filter_bandwidth(bw)
-        if self.is_running:
+        
+        # 3. Volvemos a encender si corresponde
+        if was_running:
             self.sdr.pyhackrf_start_rx()
 
     def set_gain(self, gain_db: int):
