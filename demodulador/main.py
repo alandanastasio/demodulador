@@ -18,6 +18,7 @@ from hardware.nuand_bladerf_handler import BladeRFHandler
 from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
+from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -37,7 +38,7 @@ state = {
 
 class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
-    data_updated = pyqtSignal(np.ndarray, np.ndarray, object, object, object, object, object, object,object)
+    data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object)
 
 emitter = SignalEmitter()
 
@@ -112,6 +113,12 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
+        for lr in getattr(self, 'wifi_regions', []): lr.hide()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+        # Restauramos el color original de la curva
+        self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+        
         self.audio_container.hide()
         # Configuramos las pantallas
         self.q2_widget.setTitle("Espectro MPX (Audio Demodulado)")
@@ -173,7 +180,87 @@ class MainWindow(QMainWindow):
         self.freq_input.setValue(100.0) # Se dispara on_freq_changed
         self.update_x_axis()
 
+    def set_wifi_ag_mode(self):
+        # 1. Ocultamos las herramientas analógicas
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+
+        # 2. Mostramos los paneles y expandimos la grilla a 2x2
+        self.q2_widget.show()
+        self.q3_widget.show()
+        self.q4_container.show()
+        
+        # En Q4 solo necesitamos un gráfico, así que ocultamos el Canal R del estéreo
+        self.q4L_widget.show()
+        self.q4R_widget.hide() 
+        
+        self.plot_layout.setRowStretch(0, 1)
+        self.plot_layout.setRowStretch(1, 1)
+
+        # --- CUADRANTE 2: SEÑAL EN EL TIEMPO (I) ---
+        self.q2_widget.setTitle("Señal Baseband en el Tiempo")
+        self.q2_widget.setLabel('bottom', 'Tiempo [us]')
+        self.q2_widget.setLabel('left', 'Amplitud')
+        
+        # 4096 muestras a 20 MHz representan 204.8 microsegundos
+        self.q2_widget.setXRange(0, 204.8) 
+        self.q2_widget.setYRange(-1.5, 1.5) # Rango típico de la salida del SDR
+        
+        # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
+        self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
+        
+        # --- CUADRANTE 3: ESTRUCTURA DEL PREÁMBULO ---
+        self.q3_widget.setTitle("Estructura del Preámbulo (Zoom Sincronizado)")
+        self.q3_widget.setLabel('bottom', 'Muestras (0 = Inicio STS)')
+        self.q3_widget.setLabel('left', 'Amplitud')
+        self.q3_widget.setXRange(0, 400)
+        self.q3_widget.setYRange(0, 1.5)
+        
+        # Mostramos las cajas de colores
+        # Mostramos las cajas de colores y sus textos
+        for lr in getattr(self, 'wifi_regions', []): lr.show()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.show()
+        
+        # Volvemos a setear línea normal (por si veníamos de otro modo)
+        self.q3_curve.setData([], [], pen=pg.mkPen(color="#CBE8F4", width=1.5), symbol=None)
+
+        # --- CUADRANTE 4: ESTADO DE SUBPORTADORAS ---
+        self.q4L_widget.setTitle("Magnitud de Subportadoras (64 Bins)")
+        self.q4L_widget.setLabel('bottom', 'Índice de Subportadora (-32 a +31)')
+        self.q4L_widget.setLabel('left', 'Magnitud')
+        self.q4L_widget.setXRange(-32, 32)
+        self.q4L_widget.setYRange(0, 5) # Luego lo hacemos dinámico
+        
+        self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+
+        # --- ARQUITECTURA DSP Y HARDWARE ---
+        state['demod_mode'] = 'wifi_ag'
+        state['sample_rate'] = 20e6 
+        
+        self.demodulador_actual = DemoduladorWiFiAG()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        # --- Configuración automatica de la frecuencia central al primer canal de wifi
+        self.unit_combo.setCurrentText("GHz")
+        self.freq_input.setValue(2.412)
+
+        # Ajustamos el combobox visualmente
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("20 MHz") != -1:
+            self.sr_combo.setCurrentText("20 MHz")
+        elif self.sr_combo.findText("20.0 MHz") != -1:
+            self.sr_combo.setCurrentText("20.0 MHz")
+        self.sr_combo.blockSignals(False)
+
     def set_wbfm_audio_mode(self):
+        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
+        for lr in getattr(self, 'wifi_regions', []): lr.hide()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+        # Restauramos el color original de la curva
+        self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+
         self.set_wbfm_mode() 
         self.audio_container.show()
         
@@ -188,7 +275,19 @@ class MainWindow(QMainWindow):
         self.q3_widget.hide()
         self.q4_container.hide() # Ocultamos el contenedor
 
+        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
+        for lr in getattr(self, 'wifi_regions', []): lr.hide()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+        # Restauramos el color original de la curva
+        self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+
         self.plot_layout.setRowStretch(1, 0)
+
+        # Asegurarnos de que las curvas usen líneas y no puntos de constelación
+        self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
+        # Mostrar el gráfico R que ocultamos en WiFi
+        self.q4R_widget.show()
+        self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
         
         self.q2_widget.setTitle("1-2 (Vacío)")
         self.q2_curve.setData([], []) 
@@ -397,6 +496,22 @@ class MainWindow(QMainWindow):
                         getattr(self, 'last_f_axis_audio', None), 
                         state.get('demod_mode')
                     )
+
+            # --- RENDERIZADO ESPECÍFICO DE WIFI A/G ---
+            if state.get('demod_mode') == 'wifi_ag':
+                if raw_samples is not None:
+                    # 1. Generamos el eje de tiempo en microsegundos (us)
+                    t_axis_us = (np.arange(len(raw_samples)) / state['sample_rate']) * 1e6
+                    
+                    # 2. Graficamos la envolvente (Magnitud)
+                    signal_env = np.abs(raw_samples)
+                    self.q2_curve.setData(t_axis_us, signal_env)
+                
+                # ---  GRÁFICAMOS SCHMIDL & COX EN EL Q3 ---
+                if mpx_time is not None:
+                    # mpx_time trae la métrica S-C (array de valores entre 0 y 1)
+                    eje_x_sc = np.arange(len(mpx_time))
+                    self.q3_curve.setData(eje_x_sc, mpx_time)
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -564,6 +679,46 @@ class MainWindow(QMainWindow):
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
 
+        # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
+        self.wifi_regions = []
+        self.wifi_labels = [] # Guardamos los textos para ocultarlos/mostrarlos
+        
+        # Formato: (Inicio, Fin, Color_Fondo, Nombre, Color_Texto_Opaco)
+        regiones_data = [
+            (0, 160, (100, 150, 255, 60), "STS", (150, 190, 255)),     # Azul
+            (160, 192, (150, 150, 150, 60), "GI2", (210, 210, 210)),   # Gris
+            (192, 256, (100, 255, 100, 60), "LTS1", (150, 255, 150)),  # Verde
+            (256, 320, (150, 255, 150, 60), "LTS2", (190, 255, 190)),  # Verde claro
+            (320, 400, (255, 200, 0, 60), "SIGNAL", (255, 220, 100))   # Naranja
+        ]
+        
+        for start, end, color_bg, nombre, color_txt in regiones_data:
+            # 1. Creamos la región estática
+            lr = pg.LinearRegionItem(values=[start, end], brush=color_bg, movable=False)
+            for line in lr.lines: 
+                line.setPen(pg.mkPen(None))
+                line.setHoverPen(pg.mkPen(None))
+            
+            self.q3_widget.addItem(lr)
+            self.wifi_regions.append(lr)
+            lr.hide()
+            
+            # 2. Creamos el texto flotante
+            # anchor=(0.5, 1) alinea el texto perfectamente centrado en X
+            label = pg.TextItem(anchor=(0.5, 1))
+            x_center = (start + end) / 2
+            
+            # Posición: Centro de la caja en X, y altura fija en Y=1.45 (cerca del tope superior)
+            label.setPos(x_center, 1.25) 
+            
+            # Formateamos con HTML para darle la fuente, el color sólido (sin transparencia) y negrita
+            html_format = f'<div style="text-align: center;"><span style="color: rgb({color_txt[0]}, {color_txt[1]}, {color_txt[2]}); font-size: 13pt; font-weight: bold;">{nombre}</span></div>'
+            label.setHtml(html_format)
+            
+            self.q3_widget.addItem(label)
+            self.wifi_labels.append(label)
+            label.hide()
+
         # Ocultamos por defecto
         self.q2_widget.hide()
         self.q3_widget.hide()
@@ -703,6 +858,23 @@ class MainWindow(QMainWindow):
         # Asignar menú al botón y agregar a la barra principal
         self.demod_btn.setMenu(self.demod_menu)
         self.toolbar.addWidget(self.demod_btn)
+
+        # --- SUBMENÚ: DIGITAL ---
+        self.digital_menu = QMenu("Digitales", self)
+        self.digital_menu.setStyleSheet("""
+            QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #555555; }
+        """)
+
+        self.action_wifi_ag = QAction("WiFi 802.11a/g (OFDM)", self)
+        self.action_wifi_ag.setCheckable(True)
+        self.action_wifi_ag.triggered.connect(self.set_wifi_ag_mode)
+        
+        self.demod_group.addAction(self.action_wifi_ag)
+        self.digital_menu.addAction(self.action_wifi_ag)
+
+        # Agregamos el submenú Digital al menú principal de Demodulación
+        self.demod_menu.addMenu(self.digital_menu)
 
         # --- LADO DERECHO: CONTROLES ---
         controls_layout = QVBoxLayout()
