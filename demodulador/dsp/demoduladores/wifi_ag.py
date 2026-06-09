@@ -4,7 +4,7 @@ from scipy.ndimage import uniform_filter1d
 from .base import DemoduladorBase
 
 # --- SCHMIDL & COX ---
-def schmidl_cox_metric(iq_signal, N=64, W=64):
+def schmidl_cox_metric(iq_signal, N=16, W=64):
     # 1. Quitamos el DC Offset SOLO localmente para destruir la falsa correlación del hardware
     iq_clean = iq_signal - np.mean(iq_signal)
     
@@ -120,6 +120,20 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             if inicio_visual + fs <= len(bloque_iq):
                                 chunk_trigger = bloque_iq[inicio_visual : inicio_visual + fs].copy()
                                 
+                                # --- ESTIMACIÓN Y CORRECCIÓN DE CFO GRUESO ---
+                                # El ángulo de P es la fase acumulada por el error de frecuencia en N=16 muestras
+                                fase_16_muestras = np.angle(P[muestra_local])
+                                
+                                # Calculamos el error de fase por cada muestra individual
+                                desfase_por_muestra = fase_16_muestras / 16.0
+                                
+                                # Creamos un vector de tiempo (índices n) alineado de forma que 
+                                # n=0 sea exactamente el primer instante del STS
+                                n_array = np.arange(len(chunk_trigger)) - margen_visual
+                                
+                                # Frenamos la rotación multiplicando por la exponencial inversa
+                                chunk_trigger = chunk_trigger * np.exp(-1j * desfase_por_muestra * n_array)
+
                                 # Extraemos el preámbulo para el Q3 (Las 400 muestras)
                                 if sts_abs_idx + 400 <= len(bloque_iq):
                                     preamble_chunk = bloque_iq[sts_abs_idx : sts_abs_idx + 400]
