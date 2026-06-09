@@ -424,6 +424,11 @@ class MainWindow(QMainWindow):
         event.accept()
         
     def keyPressEvent(self, event):
+        # Pausa con el espacio
+        if event.key() == Qt.Key.Key_Space:
+            self.pause_btn.click() # Simula el click físico en el botón
+            return # Cortamos la ejecución acá para que no haga nada más
+
         # Le pasamos el evento al manager. Si lo pudo procesar (porque era una flechita),
         # devuelve True. Si devolvió False, dejamos que la ventana haga lo suyo por defecto.
         handled = self.marker_manager.handle_key_press(

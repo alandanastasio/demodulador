@@ -4,7 +4,7 @@ from scipy.ndimage import uniform_filter1d
 from .base import DemoduladorBase
 
 # --- SCHMIDL & COX ---
-def schmidl_cox_metric(iq_signal, N=16, W=64):
+def schmidl_cox_metric(iq_signal, N=64, W=64):
     # 1. Quitamos el DC Offset SOLO localmente para destruir la falsa correlación del hardware
     iq_clean = iq_signal - np.mean(iq_signal)
     
