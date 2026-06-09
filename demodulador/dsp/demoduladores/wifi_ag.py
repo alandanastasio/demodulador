@@ -119,6 +119,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             
                             if inicio_visual + fs <= len(bloque_iq):
                                 chunk_trigger = bloque_iq[inicio_visual : inicio_visual + fs].copy()
+
+                                chunk_trigger = chunk_trigger - np.mean(chunk_trigger) #matamos el dc antes de rotar
                                 
                                 # --- ESTIMACIÓN Y CORRECCIÓN DE CFO GRUESO ---
                                 # El ángulo de P es la fase acumulada por el error de frecuencia en N=16 muestras
