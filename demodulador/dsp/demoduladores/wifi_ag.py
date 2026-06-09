@@ -3,28 +3,27 @@ import threading
 from scipy.ndimage import uniform_filter1d
 from .base import DemoduladorBase
 
-# --- LA FUNCIÓN DE PABLO INTACTA ---
-def schmidl_cox_metric(iq_signal, N=16):
-    L = len(iq_signal)
-    ventana = np.ones(N)
-    prod = np.conj(iq_signal[:-N]) * iq_signal[N:]
+# --- SCHMIDL & COX ---
+def schmidl_cox_metric(iq_signal, N=16, W=64):
+    # 1. Quitamos el DC Offset SOLO localmente para destruir la falsa correlación del hardware
+    iq_clean = iq_signal - np.mean(iq_signal)
+    
+    # 2. Productos cruzados y energía
+    prod = np.conj(iq_clean[:-N]) * iq_clean[N:]
+    energy = np.abs(iq_clean[N:]) ** 2
+    
+    # 3. Integración sobre una ventana LARGA (W=64). 
+    # Esto aplasta el ruido a 0 y mantiene el STS en 1.
+    ventana = np.ones(W)
     P = np.convolve(prod, ventana, mode='valid')
-    energy = np.abs(iq_signal[N:]) ** 2
     R = np.convolve(energy, ventana, mode='valid')
     
-    P = P[:L - 2 * N]
-    R = R[:L - 2 * N]
+    # 4. El silenciador de ruido absoluto (usando el pico máximo)
+    max_energia = np.max(R)
+    mascara_energia = R > (0.2 * max_energia)
     
-    # Calculamos el promedio de energía de todo el segmento para tener una referencia
-    energia_media = np.mean(R)
-    
-    # Creamos una máscara: True donde la energía es al menos un 10% de la media
-    mascara_energia = R > (0.1 * energia_media)
-    
-    # Calculamos la métrica normal
+    # 5. Métrica final
     M = np.abs(P) ** 2 / (R ** 2 + 1e-10)
-    
-    # Ponemos a cero la métrica donde no hay suficiente energía real
     M[~mascara_energia] = 0.0 
     
     return M, P, R
@@ -101,15 +100,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
                         if len(segmento) < 64:
                             continue
                           
-                        # 2. BÚSQUEDA FINA (Schmidl & Cox sobre el segmento recortado)
+                        # 2. BÚSQUEDA FINA (Schmidl & Cox con el silenciador de energía)
                         M, P, R = schmidl_cox_metric(segmento, N=16)
                         if len(M) == 0: continue
                         
-                        # Normalizamos la métrica entre 0 y 1
-                        M_norm = M / (np.max(M) + 1e-12)
-                        
-                        # Buscamos el índice exacto donde la métrica supera el umbral de 0.7
-                        indices_sts = np.where(M_norm > 0.7)[0]
+                        # Buscamos el índice exacto donde la correlación absoluta supera 0.7
+                        indices_sts = np.where(M > 0.7)[0]
                         
                         if len(indices_sts) > 0:
                             muestra_local = indices_sts[0]
@@ -121,11 +117,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             if inicio_visual + fs <= len(bloque_iq):
                                 chunk_trigger = bloque_iq[inicio_visual : inicio_visual + fs].copy()
                                 
-                                # --- NUEVO: EXTRAEMOS EL PREÁMBULO PARA EL Q3 ---
-                                # Agarramos exactamente 400 muestras desde el inicio calculado del STS
+                                # Extraemos el preámbulo para el Q3 (Las 400 muestras)
                                 if sts_abs_idx + 400 <= len(bloque_iq):
                                     preamble_chunk = bloque_iq[sts_abs_idx : sts_abs_idx + 400]
-                                    # Le pasamos la magnitud (envolvente) para graficar
                                     metrica_sc = np.abs(preamble_chunk) 
                                 else:
                                     metrica_sc = None
