@@ -109,7 +109,10 @@ class DemoduladorWiFiAG(DemoduladorBase):
                         
                         if len(indices_sts) > 0:
                             muestra_local = indices_sts[0]
-                            sts_abs_idx = ini_ext + muestra_local
+                            
+                            # Compensamos la anticipación de la ventana de 64 muestras
+                            offset_calibracion = 16 
+                            sts_abs_idx = ini_ext + muestra_local + offset_calibracion
                             
                             margen_visual = 150
                             inicio_visual = max(0, sts_abs_idx - margen_visual)
