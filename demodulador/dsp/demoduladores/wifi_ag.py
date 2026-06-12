@@ -20,7 +20,7 @@ def schmidl_cox_metric(iq_signal, N=16, W=64):
     
     # 4. El silenciador de ruido absoluto (usando el pico máximo)
     max_energia = np.max(R)
-    mascara_energia = R > (0.2 * max_energia)
+    mascara_energia = R > (0.5 * max_energia)
     
     # 5. Métrica final
     M = np.abs(P) ** 2 / (R ** 2 + 1e-10)
