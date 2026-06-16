@@ -20,6 +20,7 @@ from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 # Managers
+
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from trace_manager import TraceManager
