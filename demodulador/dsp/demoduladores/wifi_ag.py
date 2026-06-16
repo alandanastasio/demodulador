@@ -107,7 +107,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     for inicio in inicios_burst:
                         # Extraemos un "barrio" alrededor de donde saltó la energía.
                         # 200 muestras antes y 2000 después para asegurar que captamos el preámbulo.
-                        ini_ext = max(0, inicio - 200)
+                        ini_ext = max(0, inicio)
                         fin_ext = min(len(bloque_iq), inicio + 2000)
                         segmento = bloque_iq[ini_ext:fin_ext]
                         
