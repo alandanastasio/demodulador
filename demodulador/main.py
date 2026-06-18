@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         
         # 4096 muestras a 20 MHz representan 204.8 microsegundos
         self.q2_widget.setXRange(0, 204.8) 
-        self.q2_widget.setYRange(-1.5, 1.5) # Rango típico de la salida del SDR
+        self.q2_widget.setYRange(-0.25, 1.5) # Rango típico de la salida del SDR
         
         # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
@@ -226,14 +226,17 @@ class MainWindow(QMainWindow):
         # Volvemos a setear línea normal (por si veníamos de otro modo)
         self.q3_curve.setData([], [], pen=pg.mkPen(color="#CBE8F4", width=1.5), symbol=None)
 
-        # --- CUADRANTE 4: ESTADO DE SUBPORTADORAS ---
-        self.q4L_widget.setTitle("Magnitud de Subportadoras (64 Bins)")
-        self.q4L_widget.setLabel('bottom', 'Índice de Subportadora (-32 a +31)')
-        self.q4L_widget.setLabel('left', 'Magnitud')
-        self.q4L_widget.setXRange(-32, 32)
-        self.q4L_widget.setYRange(0, 5) # Luego lo hacemos dinámico
+        # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
+        self.q4L_widget.setTitle("Constelación (Símbolos de Datos 64-QAM)")
+        self.q4L_widget.setLabel('bottom', 'En Fase (I)')
+        self.q4L_widget.setLabel('left', 'Cuadratura (Q)')
+        self.q4L_widget.setXRange(-2, 2)
+        self.q4L_widget.setYRange(-2, 2)
+        self.q4L_widget.showGrid(x=True, y=True, alpha=0.5) # Agregamos una grilla de fondo
+        self.q4L_widget.setAspectLocked(True)
         
-        self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        # Quitamos la línea (pen=None) y usamos puntos (symbol='o')
+        self.q4L_curve.setData([], [], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
 
         # --- ARQUITECTURA DSP Y HARDWARE ---
         state['demod_mode'] = 'wifi_ag'
@@ -300,6 +303,7 @@ class MainWindow(QMainWindow):
         self.q4R_widget.setTitle("Canal Derecho (R) - Vacío")
         self.q4L_curve.setData([], [])
         self.q4R_curve.setData([], [])
+        self.q4L_signal_curve.setData([], [])
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.fm_metrics_label.setText("")
@@ -513,11 +517,37 @@ class MainWindow(QMainWindow):
                     signal_env = np.abs(raw_samples)
                     self.q2_curve.setData(t_axis_us, signal_env)
                 
-                # ---  GRÁFICAMOS SCHMIDL & COX EN EL Q3 ---
+                # --- GRÁFICAMOS SCHMIDL & COX EN EL Q3 ---
                 if mpx_time is not None:
-                    # mpx_time trae la métrica S-C (array de valores entre 0 y 1)
                     eje_x_sc = np.arange(len(mpx_time))
                     self.q3_curve.setData(eje_x_sc, mpx_time)
+
+                # --- GRAFICAMOS LAS CONSTELACIÓNES EN Q4 ---
+                # Recibimos las coordenadas X(I) e Y(Q) a través de los canales de audio
+                if audio_L is not None and audio_R is not None:
+                    # 1. Pasamos nuevamente los parámetros del símbolo para refrescar el ScatterPlotItem
+                    self.q4L_curve.setData(
+                        audio_L, 
+                        audio_R, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen=None, 
+                        symbolBrush="#00FFFF"
+                    )
+                if PSD_audio is not None and f_axis_audio is not None:
+                    self.q4L_signal_curve.setData(
+                        PSD_audio, 
+                        f_axis_audio, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen="#FF00FF", 
+                        symbolBrush=None
+                    )
+                    
+                    # 2. Forzamos a Qt a repintar la escena del widget de forma manual e inmediata
+                    self.q4L_widget.scene().update()
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -684,6 +714,7 @@ class MainWindow(QMainWindow):
         self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
+        self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
 
         # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
         self.wifi_regions = []

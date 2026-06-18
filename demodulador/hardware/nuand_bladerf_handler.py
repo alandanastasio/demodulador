@@ -11,12 +11,12 @@ class BladeRFHandler(SDRBase):
         self.rx_ch = self.sdr.Channel(bladerf.CHANNEL_RX(0))
         self._thread = None
         
-        # Configuración del buffer de altísima velocidad
+        # Configuración del buffer 
         self.sdr.sync_config(
             layout=bladerf._bladerf.ChannelLayout.RX_X1,
             fmt=bladerf._bladerf.Format.SC16_Q11,
             num_buffers=16,
-            buffer_size=32768,
+            buffer_size=8192,
             num_transfers=8,
             stream_timeout=3500
         )
@@ -35,7 +35,7 @@ class BladeRFHandler(SDRBase):
 
     def set_sample_rate(self, sr_hz: float):
         self.rx_ch.sample_rate = int(sr_hz)
-        self.rx_ch.bandwidth = int(sr_hz / 2) # Filtro antialiasing a la mitad
+        self.rx_ch.bandwidth = int(sr_hz )
 
     def set_gain(self, gain_db: int):
         self.rx_ch.gain = int(gain_db)
@@ -45,7 +45,7 @@ class BladeRFHandler(SDRBase):
         Hilo dedicado a succionar datos del USB mediante sync_rx.
         """
         bytes_per_sample = 4 # SC16_Q11 = 2 enteros de 16 bits (I y Q)
-        buf_size = 32768
+        buf_size = 8192
         buf = bytearray(buf_size * bytes_per_sample)
         
         self.rx_ch.enable = True
