@@ -6,7 +6,7 @@ import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
-                             QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
+                           QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
                              QPushButton, QListWidgetItem, QGridLayout)
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
@@ -14,13 +14,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
 from hardware.hackrf_handler import HackRFHandler
 from hardware.rtlsdr_handler import RtlSdrHandler
 from hardware.nuand_bladerf_handler import BladeRFHandler
+from hardware.ettus_usrpb200_handler import USRPB200Handler
 # DSP (Plugins)
 from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 # Managers
-
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from trace_manager import TraceManager
@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        self.radio.set_muestras_por_bloque(8192)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
@@ -245,6 +246,10 @@ class MainWindow(QMainWindow):
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
         
+        # Le decimos a la radio que mande bloques enteros de 2ms (40.000 muestras)
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            self.radio.set_muestras_por_bloque(state['sample_rate'] * 0.002)
+        
         self.demodulador_actual = DemoduladorWiFiAG()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
@@ -262,6 +267,7 @@ class MainWindow(QMainWindow):
         self.sr_combo.blockSignals(False)
 
     def set_wbfm_audio_mode(self):
+        self.radio.set_muestras_por_bloque(8192)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
@@ -278,6 +284,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        self.radio.set_muestras_por_bloque(8192)
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_container.hide() # Ocultamos el contenedor
@@ -979,12 +986,17 @@ class MainWindow(QMainWindow):
         elif "Nuand bladeRF x40" in self.radio.nombre:
             self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
             self.sr_combo.setCurrentText("20 MHz")
+        elif "Ettus USRP B200" in self.radio.nombre:
+            # La B200 soporta casi cualquier rate (hasta 56 MHz), ponemos valores enteros seguros
+            self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "16 MHz", "20 MHz", "32 MHz"])
+            # Arrancamos en 2 MHz para evitar el Overflow apenas abre el programa
+            self.sr_combo.setCurrentText("2 MHz") 
             
         self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
         form_layout.addRow(self.sr_label, self.sr_combo)
 
         # 3. GANANCIAS (Aparecen, cambian de nombre o desaparecen)
-        self.lna_combo = QComboBox() # Creamos las variables para no romper callbacks
+        self.lna_combo = QComboBox() 
         self.vga_combo = QComboBox()
 
         if "HackRF One" in self.radio.nombre:
@@ -1000,10 +1012,16 @@ class MainWindow(QMainWindow):
 
         elif "Nuand bladeRF x40" in self.radio.nombre:
             self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)])
-            self.lna_combo.setCurrentText("0 dB") # Arrancamos en 0 para no tener tanto ruido al inicio
+            self.lna_combo.setCurrentText("0 dB") 
             self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
-            # Lo llamamos GLOBAL GAIN porque la bladeRF maneja una sola etapa unificada
             form_layout.addRow(QLabel("GLOBAL GAIN:"), self.lna_combo)
+            
+        elif "Ettus USRP B200" in self.radio.nombre:
+            # La B200 tiene una ganancia unificada que va de 0 a ~73/76 dB. 
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 76, 5)])
+            self.lna_combo.setCurrentText("40 dB") # Arrancamos por la mitad
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            form_layout.addRow(QLabel("RX GAIN:"), self.lna_combo)
             
         # Si es "rtlsdr", directamente NO agregamos los botones de ganancia al layout.
 
@@ -1150,6 +1168,11 @@ class StartupWindow(QMainWindow):
                 self.device_list.addItem("Nuand bladeRF x40")
                 devices_found += 1
         except: pass
+        try:
+            if usb.core.find(idVendor=0x2500):
+                self.device_list.addItem("Ettus USRP B200")
+                devices_found += 1
+        except: pass
 
         if devices_found == 0:
             item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
@@ -1170,6 +1193,9 @@ class StartupWindow(QMainWindow):
         elif "bladeRF" in device_name:
             print("Iniciando bladeRF...")
             radio_handler = BladeRFHandler(rx_callback=None)
+        elif "Ettus USRP B200" in device_name:
+            print("Iniciando Ettus B200...")
+            radio_handler = USRPB200Handler(rx_callback=None)
         else:
             return
 

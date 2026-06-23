@@ -120,6 +120,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
         self.last_heavy_results = {}
         self.nuevos_datos_listos = False
         self._lock = threading.Lock()  # Protege last_heavy_results y nuevos_datos_listos
+        self.pausa_entre_snapshots = 0.3
+        self.proxima_captura = 0.0
 
     @property
     def id(self): return "wifi_ag"
@@ -139,27 +141,27 @@ class DemoduladorWiFiAG(DemoduladorBase):
             self.nuevos_datos_listos = False
             self.last_heavy_results = {}
 
-    def procesar(self, muestras_iq: np.ndarray) -> dict:
-        self.buffer_medicion.append(muestras_iq)
-        self.muestras_acumuladas += len(muestras_iq)
-        
-        time.sleep(0.5)
-        muestras_necesarias = int(self.sample_rate * 0.001) #capturamos 1.000us
-        if self.muestras_acumuladas >= muestras_necesarias:
-            if not self.is_processing:
-                bloque_iq = np.concatenate(self.buffer_medicion)[:muestras_necesarias]
-                # Reseteamos el buffer SOLO cuando aceptamos el bloque para procesar.
-                # Si is_processing está activo, seguimos acumulando para no perder bursts.
-                self.buffer_medicion = []
-                self.muestras_acumuladas = 0
-                self.is_processing = True
-                threading.Thread(target=self._procesar_fondo, args=(bloque_iq,), daemon=True).start()
-
+    def procesar(self, muestras_iq):
         with self._lock:
             if self.nuevos_datos_listos:
                 self.nuevos_datos_listos = False
                 return self.last_heavy_results
-            
+
+        ahora = time.time()
+        
+        # Si estamos procesando o en pausa, descartamos este súper-bloque entero
+        if self.is_processing or ahora < self.proxima_captura:
+            return None
+
+        # Si llegamos acá, muestras_iq YA ES el bloque de 4ms entero.
+        self.is_processing = True
+
+        threading.Thread(
+            target=self._procesar_fondo,
+            args=(muestras_iq.copy(),), # Le pasamos el paquete directo
+            daemon=True
+        ).start()
+
         return None
 
     def _procesar_fondo(self, bloque_iq: np.ndarray):
@@ -169,7 +171,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
             # --- 0. LIMPIEZA DE HARDWARE ---
             # Eliminamos la fuga del oscilador local (DC Offset) de todo el bloque
-            bloque_iq = bloque_iq - np.mean(bloque_iq)
+            #bloque_iq = bloque_iq - np.mean(bloque_iq)
 
             # 1. BÚSQUEDA GRUESA (Energía)
             energia = np.abs(bloque_iq) ** 2
@@ -198,6 +200,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
             # ---  RECORTE DEL BURST (chunk_norm) ---
             margen_muestras = int(10e-6 * self.sample_rate) # 10 us de margen (200 muestras a 20MHz)
             chunk_norm = energia_norm # Por defecto (si no hay bursts) mandamos todo
+
+            inicio_recorte = 0
             
             if n_bursts >= 2:
                 # Agarramos el segundo burst (índice 1)
@@ -487,14 +491,19 @@ class DemoduladorWiFiAG(DemoduladorBase):
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
+            # ENVIAMOS ARRAYS VACÍOS EN LUGAR DE NONE PARA FORZAR LA LIMPIEZA DE LA GUI
+            audio_L_out = puntos_corr.real if puntos_corr is not None else np.array([])
+            audio_R_out = puntos_corr.imag if puntos_corr is not None else np.array([])
+            
             resultados = {
                 'psd_rf': PSD,
                 'rf_chunk': chunk_norm,
                 'mpx_time': M_norm,  
-                'audio_time_L': puntos_corr.real if puntos_corr is not None else None,
-                'audio_time_R': puntos_corr.imag if puntos_corr is not None else None,
+                'audio_time_L': audio_L_out,
+                'audio_time_R': audio_R_out,
                 'psd_mpx': S_data.real if 'S_data' in locals() else None,
                 'f_axis_mpx': S_data.imag if 'S_data' in locals() else None,
+                'metricas': {'inicio_recorte': inicio_recorte} 
             }
 
             with self._lock:
@@ -503,3 +512,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
             
         finally:
             self.is_processing = False
+            self.proxima_captura = (
+                time.time() +
+                self.pausa_entre_snapshots
+            )
