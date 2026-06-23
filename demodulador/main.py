@@ -211,20 +211,23 @@ class MainWindow(QMainWindow):
         # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
         
-        # --- CUADRANTE 3: ESTRUCTURA DEL PREÁMBULO ---
-        self.q3_widget.setTitle("Estructura del Preámbulo (Zoom Sincronizado)")
-        self.q3_widget.setLabel('bottom', 'Muestras (0 = Inicio STS)')
-        self.q3_widget.setLabel('left', 'Amplitud')
+        # --- CUADRANTE 3: Metrica S-C ---
+        self.q3_widget.setTitle("Metrica S-C normalizada")
+        self.q3_widget.setLabel('bottom', 'T')
+        self.q3_widget.setLabel('left', 'Relación')
         self.q3_widget.setXRange(0, 400)
         self.q3_widget.setYRange(0, 1.5)
         
         # Mostramos las cajas de colores
         # Mostramos las cajas de colores y sus textos
-        for lr in getattr(self, 'wifi_regions', []): lr.show()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.show()
+        for lr in getattr(self, 'wifi_regions', []): lr.hide()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         
         # Volvemos a setear línea normal (por si veníamos de otro modo)
-        self.q3_curve.setData([], [], pen=pg.mkPen(color="#CBE8F4", width=1.5), symbol=None)
+        self.q3_curve.setData([], [], pen=pg.mkPen(color="#FFC800", width=1.5), symbol=None)
+
+        self.q3_sc_threshold2.show()
+        self.q3_sc_threshold.show()
 
         # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
         self.q4L_widget.setTitle("Constelación (Símbolos de Datos 64-QAM)")
@@ -715,6 +718,25 @@ class MainWindow(QMainWindow):
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
         self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+
+        # --- AÑADIR ESTA LÍNEA DE UMBRAL PARA EL S-C (Línea discontinua roja a 0.7) ---
+        self.q3_sc_threshold = pg.InfiniteLine(
+            pos=0.7, 
+            angle=0, 
+            pen=pg.mkPen(color="#FF3333", width=0.75, style=Qt.PenStyle.SolidLine), 
+            movable=False
+        )
+        self.q3_widget.addItem(self.q3_sc_threshold)
+        self.q3_sc_threshold.hide() # Arranca oculta
+
+        self.q3_sc_threshold2 = pg.InfiniteLine(
+            pos=0.7, 
+            angle=0, 
+            pen=pg.mkPen(color="#FF3333", width=0.5, style=Qt.PenStyle.DashLine), 
+            movable=False
+        )
+        self.q3_widget.addItem(self.q3_sc_threshold2)
+        self.q3_sc_threshold2.hide() # Arranca oculta
 
         # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
         self.wifi_regions = []

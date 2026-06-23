@@ -490,7 +490,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
             resultados = {
                 'psd_rf': PSD,
                 'rf_chunk': chunk_norm,
-                'mpx_time': envolvente_preambulo,  
+                'mpx_time': M_norm,  
                 'audio_time_L': puntos_corr.real if puntos_corr is not None else None,
                 'audio_time_R': puntos_corr.imag if puntos_corr is not None else None,
                 'psd_mpx': S_data.real if 'S_data' in locals() else None,
