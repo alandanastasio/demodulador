@@ -246,10 +246,16 @@ class MainWindow(QMainWindow):
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
         
-        # Le decimos a la radio que mande bloques enteros de 2ms (40.000 muestras)
+        # Le decimos a la radio que mande bloques enteros de 2ms (40.000 muestras) y lo redondeamos a una potencia de 2
         if hasattr(self.radio, 'set_muestras_por_bloque'):
-            self.radio.set_muestras_por_bloque(state['sample_rate'] * 0.002)
-        
+            muestras = int(state['sample_rate'] * 0.002)
+            # Redondear a la potencia de 2 más cercana hacia arriba
+            pot2 = 1
+            while pot2 < muestras:
+                pot2 *= 2
+            self.radio.set_muestras_por_bloque(pot2)
+            print(f"[bladeRF] set_muestras_por_bloque: pedido={muestras}, usando={pot2}")
+
         self.demodulador_actual = DemoduladorWiFiAG()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
