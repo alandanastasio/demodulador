@@ -67,7 +67,7 @@ def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001):
             if metrics[state] == INF:
                 continue
             for inp in [0, 1]:
-                next_s, b0, b1 = conv_output(inp, state)
+                next_s, b0, b1 = conv_output(state, inp)
                 # Distancia de Hamming
                 dist = (b0 ^ rx0) + (b1 ^ rx1)
                 m = metrics[state] + dist
@@ -88,27 +88,37 @@ def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001):
     return decoded
 
 def deinterleave_signal(bits, NCBPS=48, NBPSC=1):
+    """
+    Desentrelazador RX según IEEE 802.11-2007 §17.3.5.6.
+    
+    TX interleaver aplica dos permutaciones sobre los bits codificados:
+      1ª permutación (k→i): i = (NCBPS/16)*(k mod 16) + floor(k/16)
+      2ª permutación (i→j): j = s*floor(i/s) + (i + NCBPS - floor(16*i/NCBPS)) mod s
+    
+    RX debe invertir en orden inverso: primero deshacer la 2ª, luego la 1ª.
+    """
     s = max(NBPSC // 2, 1)
     
-    # Permutacion inversa de la segunda permutacion
-    # j -> i: invertir j = s*floor(i/s) + (i + floor(16*i/NCBPS)) % s
-    j = np.arange(NCBPS)
-    i_step1 = np.zeros(NCBPS, dtype=int)
+    # --- Invertir la 2ª permutación (j → i) ---
+    # Construimos el mapa forward i→j y lo invertimos
+    fwd2 = np.zeros(NCBPS, dtype=int)
     for i in range(NCBPS):
-        jj = (s * (i // s) + (i + int(16 * i / NCBPS)) % s) % NCBPS
-        i_step1[jj] = i
-    bits_step1 = bits[i_step1]
-    
-    # Permutacion inversa de la primera permutacion
-    # k -> i: invertir k = (NCBPS/16)*(i%16) + floor(i/16)
-    k = np.arange(NCBPS)
-    i_step2 = np.zeros(NCBPS, dtype=int)
+        j = (s * (i // s) + (i + NCBPS - int(16 * i / NCBPS)) % s) % NCBPS
+        fwd2[i] = j
+    inv2 = np.zeros(NCBPS, dtype=int)
     for i in range(NCBPS):
-        kk = (NCBPS // 16) * (i % 16) + i // 16
-        i_step2[kk] = i
-    bits_step2 = bits_step1[i_step2]
+        inv2[fwd2[i]] = i
+    bits_step1 = bits[inv2]
     
-    return bits_step2
+    # --- Invertir la 1ª permutación (i → k) ---
+    # Forward: i = (NCBPS/16)*(k mod 16) + floor(k/16)
+    # Invertimos: coded[k] = step1[fwd1[k]]
+    result = np.zeros(NCBPS, dtype=int)
+    for k in range(NCBPS):
+        i = (NCBPS // 16) * (k % 16) + k // 16
+        result[k] = bits_step1[i]
+    
+    return result
 
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
@@ -168,6 +178,10 @@ class DemoduladorWiFiAG(DemoduladorBase):
         try:
             fs = self.fft_size
             puntos_corr = None
+            M_norm = np.array([])
+            chunk_norm = np.array([])
+            inicio_recorte = 0
+            wifi_metrics = {}
 
             # --- 0. LIMPIEZA DE HARDWARE ---
             # Eliminamos la fuga del oscilador local (DC Offset) de todo el bloque
@@ -286,13 +300,20 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             if len(frame_norm) >= 400:
                                 envolvente_preambulo = np.abs(frame_norm[:400])
                             
-                            # LTS correcto segun estandar 802.11-2007, tabla 18-7
-                            # Orden natural: subportadora 0, +1, ..., +31, -32, ..., -1
+                            # LTS correcto según IEEE 802.11-2007, Ecuación (17-3)
+                            # Orden de bins FFT: bin 0=DC, bin 1=+1, ..., bin 26=+26,
+                            # bins 27-37=guard, bin 38=-26, ..., bin 63=-1
                             LTS_FREQ = np.array([
-                                0, 1,-1,-1, 1, 1,-1, 1,-1, 1, 1, 1, 1, 1, 1,-1,
-                                -1, 1, 1,-1, 1,-1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-                                0, 0, 0, 0, 0, 0,-1,-1, 1, 1,-1, 1,-1, 1,-1,-1,
-                                -1,-1,-1, 1, 1,-1,-1, 1,-1, 1,-1, 1, 1, 1, 1, 0
+                            #    DC   +1   +2   +3   +4   +5   +6   +7   +8   +9  +10  +11  +12  +13  +14  +15
+                                 0,   1,  -1,  -1,   1,   1,  -1,   1,  -1,   1,  -1,  -1,  -1,  -1,  -1,   1,
+                            #  +16  +17  +18  +19  +20  +21  +22  +23  +24  +25  +26  guard...
+                                 1,  -1,  -1,   1,  -1,   1,  -1,   1,   1,   1,   1,   0,   0,   0,   0,   0,
+                            #  guard...                                            -26  -25  -24  -23  -22  -21
+                                 0,   0,   0,   0,   0,   0,   1,   1,  -1,  -1,   1,   1,
+                            #  -20  -19  -18  -17  -16  -15  -14  -13  -12  -11  -10   -9   -8   -7   -6   -5
+                                -1,   1,  -1,   1,   1,   1,   1,   1,   1,  -1,  -1,   1,   1,  -1,   1,  -1,
+                            #   -4   -3   -2   -1
+                                 1,   1,   1,   1
                             ], dtype=complex)
                             print(f"LTS_REF tiene {len(LTS_FREQ)} elementos")
 
@@ -350,8 +371,29 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             S_data = S_eq[data_idx]
 
+                            # === DEBUG: verificar calidad de la ecualización ===
+                            # Para BPSK, los puntos deberían estar cerca de ±1 en el eje real
+                            print(f"--- DEBUG SIGNAL field ---")
+                            print(f"H magnitud media (activas): {np.mean(np.abs(H[activas_lts])):.4f}")
+                            print(f"H fase media (activas): {np.mean(np.angle(H[activas_lts]))*180/np.pi:.1f}°")
+                            print(f"S_data primeros 8: {np.round(S_data[:8], 2)}")
+                            print(f"S_data magnitud media: {np.mean(np.abs(S_data)):.4f}")
+                            print(f"S_data fase std: {np.std(np.angle(S_data))*180/np.pi:.1f}°")
+                            # Si la fase std es ~180° -> BPSK correcto
+                            # Si la fase std es ~90° -> hay un problema de rotación
+                            # Si la fase std es baja -> todos los puntos en la misma dirección
+                            
+                            # Verificar el LTS: ¿realmente se parece al patrón esperado?
+                            lts1_fft = LTS1_rx[activas_lts]
+                            lts_ref  = LTS_FREQ[activas_lts]
+                            # Correlación entre LTS recibido y referencia
+                            corr = np.abs(np.sum(lts1_fft * np.conj(lts_ref))) / (np.sqrt(np.sum(np.abs(lts1_fft)**2)) * np.sqrt(np.sum(np.abs(lts_ref)**2)))
+                            print(f"Correlación LTS1_rx vs LTS_FREQ: {corr:.4f} (debería ser ~1.0)")
+                            print(f"--- FIN DEBUG ---")
+
                             # El campo SIGNAL usa BPSK: decidir por signo de la parte real
-                            bits_raw = (S_data.real < 0).astype(int)
+                            # Con el LTS corregido, la convención es: real>0 → bit 1, real<0 → bit 0
+                            bits_raw = (S_data.real > 0).astype(int)
                             print(f"48 bits raw del campo SIGNAL:")
                             print(bits_raw)
 
@@ -466,7 +508,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             pn = pilot_pn_sequence(N_simbolos + 1)
                             # Valor del piloto: 1 - 2*pn (mapeo 0->+1, 1->-1)
-                            pilot_ref = np.array([1, 1, 1, -1])  # subportadoras +7,+21,-21,-7
+                            # Según IEEE 802.11, P_{-21, -7, 7, 21} = {1, 1, 1, -1}
+                            # En orden de FFT (+7, +21, -21, -7) esto es [1, -1, 1, 1]
+                            pilot_ref = np.array([1, -1, 1, 1])  # subportadoras +7,+21,-21,-7
 
                             pilot_idx_ordered = [7, 21, 43, 57]  # orden en FFT
 

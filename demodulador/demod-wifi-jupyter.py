@@ -470,27 +470,34 @@ s = max(NBPSC // 2, 1)  # s=1 para BPSK
 # Primera permutacion inversa: i -> k
 # k = (NCBPS/16) * (i % 16) + floor(i/16)
 def deinterleave_signal(bits, NCBPS=48, NBPSC=1):
+    """
+    Desentrelazador RX según IEEE 802.11-2007 §17.3.5.6.
+    
+    TX interleaver aplica dos permutaciones sobre los bits codificados:
+      1ª permutación (k→i): i = (NCBPS/16)*(k mod 16) + floor(k/16)
+      2ª permutación (i→j): j = s*floor(i/s) + (i + NCBPS - floor(16*i/NCBPS)) mod s
+    
+    RX debe invertir en orden inverso: primero deshacer la 2ª, luego la 1ª.
+    """
     s = max(NBPSC // 2, 1)
     
-    # Permutacion inversa de la segunda permutacion
-    # j -> i: invertir j = s*floor(i/s) + (i + floor(16*i/NCBPS)) % s
-    j = np.arange(NCBPS)
-    i_step1 = np.zeros(NCBPS, dtype=int)
+    # --- Invertir la 2ª permutación (j → i) ---
+    fwd2 = np.zeros(NCBPS, dtype=int)
     for i in range(NCBPS):
-        jj = (s * (i // s) + (i + int(16 * i / NCBPS)) % s) % NCBPS
-        i_step1[jj] = i
-    bits_step1 = bits[i_step1]
-    
-    # Permutacion inversa de la primera permutacion
-    # k -> i: invertir k = (NCBPS/16)*(i%16) + floor(i/16)
-    k = np.arange(NCBPS)
-    i_step2 = np.zeros(NCBPS, dtype=int)
+        j = (s * (i // s) + (i + NCBPS - int(16 * i / NCBPS)) % s) % NCBPS
+        fwd2[i] = j
+    inv2 = np.zeros(NCBPS, dtype=int)
     for i in range(NCBPS):
-        kk = (NCBPS // 16) * (i % 16) + i // 16
-        i_step2[kk] = i
-    bits_step2 = bits_step1[i_step2]
+        inv2[fwd2[i]] = i
+    bits_step1 = bits[inv2]
     
-    return bits_step2
+    # --- Invertir la 1ª permutación (i → k) ---
+    result = np.zeros(NCBPS, dtype=int)
+    for k in range(NCBPS):
+        i = (NCBPS // 16) * (k % 16) + k // 16
+        result[k] = bits_step1[i]
+    
+    return result
 
 bits_deint = deinterleave_signal(bits_raw)
 print("Bits desentrelazados:")
@@ -534,7 +541,7 @@ def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001):
             if metrics[state] == INF:
                 continue
             for inp in [0, 1]:
-                next_s, b0, b1 = conv_output(inp, state)
+                next_s, b0, b1 = conv_output(state, inp)
                 # Distancia de Hamming
                 dist = (b0 ^ rx0) + (b1 ^ rx1)
                 m = metrics[state] + dist
