@@ -8,7 +8,7 @@ from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
-                             QPushButton, QListWidgetItem, QGridLayout)
+                             QPushButton, QListWidgetItem, QGridLayout, QCheckBox)
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
-        self.radio.set_muestras_por_bloque(8192)
+        self.radio.set_muestras_por_bloque(32768)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.q2_widget.setYRange(-80, 20)
 
         self.q3_widget.setTitle("Señal Demodulada en el Tiempo")
+        self.q3_widget.getViewBox().invertY(False)
+        self.q3_widget.setXLink(None)
         self.q3_widget.setLabel('bottom', 'Tiempo [ms]')
         self.q3_widget.setLabel('left', 'Desviación [kHz]') 
         self.q3_widget.setXRange(0, 10) 
@@ -152,6 +154,7 @@ class MainWindow(QMainWindow):
         # Mostrar las metricas
         self.fm_metrics_label.show() 
         self.stereo_metrics_label.show()
+        self.wifi_metrics_label.hide()
         
         self.q2_widget.show()
         self.q3_widget.show()
@@ -187,6 +190,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.show()
 
         # 2. Mostramos los paneles y expandimos la grilla a 2x2
         self.q2_widget.show()
@@ -214,6 +218,8 @@ class MainWindow(QMainWindow):
         
         # --- CUADRANTE 3: Metrica S-C ---
         self.q3_widget.setTitle("Metrica S-C normalizada")
+        self.q3_widget.getViewBox().invertY(False)
+        self.q3_widget.setXLink(None)
         self.q3_widget.setLabel('bottom', 'T')
         self.q3_widget.setLabel('left', 'Relación')
         self.q3_widget.setXRange(0, 400)
@@ -273,7 +279,7 @@ class MainWindow(QMainWindow):
         self.sr_combo.blockSignals(False)
 
     def set_wbfm_audio_mode(self):
-        self.radio.set_muestras_por_bloque(8192)
+        self.radio.set_muestras_por_bloque(32768)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
@@ -290,9 +296,22 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
-        self.radio.set_muestras_por_bloque(8192)
+        self.radio.set_muestras_por_bloque(32768)
         self.q2_widget.hide()
-        self.q3_widget.hide()
+        
+        if getattr(self, 'waterfall_enabled', False):
+            self.q3_widget.setTitle("Espectrograma (Waterfall)")
+            self.q3_widget.setLabel('left', 'Tiempo [ms]')
+            self.q3_widget.getViewBox().invertY(True)
+            self.q3_widget.setXLink(self.freq_plot)
+            self.q3_widget.show()
+        else:
+            self.q3_widget.setTitle("2-1 (Vacío)")
+            self.q3_widget.setLabel('left', '')
+            self.q3_widget.getViewBox().invertY(False)
+            self.q3_widget.setXLink(None)
+            self.q3_widget.hide()
+            
         self.q4_container.hide() # Ocultamos el contenedor
 
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
@@ -325,6 +344,8 @@ class MainWindow(QMainWindow):
         self.fm_metrics_label.setText("")
         self.stereo_metrics_label.hide()
         self.stereo_metrics_label.setText("")
+        self.wifi_metrics_label.hide()
+        self.wifi_metrics_label.setText("")
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
@@ -483,6 +504,28 @@ class MainWindow(QMainWindow):
             self.freq_plot.setLabel('bottom', 'Frecuencia [MHz]')
             self.update_x_axis() # Restaura la vista de frecuencia
 
+    def on_waterfall_toggled(self, state_val):
+        self.waterfall_enabled = self.waterfall_checkbox.isChecked()
+        if self.waterfall_enabled:
+            # Restablecer el buffer si se activa para no mostrar ruido viejo
+            self.waterfall_buffer = None
+            if state.get('demod_mode') == 'none':
+                self.q3_widget.setTitle("Espectrograma (Waterfall)")
+                self.q3_widget.setLabel('left', 'Tiempo [ms]')
+                self.q3_widget.enableAutoRange(axis='xy')
+                self.q3_widget.getViewBox().invertY(True)
+                self.q3_widget.setXLink(self.freq_plot)
+                self.q3_widget.show()
+        else:
+            if state.get('demod_mode') == 'none':
+                self.q3_widget.setTitle("2-1 (Vacío)")
+                self.q3_widget.setLabel('left', '')
+                self.q3_widget.getViewBox().invertY(False)
+                self.q3_widget.setXLink(None)
+                # Limpiar el ImageItem
+                self.waterfall_image.clear()
+                self.q3_widget.hide()
+
     def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
         if self.is_paused:
             return
@@ -513,6 +556,44 @@ class MainWindow(QMainWindow):
                     # --- LÓGICA DE TRACE ---
                     display_psd = self.trace_manager.process(PSD)
                     self.freq_plot_curve.setData(self.f_axis, display_psd)
+                    
+                    # --- LÓGICA DE WATERFALL ---
+                    if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none':
+                        if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != len(PSD):
+                            self.waterfall_lines = 200
+                            self.waterfall_buffer = np.zeros((len(PSD), self.waterfall_lines))
+                            self.waterfall_buffer.fill(-130)
+                            self.waterfall_counter = 0
+                        
+                        self.waterfall_counter = getattr(self, 'waterfall_counter', 0) + 1
+                        
+                        if self.waterfall_counter >= 7:
+                            self.waterfall_counter = 0
+                            
+                            # Desplazamos las columnas de tiempo hacia la derecha (o izquierda, según el waterfall)
+                            self.waterfall_buffer = np.roll(self.waterfall_buffer, 1, axis=1)
+                            self.waterfall_buffer[:, 0] = display_psd
+                            
+                            # Actualizamos la imagen (X: frecuencia, Y: tiempo)
+                            # autoLevels=False y levels fijos evitan que pyqtgraph colapse calculando
+                            # los min/max de la matriz enorme docenas de veces por segundo.
+                            self.waterfall_image.setImage(
+                                self.waterfall_buffer, 
+                                autoLevels=False, 
+                                levels=(-130, -30), 
+                                autoDownsample=True
+                            )
+                            
+                            # Ajustamos la escala para que coincida con el eje X de frecuencias
+                            f_min, f_max = self.f_axis[0], self.f_axis[-1]
+                            
+                            if raw_samples is not None and state.get('sample_rate'):
+                                block_time_ms = (len(raw_samples) / state['sample_rate']) * 1000.0
+                                total_time_ms = block_time_ms * 7 * self.waterfall_lines
+                            else:
+                                total_time_ms = self.waterfall_lines * 7
+                                
+                            self.waterfall_image.setRect(pg.QtCore.QRectF(f_min, 0, f_max - f_min, total_time_ms))
 
                     # --- LÓGICA DE MARKERS Y DELTAS ---
                     self.marker_manager.update_render(
@@ -618,6 +699,24 @@ class MainWindow(QMainWindow):
                             f"</div>"
                         )
                         self.stereo_metrics_label.setText(html_stereo)
+
+            if state.get('demod_mode') == 'wifi_ag':
+                if fm_metrics and 'wifi_metrics' in fm_metrics:
+                    wifi = fm_metrics['wifi_metrics']
+                    if wifi is not None:
+                        color_paridad = "#00B000" if wifi['paridad_ok'] else "#FF3333"
+                        texto_paridad = "Ok" if wifi['paridad_ok'] else "ERROR"
+                        html_wifi = (
+                            f"<div style='line-height: 1.5;'>"
+                            f"<span style='color: #FFFFFF'><b>Rate Code:</b></span> <span style='color: #00FFFF;'>{wifi['rate_code']}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Modulación:</b></span> <span style='color: #FFD500;'>{wifi['mod']}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Code rate:</b></span> <span style='color: #FFD500;'>{wifi['code_rate']}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Data rate:</b></span> <span style='color: #00FFFF;'>{wifi['mbps']} mbps</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Length:</b></span> <span style='color: #00FFFF;'>{wifi['length']}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Paridad:</b></span> <span style='color: {color_paridad}; font-weight: bold;'>{texto_paridad}</span>"
+                            f"</div>"
+                        )
+                        self.wifi_metrics_label.setText(html_wifi)
     
     def _build_ui(self):
         # --- BARRA SUPERIOR  ---
@@ -731,6 +830,14 @@ class MainWindow(QMainWindow):
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
         self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+
+        # --- WATERFALL (Espectrograma) ---
+        self.waterfall_image = pg.ImageItem()
+        self.waterfall_colormap = pg.colormap.get('viridis')
+        self.waterfall_image.setLookupTable(self.waterfall_colormap.getLookupTable())
+        self.q3_widget.addItem(self.waterfall_image)
+        self.waterfall_enabled = False
+        self.waterfall_buffer = None
 
         # --- AÑADIR ESTA LÍNEA DE UMBRAL PARA EL S-C (Línea discontinua roja a 0.7) ---
         self.q3_sc_threshold = pg.InfiniteLine(
@@ -1052,6 +1159,11 @@ class MainWindow(QMainWindow):
         self.zero_span_btn.clicked.connect(self.toggle_zero_span)
         form_layout.addRow(QLabel("MODO SA:"), self.zero_span_btn)
 
+        self.waterfall_checkbox = QCheckBox("Activar Waterfall")
+        self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
+        self.waterfall_checkbox.stateChanged.connect(self.on_waterfall_toggled)
+        form_layout.addRow(QLabel("ESPECTROGRAMA:"), self.waterfall_checkbox)
+
         controls_layout.addLayout(form_layout)
 
         # 5. BOTONES DE AUDIO ESTÉREO
@@ -1093,6 +1205,13 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
         self.stereo_metrics_label.hide()
         controls_layout.addWidget(self.stereo_metrics_label)
+
+        # --- MÉTRICAS WIFI (SIGNAL) ---
+        self.wifi_metrics_label = QLabel("")
+        self.wifi_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.wifi_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+        self.wifi_metrics_label.hide()
+        controls_layout.addWidget(self.wifi_metrics_label)
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)

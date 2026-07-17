@@ -180,6 +180,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
             
             chunk_trigger = None
             envolvente_preambulo = None  # |preámbulo| para visualizar estructura STS/LTS en Q3
+            wifi_metrics = None
             
 
             energia_norm = energia_suave / max_energia
@@ -351,6 +352,14 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             # El campo SIGNAL usa BPSK: decidir por signo de la parte real
                             bits_raw = (S_data.real < 0).astype(int)
+                            print(f"48 bits raw del campo SIGNAL:")
+                            print(bits_raw)
+
+                            # Identificar que subportadora genera el punto en (0,0)
+                            S_data_full = S_eq[data_idx]
+                            for i, (idx, val) in enumerate(zip(data_idx, S_data_full)):
+                                if np.abs(val) < 0.1:
+                                    print(f"Subportadora idx={idx} -> valor={val:.4f}  (posicion en data_idx={i})")
 
                             # Desentrelazado del campo SIGNAL (BPSK, NCBPS=48, NBPSC=1)
                             # Segun IEEE 802.11-2007 seccion 17.3.5.6
@@ -399,6 +408,15 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             paridad_calc = np.sum(info_bits[0:17]) % 2
                             paridad_rx   = info_bits[17]
                             paridad_ok   = (paridad_calc == paridad_rx)
+
+                            wifi_metrics = {
+                                'rate_code': bin(rate_code),
+                                'mod': mod,
+                                'code_rate': code_rate,
+                                'mbps': mbps,
+                                'length': length,
+                                'paridad_ok': paridad_ok
+                            }
 
                             # Demodulacion de los simbolos de datos (64-QAM)
                             N_CP  = 16
@@ -503,7 +521,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                 'audio_time_R': audio_R_out,
                 'psd_mpx': S_data.real if 'S_data' in locals() else None,
                 'f_axis_mpx': S_data.imag if 'S_data' in locals() else None,
-                'metricas': {'inicio_recorte': inicio_recorte} 
+                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': wifi_metrics} 
             }
 
             with self._lock:

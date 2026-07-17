@@ -16,7 +16,7 @@ class USRPB200Handler(SDRBase):
             time.sleep(3.5) # Le damos tiempo a Ubuntu para que monte el nuevo USB
             self.usrp = uhd.usrp.MultiUSRP("type=b200")
         self._thread = None
-        self.muestras_por_bloque = 8192
+        self.muestras_por_bloque = 32768
         
         # Configuramos el streamer.
         # fc32: Host format (Float Complex 32 bits = np.complex64)

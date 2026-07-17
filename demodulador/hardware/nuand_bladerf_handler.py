@@ -10,7 +10,7 @@ class BladeRFHandler(SDRBase):
         self.sdr = bladerf.BladeRF()
         self.rx_ch = self.sdr.Channel(bladerf.CHANNEL_RX(0))
         self._thread = None
-        self.muestras_por_bloque = 8192  # valor por defecto hasta que main lo configure
+        self.muestras_por_bloque = 32768  # valor por defecto hasta que main lo configure
              
 
     @property
