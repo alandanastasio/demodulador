@@ -117,6 +117,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'):
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
         self.radio.set_muestras_por_bloque(32768)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
@@ -193,6 +196,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'):
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
         # 1. Ocultamos las herramientas analógicas
         self.audio_container.hide()
         self.fm_metrics_label.hide()
@@ -301,6 +307,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'):
             self.waterfall_checkbox.show()
             self.waterfall_label.show()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.show()
+            self.zero_span_label.show()
         
         if getattr(self, 'waterfall_enabled', False):
             self.q3_widget.setTitle("Espectrograma (Waterfall)")
@@ -710,15 +719,16 @@ class MainWindow(QMainWindow):
                 if fm_metrics and 'wifi_metrics' in fm_metrics:
                     wifi = fm_metrics['wifi_metrics']
                     if wifi is not None:
-                        color_paridad = "#00B000" if wifi['paridad_ok'] else "#FF3333"
-                        texto_paridad = "Ok" if wifi['paridad_ok'] else "ERROR"
+                        paridad_ok = wifi.get('paridad_ok', False)
+                        color_paridad = "#00B000" if paridad_ok else "#FF3333"
+                        texto_paridad = "Ok" if paridad_ok else "ERROR"
                         html_wifi = (
                             f"<div style='line-height: 1.5;'>"
-                            f"<span style='color: #FFFFFF'><b>Rate Code:</b></span> <span style='color: #00FFFF;'>{wifi['rate_code']}</span><br>"
-                            f"<span style='color: #FFFFFF'><b>Modulación:</b></span> <span style='color: #FFD500;'>{wifi['mod']}</span><br>"
-                            f"<span style='color: #FFFFFF'><b>Code rate:</b></span> <span style='color: #FFD500;'>{wifi['code_rate']}</span><br>"
-                            f"<span style='color: #FFFFFF'><b>Data rate:</b></span> <span style='color: #00FFFF;'>{wifi['mbps']} mbps</span><br>"
-                            f"<span style='color: #FFFFFF'><b>Length:</b></span> <span style='color: #00FFFF;'>{wifi['length']}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Rate Code:</b></span> <span style='color: #00FFFF;'>{wifi.get('rate_code', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Modulación:</b></span> <span style='color: #FFD500;'>{wifi.get('mod', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Code rate:</b></span> <span style='color: #FFD500;'>{wifi.get('code_rate', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Data rate:</b></span> <span style='color: #00FFFF;'>{wifi.get('mbps', 0)} mbps</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Length:</b></span> <span style='color: #00FFFF;'>{wifi.get('length', 0)}</span><br>"
                             f"<span style='color: #FFFFFF'><b>Paridad:</b></span> <span style='color: {color_paridad}; font-weight: bold;'>{texto_paridad}</span>"
                             f"</div>"
                         )
@@ -1082,6 +1092,7 @@ class MainWindow(QMainWindow):
         freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
 
         self.freq_input = QDoubleSpinBox()
+        self.freq_input.setKeyboardTracking(False)
         self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
         self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
         
@@ -1175,7 +1186,8 @@ class MainWindow(QMainWindow):
         self.zero_span_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.zero_span_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555;")
         self.zero_span_btn.clicked.connect(self.toggle_zero_span)
-        form_layout.addRow(QLabel("MODO SA:"), self.zero_span_btn)
+        self.zero_span_label = QLabel("MODO SA:")
+        form_layout.addRow(self.zero_span_label, self.zero_span_btn)
 
         self.waterfall_checkbox = QCheckBox("Activar Waterfall")
         self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
