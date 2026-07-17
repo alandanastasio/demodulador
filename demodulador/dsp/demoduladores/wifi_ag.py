@@ -194,7 +194,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
             
             chunk_trigger = None
             envolvente_preambulo = None  # |preámbulo| para visualizar estructura STS/LTS en Q3
-            wifi_metrics = None
+            wifi_metrics = {}
             
 
             energia_norm = energia_suave / max_energia
@@ -210,7 +210,6 @@ class DemoduladorWiFiAG(DemoduladorBase):
             n_bursts = min(len(inicios_burst), len(fines_burst))
             inicios_burst = inicios_burst[:n_bursts]
             fines_burst   = fines_burst[:n_bursts]
-            print(f"Se encontraron {n_bursts} bursts")
 
             # ---  RECORTE DEL BURST (chunk_norm) ---
             margen_muestras = int(10e-6 * self.sample_rate) # 10 us de margen (200 muestras a 20MHz)
@@ -268,8 +267,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             # CFO en Hz
                             cfo_hz = cfo_rad * self.sample_rate / (2 * np.pi)
-
-                            print(f"CFO estimado: {cfo_hz:+.1f} Hz  ({cfo_rad*1e3:+.3f} mrad/muestra)")
+                            wifi_metrics['cfo'] = cfo_hz
 
                             # Correccion del CFO en el frame completo
                             t_frame = np.arange(len(frame)) / self.sample_rate
@@ -288,8 +286,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             snr_lineal = P_senal / P_ruido
                             snr_db     = 10 * np.log10(snr_lineal)
-
-                            print(f"SNR estimada: {snr_db:.1f} dB")
+                            wifi_metrics['snr'] = snr_db
 
                             P_frame = np.mean(np.abs(frame_corr) ** 2)
                             gain_agc = 1.0 / np.sqrt(P_frame)
@@ -315,7 +312,6 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             #   -4   -3   -2   -1
                                  1,   1,   1,   1
                             ], dtype=complex)
-                            print(f"LTS_REF tiene {len(LTS_FREQ)} elementos")
 
                             # Extraer el LTS del frame normalizado
                             N_STS = 10 * 16
@@ -334,7 +330,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             diff_fase = LTS2_rx[activas_lts] * np.conj(LTS1_rx[activas_lts])
                             cfo_fino_rad = np.angle(np.mean(diff_fase)) / N_LTS
                             cfo_fino_hz  = cfo_fino_rad * self.sample_rate / (2 * np.pi)
-                            print(f"CFO fino: {cfo_fino_hz:+.1f} Hz")
+                            wifi_metrics['cfo_fino'] = cfo_fino_hz
 
                             # Aplicar CFO fino
                             t_frame2 = np.arange(len(frame_norm)) / self.sample_rate
@@ -371,38 +367,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             S_data = S_eq[data_idx]
 
-                            # === DEBUG: verificar calidad de la ecualización ===
-                            # Para BPSK, los puntos deberían estar cerca de ±1 en el eje real
-                            print(f"--- DEBUG SIGNAL field ---")
-                            print(f"H magnitud media (activas): {np.mean(np.abs(H[activas_lts])):.4f}")
-                            print(f"H fase media (activas): {np.mean(np.angle(H[activas_lts]))*180/np.pi:.1f}°")
-                            print(f"S_data primeros 8: {np.round(S_data[:8], 2)}")
-                            print(f"S_data magnitud media: {np.mean(np.abs(S_data)):.4f}")
-                            print(f"S_data fase std: {np.std(np.angle(S_data))*180/np.pi:.1f}°")
-                            # Si la fase std es ~180° -> BPSK correcto
-                            # Si la fase std es ~90° -> hay un problema de rotación
-                            # Si la fase std es baja -> todos los puntos en la misma dirección
-                            
-                            # Verificar el LTS: ¿realmente se parece al patrón esperado?
-                            lts1_fft = LTS1_rx[activas_lts]
-                            lts_ref  = LTS_FREQ[activas_lts]
-                            # Correlación entre LTS recibido y referencia
-                            corr = np.abs(np.sum(lts1_fft * np.conj(lts_ref))) / (np.sqrt(np.sum(np.abs(lts1_fft)**2)) * np.sqrt(np.sum(np.abs(lts_ref)**2)))
-                            print(f"Correlación LTS1_rx vs LTS_FREQ: {corr:.4f} (debería ser ~1.0)")
-                            print(f"--- FIN DEBUG ---")
-
                             # El campo SIGNAL usa BPSK: decidir por signo de la parte real
                             # Con el LTS corregido, la convención es: real>0 → bit 1, real<0 → bit 0
                             bits_raw = (S_data.real > 0).astype(int)
-                            print(f"48 bits raw del campo SIGNAL:")
-                            print(bits_raw)
-
-                            # Identificar que subportadora genera el punto en (0,0)
-                            S_data_full = S_eq[data_idx]
-                            for i, (idx, val) in enumerate(zip(data_idx, S_data_full)):
-                                if np.abs(val) < 0.1:
-                                    print(f"Subportadora idx={idx} -> valor={val:.4f}  (posicion en data_idx={i})")
-
                             # Desentrelazado del campo SIGNAL (BPSK, NCBPS=48, NBPSC=1)
                             # Segun IEEE 802.11-2007 seccion 17.3.5.6
 
@@ -451,14 +418,14 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             paridad_rx   = info_bits[17]
                             paridad_ok   = (paridad_calc == paridad_rx)
 
-                            wifi_metrics = {
+                            wifi_metrics.update({
                                 'rate_code': bin(rate_code),
                                 'mod': mod,
                                 'code_rate': code_rate,
                                 'mbps': mbps,
                                 'length': length,
                                 'paridad_ok': paridad_ok
-                            }
+                            })
 
                             # Demodulacion de los simbolos de datos (64-QAM)
                             N_CP  = 16
@@ -475,7 +442,6 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             # Cuantos simbolos entran en el frame
                             muestras_disponibles = len(frame_norm) - inicio_datos
                             N_simbolos = muestras_disponibles // (N_CP + N_FFT)
-                            print(f"Simbolos de datos disponibles: {N_simbolos}")
 
                             # Demodular cada simbolo
                             constelacion = []

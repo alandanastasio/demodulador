@@ -158,6 +158,7 @@ class MainWindow(QMainWindow):
         self.fm_metrics_label.show() 
         self.stereo_metrics_label.show()
         self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
         
         self.q2_widget.show()
         self.q3_widget.show()
@@ -197,6 +198,7 @@ class MainWindow(QMainWindow):
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.show()
+        self.wifi_hw_metrics_label.show()
 
         # 2. Mostramos los paneles y expandimos la grilla a 2x2
         self.q2_widget.show()
@@ -348,6 +350,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.setText("")
         self.wifi_metrics_label.hide()
         self.wifi_metrics_label.setText("")
+        self.wifi_hw_metrics_label.hide()
+        self.wifi_hw_metrics_label.setText("")
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
@@ -719,6 +723,18 @@ class MainWindow(QMainWindow):
                             f"</div>"
                         )
                         self.wifi_metrics_label.setText(html_wifi)
+                        
+                        cfo = wifi.get('cfo', 0.0)
+                        cfo_fino = wifi.get('cfo_fino', 0.0)
+                        snr = wifi.get('snr', 0.0)
+                        html_hw = (
+                            f"<div style='line-height: 1.5;'>"
+                            f"<span style='color: #FFFFFF'><b>CFO Estimado:</b></span> <span style='color: #FF5555;'>{cfo:+.1f} Hz</span><br>"
+                            f"<span style='color: #FFFFFF'><b>CFO Fino:</b></span> <span style='color: #FF5555;'>{cfo_fino:+.1f} Hz</span><br>"
+                            f"<span style='color: #FFFFFF'><b>SNR:</b></span> <span style='color: #55FF55;'>{snr:.1f} dB</span>"
+                            f"</div>"
+                        )
+                        self.wifi_hw_metrics_label.setText(html_hw)
     
     def _build_ui(self):
         # --- BARRA SUPERIOR  ---
@@ -1215,6 +1231,13 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
         self.wifi_metrics_label.hide()
         controls_layout.addWidget(self.wifi_metrics_label)
+
+        # --- MÉTRICAS WIFI HW (CFO/SNR) ---
+        self.wifi_hw_metrics_label = QLabel("")
+        self.wifi_hw_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.wifi_hw_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+        self.wifi_hw_metrics_label.hide()
+        controls_layout.addWidget(self.wifi_hw_metrics_label)
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)
