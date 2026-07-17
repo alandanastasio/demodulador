@@ -114,6 +114,9 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
         self.radio.set_muestras_por_bloque(32768)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
@@ -186,6 +189,9 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     def set_wifi_ag_mode(self):
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
         # 1. Ocultamos las herramientas analógicas
         self.audio_container.hide()
         self.fm_metrics_label.hide()
@@ -209,9 +215,8 @@ class MainWindow(QMainWindow):
         self.q2_widget.setLabel('bottom', 'Tiempo [us]')
         self.q2_widget.setLabel('left', 'Amplitud')
         
-        # 4096 muestras a 20 MHz representan 204.8 microsegundos
-        self.q2_widget.setXRange(0, 204.8) 
-        self.q2_widget.setYRange(-0.25, 1.5) # Rango típico de la salida del SDR
+        self.q2_widget.setXRange(0, 350) 
+        self.q2_widget.setYRange(0, 1) # Rango típico de la salida del SDR
         
         # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
@@ -237,11 +242,11 @@ class MainWindow(QMainWindow):
         self.q3_sc_threshold.show()
 
         # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
-        self.q4L_widget.setTitle("Constelación (Símbolos de Datos 64-QAM)")
+        self.q4L_widget.setTitle("Constelación")
         self.q4L_widget.setLabel('bottom', 'En Fase (I)')
         self.q4L_widget.setLabel('left', 'Cuadratura (Q)')
         self.q4L_widget.setXRange(-2, 2)
-        self.q4L_widget.setYRange(-2, 2)
+        self.q4L_widget.setYRange(-1, 1)
         self.q4L_widget.showGrid(x=True, y=True, alpha=0.5) # Agregamos una grilla de fondo
         self.q4L_widget.setAspectLocked(True)
         
@@ -279,13 +284,6 @@ class MainWindow(QMainWindow):
         self.sr_combo.blockSignals(False)
 
     def set_wbfm_audio_mode(self):
-        self.radio.set_muestras_por_bloque(32768)
-        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
-        for lr in getattr(self, 'wifi_regions', []): lr.hide()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
-        # Restauramos el color original de la curva
-        self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
-
         self.set_wbfm_mode() 
         self.audio_container.show()
         
@@ -298,6 +296,9 @@ class MainWindow(QMainWindow):
     def set_normal_mode(self):
         self.radio.set_muestras_por_bloque(32768)
         self.q2_widget.hide()
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.show()
+            self.waterfall_label.show()
         
         if getattr(self, 'waterfall_enabled', False):
             self.q3_widget.setTitle("Espectrograma (Waterfall)")
@@ -330,7 +331,8 @@ class MainWindow(QMainWindow):
         
         self.q2_widget.setTitle("1-2 (Vacío)")
         self.q2_curve.setData([], []) 
-        self.q3_widget.setTitle("2-1 (Vacío)")
+        if not getattr(self, 'waterfall_enabled', False):
+            self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
         
         # Vaciamos L y R y las metricas
@@ -1162,7 +1164,8 @@ class MainWindow(QMainWindow):
         self.waterfall_checkbox = QCheckBox("Activar Waterfall")
         self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
         self.waterfall_checkbox.stateChanged.connect(self.on_waterfall_toggled)
-        form_layout.addRow(QLabel("ESPECTROGRAMA:"), self.waterfall_checkbox)
+        self.waterfall_label = QLabel("ESPECTROGRAMA:")
+        form_layout.addRow(self.waterfall_label, self.waterfall_checkbox)
 
         controls_layout.addLayout(form_layout)
 
