@@ -47,7 +47,7 @@ class RtlSdrHandler(SDRBase):
             # Iniciamos la lectura asincrónica en un hilo separado
             self._thread = threading.Thread(
                 target=self.sdr.read_samples_async,
-                args=(self._async_callback, 8192)
+                args=(self._async_callback, 32768)
             )
             self._thread.daemon = True
             self._thread.start()

@@ -6,14 +6,15 @@ import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
-                             QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
+                           QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
-                             QPushButton, QListWidgetItem, QGridLayout)
+                             QPushButton, QListWidgetItem, QGridLayout, QCheckBox)
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
 from hardware.rtlsdr_handler import RtlSdrHandler
 from hardware.nuand_bladerf_handler import BladeRFHandler
+from hardware.ettus_usrpb200_handler import USRPB200Handler
 # DSP (Plugins)
 from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
@@ -38,7 +39,7 @@ state = {
 
 class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
-    data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object)
+    data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object, object)
 
 emitter = SignalEmitter()
 
@@ -107,17 +108,32 @@ class MainWindow(QMainWindow):
                     resultados.get('audio_time_R'), 
                     resultados.get('t_axis_audio'),
                     resultados.get('metricas'),
-                    resultados.get('mpx_time')
+                    resultados.get('mpx_time'),
+                    resultados.get('evm_data')
                 )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        self.radio.set_muestras_por_bloque(32768)
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+        self.q3_curve.show()
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.hide()
+            self.q3_evm_peak_subc.hide()
+            self.q3_evm_rms_sym.hide()
+            self.q3_evm_peak_sym.hide()
+            self.q3_evm_limit.hide()
         
         self.audio_container.hide()
         # Configuramos las pantallas
@@ -128,6 +144,8 @@ class MainWindow(QMainWindow):
         self.q2_widget.setYRange(-80, 20)
 
         self.q3_widget.setTitle("Señal Demodulada en el Tiempo")
+        self.q3_widget.getViewBox().invertY(False)
+        self.q3_widget.setXLink(None)
         self.q3_widget.setLabel('bottom', 'Tiempo [ms]')
         self.q3_widget.setLabel('left', 'Desviación [kHz]') 
         self.q3_widget.setXRange(0, 10) 
@@ -150,11 +168,15 @@ class MainWindow(QMainWindow):
         # Mostrar las metricas
         self.fm_metrics_label.show() 
         self.stereo_metrics_label.show()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
         
         self.q2_widget.show()
         self.q3_widget.show()
         self.q4_container.show() # Mostramos el contenedor entero
         self.plot_layout.setRowStretch(1, 1)
+        self.plot_layout.setRowStretch(2, 0)
+        if hasattr(self, 'q3b_widget'): self.q3b_widget.hide()
 
         # Ajustamos Sample Rate Visual (Decimado)
         self.previous_sr_text = self.sr_combo.currentText()
@@ -181,10 +203,18 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     def set_wifi_ag_mode(self):
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
         # 1. Ocultamos las herramientas analógicas
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.show()
+        self.wifi_hw_metrics_label.show()
 
         # 2. Mostramos los paneles y expandimos la grilla a 2x2
         self.q2_widget.show()
@@ -197,47 +227,77 @@ class MainWindow(QMainWindow):
         
         self.plot_layout.setRowStretch(0, 1)
         self.plot_layout.setRowStretch(1, 1)
+        self.plot_layout.setRowStretch(2, 1)
 
         # --- CUADRANTE 2: SEÑAL EN EL TIEMPO (I) ---
         self.q2_widget.setTitle("Señal Baseband en el Tiempo")
         self.q2_widget.setLabel('bottom', 'Tiempo [us]')
         self.q2_widget.setLabel('left', 'Amplitud')
         
-        # 4096 muestras a 20 MHz representan 204.8 microsegundos
-        self.q2_widget.setXRange(0, 204.8) 
-        self.q2_widget.setYRange(-1.5, 1.5) # Rango típico de la salida del SDR
+        self.q2_widget.setXRange(0, 350) 
+        self.q2_widget.setYRange(0, 1) # Rango típico de la salida del SDR
         
         # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
         
-        # --- CUADRANTE 3: ESTRUCTURA DEL PREÁMBULO ---
-        self.q3_widget.setTitle("Estructura del Preámbulo (Zoom Sincronizado)")
-        self.q3_widget.setLabel('bottom', 'Muestras (0 = Inicio STS)')
-        self.q3_widget.setLabel('left', 'Amplitud')
-        self.q3_widget.setXRange(0, 400)
-        self.q3_widget.setYRange(0, 1.5)
+        # --- CUADRANTE 3: EVM ---
+        self.q3_widget.setTitle("EVM por Subportadora")
+        self.q3_widget.getViewBox().invertY(False)
+        self.q3_widget.setXLink(None)
+        self.q3_widget.setLabel('bottom', 'Subportadora')
+        self.q3_widget.setLabel('left', 'EVM [dB]')
+        self.q3_widget.setXRange(-27, 27)
+        self.q3_widget.setYRange(-40, 0)
         
-        # Mostramos las cajas de colores
-        # Mostramos las cajas de colores y sus textos
-        for lr in getattr(self, 'wifi_regions', []): lr.show()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.show()
+        self.q3b_widget.setTitle("EVM por Símbolo")
+        self.q3b_widget.getViewBox().invertY(False)
+        self.q3b_widget.setXLink(None)
+        self.q3b_widget.setLabel('bottom', 'Símbolo')
+        self.q3b_widget.setLabel('left', 'EVM [dB]')
+        self.q3b_widget.setYRange(-40, 0)
         
-        # Volvemos a setear línea normal (por si veníamos de otro modo)
-        self.q3_curve.setData([], [], pen=pg.mkPen(color="#CBE8F4", width=1.5), symbol=None)
+        for lr in getattr(self, 'wifi_regions', []): lr.hide()
+        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+        
+        self.q3_curve.hide()
+        self.q3_sc_threshold2.hide()
+        self.q3_sc_threshold.hide()
+        
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.show()
+            self.q3_evm_peak_subc.show()
+            self.q3_evm_rms_sym.show()
+            self.q3_evm_peak_sym.show()
+            self.q3_evm_limit.show()
+            self.q3b_evm_limit.show()
+            self.q3b_widget.show()
 
-        # --- CUADRANTE 4: ESTADO DE SUBPORTADORAS ---
-        self.q4L_widget.setTitle("Magnitud de Subportadoras (64 Bins)")
-        self.q4L_widget.setLabel('bottom', 'Índice de Subportadora (-32 a +31)')
-        self.q4L_widget.setLabel('left', 'Magnitud')
-        self.q4L_widget.setXRange(-32, 32)
-        self.q4L_widget.setYRange(0, 5) # Luego lo hacemos dinámico
+        # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
+        self.q4L_widget.setTitle("Constelación")
+        self.q4L_widget.setLabel('bottom', 'En Fase (I)')
+        self.q4L_widget.setLabel('left', 'Cuadratura (Q)')
+        self.q4L_widget.setXRange(-2, 2)
+        self.q4L_widget.setYRange(-1, 1)
+        self.q4L_widget.showGrid(x=True, y=True, alpha=0.5) # Agregamos una grilla de fondo
+        self.q4L_widget.setAspectLocked(True)
         
-        self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        # Quitamos la línea (pen=None) y usamos puntos (symbol='o')
+        self.q4L_curve.setData([], [], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
 
         # --- ARQUITECTURA DSP Y HARDWARE ---
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
         
+        # Le decimos a la radio que mande bloques enteros de 2ms (40.000 muestras) y lo redondeamos a una potencia de 2
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            muestras = int(state['sample_rate'] * 0.002)
+            # Redondear a la potencia de 2 más cercana hacia arriba
+            pot2 = 1
+            while pot2 < muestras:
+                pot2 *= 2
+            self.radio.set_muestras_por_bloque(pot2)
+            print(f"[bladeRF] set_muestras_por_bloque: pedido={muestras}, usando={pot2}")
+
         self.demodulador_actual = DemoduladorWiFiAG()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
@@ -255,12 +315,6 @@ class MainWindow(QMainWindow):
         self.sr_combo.blockSignals(False)
 
     def set_wbfm_audio_mode(self):
-        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
-        for lr in getattr(self, 'wifi_regions', []): lr.hide()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
-        # Restauramos el color original de la curva
-        self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
-
         self.set_wbfm_mode() 
         self.audio_container.show()
         
@@ -271,8 +325,29 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        self.radio.set_muestras_por_bloque(32768)
         self.q2_widget.hide()
-        self.q3_widget.hide()
+        if hasattr(self, 'waterfall_checkbox'):
+            self.waterfall_checkbox.show()
+            self.waterfall_label.show()
+        if hasattr(self, 'zero_span_btn'):
+            self.zero_span_btn.show()
+            self.zero_span_label.show()
+        
+        if getattr(self, 'waterfall_enabled', False):
+            self.q3_widget.setTitle("Espectrograma (Waterfall)")
+            self.q3_widget.setLabel('left', 'Tiempo [ms]')
+            self.q3_widget.getViewBox().invertY(True)
+            self.q3_widget.setXLink(self.freq_plot)
+            self.q3_widget.show()
+        else:
+            self.q3_widget.setTitle("2-1 (Vacío)")
+            self.q3_widget.setLabel('left', '')
+            self.q3_widget.getViewBox().invertY(False)
+            self.q3_widget.setXLink(None)
+            self.q3_widget.hide()
+            if hasattr(self, 'q3b_widget'): self.q3b_widget.hide()
+            
         self.q4_container.hide() # Ocultamos el contenedor
 
         # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
@@ -280,8 +355,16 @@ class MainWindow(QMainWindow):
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+        self.q3_curve.show()
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.hide()
+            self.q3_evm_peak_subc.hide()
+            self.q3_evm_rms_sym.hide()
+            self.q3_evm_peak_sym.hide()
+            self.q3_evm_limit.hide()
 
         self.plot_layout.setRowStretch(1, 0)
+        self.plot_layout.setRowStretch(2, 0)
 
         # Asegurarnos de que las curvas usen líneas y no puntos de constelación
         self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
@@ -291,7 +374,8 @@ class MainWindow(QMainWindow):
         
         self.q2_widget.setTitle("1-2 (Vacío)")
         self.q2_curve.setData([], []) 
-        self.q3_widget.setTitle("2-1 (Vacío)")
+        if not getattr(self, 'waterfall_enabled', False):
+            self.q3_widget.setTitle("2-1 (Vacío)")
         self.q3_curve.setData([], [])
         
         # Vaciamos L y R y las metricas
@@ -299,11 +383,16 @@ class MainWindow(QMainWindow):
         self.q4R_widget.setTitle("Canal Derecho (R) - Vacío")
         self.q4L_curve.setData([], [])
         self.q4R_curve.setData([], [])
+        self.q4L_signal_curve.setData([], [])
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.fm_metrics_label.setText("")
         self.stereo_metrics_label.hide()
         self.stereo_metrics_label.setText("")
+        self.wifi_metrics_label.hide()
+        self.wifi_metrics_label.setText("")
+        self.wifi_hw_metrics_label.hide()
+        self.wifi_hw_metrics_label.setText("")
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
@@ -462,7 +551,29 @@ class MainWindow(QMainWindow):
             self.freq_plot.setLabel('bottom', 'Frecuencia [MHz]')
             self.update_x_axis() # Restaura la vista de frecuencia
 
-    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
+    def on_waterfall_toggled(self, state_val):
+        self.waterfall_enabled = self.waterfall_checkbox.isChecked()
+        if self.waterfall_enabled:
+            # Restablecer el buffer si se activa para no mostrar ruido viejo
+            self.waterfall_buffer = None
+            if state.get('demod_mode') == 'none':
+                self.q3_widget.setTitle("Espectrograma (Waterfall)")
+                self.q3_widget.setLabel('left', 'Tiempo [ms]')
+                self.q3_widget.enableAutoRange(axis='xy')
+                self.q3_widget.getViewBox().invertY(True)
+                self.q3_widget.setXLink(self.freq_plot)
+                self.q3_widget.show()
+        else:
+            if state.get('demod_mode') == 'none':
+                self.q3_widget.setTitle("2-1 (Vacío)")
+                self.q3_widget.setLabel('left', '')
+                self.q3_widget.getViewBox().invertY(False)
+                self.q3_widget.setXLink(None)
+                # Limpiar el ImageItem
+                self.waterfall_image.clear()
+                self.q3_widget.hide()
+
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
         if self.is_paused:
             return
         
@@ -492,6 +603,44 @@ class MainWindow(QMainWindow):
                     # --- LÓGICA DE TRACE ---
                     display_psd = self.trace_manager.process(PSD)
                     self.freq_plot_curve.setData(self.f_axis, display_psd)
+                    
+                    # --- LÓGICA DE WATERFALL ---
+                    if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none':
+                        if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != len(PSD):
+                            self.waterfall_lines = 200
+                            self.waterfall_buffer = np.zeros((len(PSD), self.waterfall_lines))
+                            self.waterfall_buffer.fill(-130)
+                            self.waterfall_counter = 0
+                        
+                        self.waterfall_counter = getattr(self, 'waterfall_counter', 0) + 1
+                        
+                        if self.waterfall_counter >= 7:
+                            self.waterfall_counter = 0
+                            
+                            # Desplazamos las columnas de tiempo hacia la derecha (o izquierda, según el waterfall)
+                            self.waterfall_buffer = np.roll(self.waterfall_buffer, 1, axis=1)
+                            self.waterfall_buffer[:, 0] = display_psd
+                            
+                            # Actualizamos la imagen (X: frecuencia, Y: tiempo)
+                            # autoLevels=False y levels fijos evitan que pyqtgraph colapse calculando
+                            # los min/max de la matriz enorme docenas de veces por segundo.
+                            self.waterfall_image.setImage(
+                                self.waterfall_buffer, 
+                                autoLevels=False, 
+                                levels=(-130, -30), 
+                                autoDownsample=True
+                            )
+                            
+                            # Ajustamos la escala para que coincida con el eje X de frecuencias
+                            f_min, f_max = self.f_axis[0], self.f_axis[-1]
+                            
+                            if raw_samples is not None and state.get('sample_rate'):
+                                block_time_ms = (len(raw_samples) / state['sample_rate']) * 1000.0
+                                total_time_ms = block_time_ms * 7 * self.waterfall_lines
+                            else:
+                                total_time_ms = self.waterfall_lines * 7
+                                
+                            self.waterfall_image.setRect(pg.QtCore.QRectF(f_min, 0, f_max - f_min, total_time_ms))
 
                     # --- LÓGICA DE MARKERS Y DELTAS ---
                     self.marker_manager.update_render(
@@ -512,11 +661,69 @@ class MainWindow(QMainWindow):
                     signal_env = np.abs(raw_samples)
                     self.q2_curve.setData(t_axis_us, signal_env)
                 
-                # ---  GRÁFICAMOS SCHMIDL & COX EN EL Q3 ---
-                if mpx_time is not None:
-                    # mpx_time trae la métrica S-C (array de valores entre 0 y 1)
+                # --- GRÁFICAMOS EVM EN EL Q3 ---
+                if evm_data is not None and hasattr(self, 'q3_evm_rms_subc'):
+                    y_floor = -40
+                    # Barras crecen hacia arriba desde el piso del gráfico (como en el notebook)
+                    subc_rms_db = np.asarray(evm_data['subc_rms'])
+                    subc_peak_db = np.asarray(evm_data['subc_peak'])
+                    self.q3_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor)
+                    self.q3_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor)
+                    
+                    n_syms = len(evm_data['sym_rms'])
+                    if n_syms > 0:
+                        sym_x = np.arange(n_syms)
+                        self.q3_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
+                        self.q3_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
+                        self.q3b_widget.setXRange(0, max(n_syms - 1, 1))
+                    else:
+                        self.q3_evm_rms_sym.setData([], [])
+                        self.q3_evm_peak_sym.setData([], [])
+                        
+                    metrics = fm_metrics.get('wifi_metrics', {}) if fm_metrics else {}
+                    mod = metrics.get('mod', '')
+                    mbps = metrics.get('mbps', '')
+                    if mod:
+                        # Límites EVM del estándar IEEE 802.11a/g (Table 17-10)
+                        EVM_LIMITS_DB = {
+                            6: -5, 9: -8, 12: -10, 18: -13,
+                            24: -16, 36: -19, 48: -22, 54: -25
+                        }
+                        limite_db = EVM_LIMITS_DB.get(int(mbps), -25)
+                        self.q3_evm_limit.setPos(limite_db)
+                        self.q3b_evm_limit.setPos(limite_db)
+                        self.q3_widget.setTitle(f"EVM por Subportadora ({mod} / {mbps} Mbps) — Límite: {limite_db} dB")
+                        self.q3b_widget.setTitle(f"EVM por Símbolo ({mod} / {mbps} Mbps) — Límite: {limite_db} dB")
+                elif mpx_time is not None and not hasattr(self, 'q3_evm_rms_subc'):
                     eje_x_sc = np.arange(len(mpx_time))
                     self.q3_curve.setData(eje_x_sc, mpx_time)
+
+                # --- GRAFICAMOS LAS CONSTELACIÓNES EN Q4 ---
+                # Recibimos las coordenadas X(I) e Y(Q) a través de los canales de audio
+                if audio_L is not None and audio_R is not None:
+                    # 1. Pasamos nuevamente los parámetros del símbolo para refrescar el ScatterPlotItem
+                    self.q4L_curve.setData(
+                        audio_L, 
+                        audio_R, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen=None, 
+                        symbolBrush="#00FFFF"
+                    )
+                if PSD_audio is not None and f_axis_audio is not None:
+                    self.q4L_signal_curve.setData(
+                        PSD_audio, 
+                        f_axis_audio, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen="#FF00FF", 
+                        symbolBrush=None
+                    )
+                    
+                    # 2. Forzamos a Qt a repintar la escena del widget de forma manual e inmediata
+                    self.q4L_widget.scene().update()
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -571,6 +778,37 @@ class MainWindow(QMainWindow):
                             f"</div>"
                         )
                         self.stereo_metrics_label.setText(html_stereo)
+
+            if state.get('demod_mode') == 'wifi_ag':
+                if fm_metrics and 'wifi_metrics' in fm_metrics:
+                    wifi = fm_metrics['wifi_metrics']
+                    if wifi is not None:
+                        paridad_ok = wifi.get('paridad_ok', False)
+                        color_paridad = "#00B000" if paridad_ok else "#FF3333"
+                        texto_paridad = "Ok" if paridad_ok else "ERROR"
+                        html_wifi = (
+                            f"<div style='line-height: 1.5;'>"
+                            f"<span style='color: #FFFFFF'><b>Rate Code:</b></span> <span style='color: #00FFFF;'>{wifi.get('rate_code', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Modulación:</b></span> <span style='color: #FFD500;'>{wifi.get('mod', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Code rate:</b></span> <span style='color: #FFD500;'>{wifi.get('code_rate', '?')}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Data rate:</b></span> <span style='color: #00FFFF;'>{wifi.get('mbps', 0)} mbps</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Length:</b></span> <span style='color: #00FFFF;'>{wifi.get('length', 0)}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Paridad:</b></span> <span style='color: {color_paridad}; font-weight: bold;'>{texto_paridad}</span>"
+                            f"</div>"
+                        )
+                        self.wifi_metrics_label.setText(html_wifi)
+                        
+                        cfo = wifi.get('cfo', 0.0)
+                        cfo_fino = wifi.get('cfo_fino', 0.0)
+                        snr = wifi.get('snr', 0.0)
+                        html_hw = (
+                            f"<div style='line-height: 1.5;'>"
+                            f"<span style='color: #FFFFFF'><b>CFO Estimado:</b></span> <span style='color: #FF5555;'>{cfo:+.1f} Hz</span><br>"
+                            f"<span style='color: #FFFFFF'><b>CFO Fino:</b></span> <span style='color: #FF5555;'>{cfo_fino:+.1f} Hz</span><br>"
+                            f"<span style='color: #FFFFFF'><b>SNR:</b></span> <span style='color: #55FF55;'>{snr:.1f} dB</span>"
+                            f"</div>"
+                        )
+                        self.wifi_hw_metrics_label.setText(html_hw)
     
     def _build_ui(self):
         # --- BARRA SUPERIOR  ---
@@ -671,18 +909,72 @@ class MainWindow(QMainWindow):
         self.plot_layout.setSpacing(5) 
         self.plot_layout.setRowStretch(0, 1) 
         self.plot_layout.setRowStretch(1, 0) 
+        self.plot_layout.setRowStretch(2, 0) 
 
         # Agregamos a la grilla principal
         self.plot_layout.addWidget(self.freq_plot, 0, 0)
         self.plot_layout.addWidget(self.q2_widget, 0, 1) 
         self.plot_layout.addWidget(self.q3_widget, 1, 0) 
-        self.plot_layout.addWidget(self.q4_container, 1, 1) 
+        
+        self.q3b_widget = pg.PlotWidget(title="EVM por Símbolo")
+        self.plot_layout.addWidget(self.q3b_widget, 2, 0)
+        self.q3b_widget.hide()
+        
+        self.plot_layout.addWidget(self.q4_container, 1, 1, 2, 1) 
 
         # Dejamos las curvas creadas
         self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
         self.q3_curve = self.q3_widget.plot([], pen=pg.mkPen(color="#FF9500", width=1.5))
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
+        self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+
+        # --- WATERFALL (Espectrograma) ---
+        self.waterfall_image = pg.ImageItem()
+        self.waterfall_colormap = pg.colormap.get('viridis')
+        self.waterfall_image.setLookupTable(self.waterfall_colormap.getLookupTable())
+        self.q3_widget.addItem(self.waterfall_image)
+        self.waterfall_enabled = False
+        self.waterfall_buffer = None
+
+        # --- AÑADIR ESTA LÍNEA DE UMBRAL PARA EL S-C (Línea discontinua roja a 0.7) ---
+        self.q3_sc_threshold = pg.InfiniteLine(
+            pos=0.7, 
+            angle=0, 
+            pen=pg.mkPen(color="#FF3333", width=0.75, style=Qt.PenStyle.SolidLine), 
+            movable=False
+        )
+        self.q3_widget.addItem(self.q3_sc_threshold)
+        self.q3_sc_threshold.hide() # Arranca oculta
+
+        self.q3_sc_threshold2 = pg.InfiniteLine(
+            pos=0.7, 
+            angle=0, 
+            pen=pg.mkPen(color="#FF3333", width=0.5, style=Qt.PenStyle.DashLine), 
+            movable=False
+        )
+        self.q3_widget.addItem(self.q3_sc_threshold2)
+        self.q3_sc_threshold2.hide() # Arranca oculta
+
+        # --- NUEVOS ELEMENTOS EVM PARA Q3 ---
+        self.q3_evm_peak_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(100, 100, 255, 100))
+        self.q3_evm_rms_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(0, 0, 150, 200))
+        self.q3_evm_rms_sym = self.q3b_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
+        self.q3_evm_peak_sym = self.q3b_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
+        self.q3_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+        self.q3b_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+        
+        self.q3_widget.addItem(self.q3_evm_peak_subc)
+        self.q3_widget.addItem(self.q3_evm_rms_subc)
+        self.q3_widget.addItem(self.q3_evm_limit)
+        self.q3b_widget.addItem(self.q3b_evm_limit)
+        
+        self.q3_evm_rms_subc.hide()
+        self.q3_evm_peak_subc.hide()
+        self.q3_evm_rms_sym.hide()
+        self.q3_evm_peak_sym.hide()
+        self.q3_evm_limit.hide()
+        self.q3b_evm_limit.hide()
 
         # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
         self.wifi_regions = []
@@ -890,6 +1182,7 @@ class MainWindow(QMainWindow):
         freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
 
         self.freq_input = QDoubleSpinBox()
+        self.freq_input.setKeyboardTracking(False)
         self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
         self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
         
@@ -925,12 +1218,17 @@ class MainWindow(QMainWindow):
         elif "Nuand bladeRF x40" in self.radio.nombre:
             self.sr_combo.addItems(["2 MHz", "5 MHz", "10 MHz", "20 MHz", "28 MHz", "40 MHz"])
             self.sr_combo.setCurrentText("20 MHz")
+        elif "Ettus USRP B200" in self.radio.nombre:
+            # La B200 soporta casi cualquier rate (hasta 56 MHz), ponemos valores enteros seguros
+            self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "16 MHz", "20 MHz", "32 MHz"])
+            # Arrancamos en 2 MHz para evitar el Overflow apenas abre el programa
+            self.sr_combo.setCurrentText("2 MHz") 
             
         self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
         form_layout.addRow(self.sr_label, self.sr_combo)
 
         # 3. GANANCIAS (Aparecen, cambian de nombre o desaparecen)
-        self.lna_combo = QComboBox() # Creamos las variables para no romper callbacks
+        self.lna_combo = QComboBox() 
         self.vga_combo = QComboBox()
 
         if "HackRF One" in self.radio.nombre:
@@ -946,10 +1244,16 @@ class MainWindow(QMainWindow):
 
         elif "Nuand bladeRF x40" in self.radio.nombre:
             self.lna_combo.addItems([f"{g} dB" for g in range(0, 61, 5)])
-            self.lna_combo.setCurrentText("0 dB") # Arrancamos en 0 para no tener tanto ruido al inicio
+            self.lna_combo.setCurrentText("0 dB") 
             self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
-            # Lo llamamos GLOBAL GAIN porque la bladeRF maneja una sola etapa unificada
             form_layout.addRow(QLabel("GLOBAL GAIN:"), self.lna_combo)
+            
+        elif "Ettus USRP B200" in self.radio.nombre:
+            # La B200 tiene una ganancia unificada que va de 0 a ~73/76 dB. 
+            self.lna_combo.addItems([f"{g} dB" for g in range(0, 76, 5)])
+            self.lna_combo.setCurrentText("40 dB") # Arrancamos por la mitad
+            self.lna_combo.currentTextChanged.connect(self.on_lna_changed)
+            form_layout.addRow(QLabel("RX GAIN:"), self.lna_combo)
             
         # Si es "rtlsdr", directamente NO agregamos los botones de ganancia al layout.
 
@@ -972,7 +1276,14 @@ class MainWindow(QMainWindow):
         self.zero_span_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.zero_span_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555;")
         self.zero_span_btn.clicked.connect(self.toggle_zero_span)
-        form_layout.addRow(QLabel("MODO SA:"), self.zero_span_btn)
+        self.zero_span_label = QLabel("MODO SA:")
+        form_layout.addRow(self.zero_span_label, self.zero_span_btn)
+
+        self.waterfall_checkbox = QCheckBox("Activar Waterfall")
+        self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
+        self.waterfall_checkbox.stateChanged.connect(self.on_waterfall_toggled)
+        self.waterfall_label = QLabel("ESPECTROGRAMA:")
+        form_layout.addRow(self.waterfall_label, self.waterfall_checkbox)
 
         controls_layout.addLayout(form_layout)
 
@@ -1015,6 +1326,20 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
         self.stereo_metrics_label.hide()
         controls_layout.addWidget(self.stereo_metrics_label)
+
+        # --- MÉTRICAS WIFI (SIGNAL) ---
+        self.wifi_metrics_label = QLabel("")
+        self.wifi_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.wifi_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+        self.wifi_metrics_label.hide()
+        controls_layout.addWidget(self.wifi_metrics_label)
+
+        # --- MÉTRICAS WIFI HW (CFO/SNR) ---
+        self.wifi_hw_metrics_label = QLabel("")
+        self.wifi_hw_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+        self.wifi_hw_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+        self.wifi_hw_metrics_label.hide()
+        controls_layout.addWidget(self.wifi_hw_metrics_label)
         
         controls_widget = QWidget()
         controls_widget.setLayout(controls_layout)
@@ -1096,6 +1421,11 @@ class StartupWindow(QMainWindow):
                 self.device_list.addItem("Nuand bladeRF x40")
                 devices_found += 1
         except: pass
+        try:
+            if usb.core.find(idVendor=0x2500):
+                self.device_list.addItem("Ettus USRP B200")
+                devices_found += 1
+        except: pass
 
         if devices_found == 0:
             item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
@@ -1116,6 +1446,9 @@ class StartupWindow(QMainWindow):
         elif "bladeRF" in device_name:
             print("Iniciando bladeRF...")
             radio_handler = BladeRFHandler(rx_callback=None)
+        elif "Ettus USRP B200" in device_name:
+            print("Iniciando Ettus B200...")
+            radio_handler = USRPB200Handler(rx_callback=None)
         else:
             return
 
