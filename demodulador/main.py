@@ -62,6 +62,8 @@ class MainWindow(QMainWindow):
         # --- VARIABLES INTERNAS DE LA UI ---
         self.current_freq_multiplier = 1e6
         self.is_paused = False
+        self._maximized_widget = None
+        self._saved_visibility = {}
 
         # Iniciamos managers
         self.trace_manager = TraceManager()
@@ -122,9 +124,7 @@ class MainWindow(QMainWindow):
             self.zero_span_btn.hide()
             self.zero_span_label.hide()
         self.radio.set_muestras_por_bloque(32768)
-        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
-        for lr in getattr(self, 'wifi_regions', []): lr.hide()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
         self.q3_curve.show()
@@ -134,6 +134,14 @@ class MainWindow(QMainWindow):
             self.q3_evm_rms_sym.hide()
             self.q3_evm_peak_sym.hide()
             self.q3_evm_limit.hide()
+            if hasattr(self, 'help_q3'): self.help_q3.hide()
+            if hasattr(self, 'btn_ideal_const'): self.btn_ideal_const.hide()
+            
+        # Asegurarnos de que las curvas usen líneas y no puntos de constelación (por si venimos de WiFi)
+        self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        self.q4R_curve.setData([], [], pen=pg.mkPen(color="#FF00FF", width=1.5), symbol=None)
+        if hasattr(self, 'q4L_ideal_curve'): self.q4L_ideal_curve.hide()
+        if hasattr(self, 'q4L_signal_curve'): self.q4L_signal_curve.setData([], [])
         
         self.audio_container.hide()
         # Configuramos las pantallas
@@ -256,12 +264,7 @@ class MainWindow(QMainWindow):
         self.q3b_widget.setLabel('left', 'EVM [dB]')
         self.q3b_widget.setYRange(-40, 0)
         
-        for lr in getattr(self, 'wifi_regions', []): lr.hide()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
-        
         self.q3_curve.hide()
-        self.q3_sc_threshold2.hide()
-        self.q3_sc_threshold.hide()
         
         if hasattr(self, 'q3_evm_rms_subc'):
             self.q3_evm_rms_subc.show()
@@ -270,13 +273,17 @@ class MainWindow(QMainWindow):
             self.q3_evm_peak_sym.show()
             self.q3_evm_limit.show()
             self.q3b_evm_limit.show()
+            self.help_q3.show()
+            self.help_q3b.show()
             self.q3b_widget.show()
+            if hasattr(self, 'btn_ideal_const'):
+                self.btn_ideal_const.show()
 
         # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
         self.q4L_widget.setTitle("Constelación")
         self.q4L_widget.setLabel('bottom', 'En Fase (I)')
         self.q4L_widget.setLabel('left', 'Cuadratura (Q)')
-        self.q4L_widget.setXRange(-2, 2)
+        self.q4L_widget.setXRange(-1.5, 1.5)
         self.q4L_widget.setYRange(-1, 1)
         self.q4L_widget.showGrid(x=True, y=True, alpha=0.5) # Agregamos una grilla de fondo
         self.q4L_widget.setAspectLocked(True)
@@ -350,9 +357,7 @@ class MainWindow(QMainWindow):
             
         self.q4_container.hide() # Ocultamos el contenedor
 
-        # Ocultamos las cajas de WiFi y sus textos si cambiamos de modo
-        for lr in getattr(self, 'wifi_regions', []): lr.hide()
-        for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
+
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
         self.q3_curve.show()
@@ -362,12 +367,17 @@ class MainWindow(QMainWindow):
             self.q3_evm_rms_sym.hide()
             self.q3_evm_peak_sym.hide()
             self.q3_evm_limit.hide()
+            if hasattr(self, 'help_q3'): self.help_q3.hide()
+            if hasattr(self, 'btn_ideal_const'): self.btn_ideal_const.hide()
 
         self.plot_layout.setRowStretch(1, 0)
         self.plot_layout.setRowStretch(2, 0)
 
         # Asegurarnos de que las curvas usen líneas y no puntos de constelación
         self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        if hasattr(self, 'q4L_ideal_curve'): self.q4L_ideal_curve.hide()
+        if hasattr(self, 'q4L_signal_curve'): self.q4L_signal_curve.setData([], [])
+        
         # Mostrar el gráfico R que ocultamos en WiFi
         self.q4R_widget.show()
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
@@ -513,6 +523,11 @@ class MainWindow(QMainWindow):
         event.accept()
         
     def keyPressEvent(self, event):
+        # Escape restaura el panel maximizado
+        if event.key() == Qt.Key.Key_Escape and self._maximized_widget is not None:
+            self._restore_panels()
+            return
+
         # Pausa con el espacio
         if event.key() == Qt.Key.Key_Space:
             self.pause_btn.click() # Simula el click físico en el botón
@@ -527,6 +542,62 @@ class MainWindow(QMainWindow):
         )
         if not handled:
             super().keyPressEvent(event)
+
+    # --- SISTEMA DE MAXIMIZAR/RESTAURAR PANELES (doble-click) ---
+    def eventFilter(self, obj, event):
+        if event.type() == event.Type.MouseButtonDblClick:
+            if self._maximized_widget is None:
+                self._maximize_panel(obj)
+            else:
+                self._restore_panels()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _maximize_panel(self, widget):
+        """Oculta los demás paneles y expande la celda del seleccionado para que ocupe toda la grilla."""
+        all_panels = [self.freq_plot, self.q2_widget, self.q3_widget, 
+                      self.q3b_widget, self.q4_container]
+        
+        # Guardar estado original
+        self._saved_visibility = {w: w.isVisible() for w in all_panels}
+        self._saved_row_stretches = {i: self.plot_layout.rowStretch(i) for i in range(self.plot_layout.rowCount())}
+        self._saved_col_stretches = {i: self.plot_layout.columnStretch(i) for i in range(self.plot_layout.columnCount())}
+        
+        # Encontrar dónde está el widget en la grilla
+        idx = self.plot_layout.indexOf(widget)
+        if idx == -1: return
+        row, col, rowSpan, colSpan = self.plot_layout.getItemPosition(idx)
+        
+        # Ocultar todos menos el seleccionado
+        for w in all_panels:
+            if w is not widget:
+                w.hide()
+        widget.show()
+        
+        # Darle todo el stretch a la fila/columna de nuestro widget, y 0 al resto
+        for i in range(self.plot_layout.rowCount()):
+            self.plot_layout.setRowStretch(i, 1 if (row <= i < row + rowSpan) else 0)
+        for i in range(self.plot_layout.columnCount()):
+            self.plot_layout.setColumnStretch(i, 1 if (col <= i < col + colSpan) else 0)
+            
+        self._maximized_widget = widget
+
+    def _restore_panels(self):
+        """Restaura todos los paneles a sus posiciones y tamaños originales."""
+        if self._maximized_widget is None: return
+        
+        # Restaurar visibilidad
+        for w, was_visible in self._saved_visibility.items():
+            w.setVisible(was_visible)
+            
+        # Restaurar stretches
+        for i, s in self._saved_row_stretches.items():
+            self.plot_layout.setRowStretch(i, s)
+        for i, s in self._saved_col_stretches.items():
+            self.plot_layout.setColumnStretch(i, s)
+            
+        self._maximized_widget = None
+        self._saved_visibility = {}
 
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
@@ -667,8 +738,13 @@ class MainWindow(QMainWindow):
                     # Barras crecen hacia arriba desde el piso del gráfico (como en el notebook)
                     subc_rms_db = np.asarray(evm_data['subc_rms'])
                     subc_peak_db = np.asarray(evm_data['subc_peak'])
-                    self.q3_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor)
-                    self.q3_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor)
+                    
+                    # Coloreamos distinto a las subportadoras piloto (-21, -7, 7, 21)
+                    brushes_peak = [pg.mkBrush(180, 50, 255, 150) if x in [-21, -7, 7, 21] else pg.mkBrush(100, 100, 255, 100) for x in evm_data['subc_x']]
+                    brushes_rms = [pg.mkBrush(140, 0, 220, 200) if x in [-21, -7, 7, 21] else pg.mkBrush(0, 0, 150, 200) for x in evm_data['subc_x']]
+                    
+                    self.q3_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor, brushes=brushes_peak)
+                    self.q3_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor, brushes=brushes_rms)
                     
                     n_syms = len(evm_data['sym_rms'])
                     if n_syms > 0:
@@ -724,6 +800,31 @@ class MainWindow(QMainWindow):
                     
                     # 2. Forzamos a Qt a repintar la escena del widget de forma manual e inmediata
                     self.q4L_widget.scene().update()
+                
+                # Actualizar Constelación Ideal si el botón está activado
+                mod = fm_metrics.get('wifi_metrics', {}).get('mod', '') if fm_metrics else ''
+                if mod and hasattr(self, 'btn_ideal_const') and self.btn_ideal_const.isChecked():
+                    if mod == 'BPSK': niveles = [-1, 1]
+                    elif mod == 'QPSK': niveles = [-1, 1]
+                    elif mod == '16-QAM': niveles = [-3, -1, 1, 3]
+                    elif mod == '64-QAM': niveles = [-7, -5, -3, -1, 1, 3, 5, 7]
+                    else: niveles = []
+                    
+                    if niveles:
+                        import itertools
+                        pts = [(x, 0) for x in niveles] if mod == 'BPSK' else list(itertools.product(niveles, niveles))
+                        pts_arr = np.array(pts, dtype=float)
+                        multiplicador = 1 if mod == 'BPSK' else 2
+                        P_teorica = np.mean(np.array(niveles)**2) * multiplicador
+                        escala = np.sqrt(1.0 / P_teorica)
+                        pts_arr *= escala
+                        self.q4L_ideal_curve.setData(pts_arr[:,0], pts_arr[:,1])
+                        self.q4L_ideal_curve.show()
+                    else:
+                        self.q4L_ideal_curve.hide()
+                else:
+                    if hasattr(self, 'q4L_ideal_curve'):
+                        self.q4L_ideal_curve.hide()
             
 
             if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
@@ -803,7 +904,7 @@ class MainWindow(QMainWindow):
                         snr = wifi.get('snr', 0.0)
                         html_hw = (
                             f"<div style='line-height: 1.5;'>"
-                            f"<span style='color: #FFFFFF'><b>CFO Estimado:</b></span> <span style='color: #FF5555;'>{cfo:+.1f} Hz</span><br>"
+                            f"<span style='color: #FFFFFF'><b>CFO Grueso:</b></span> <span style='color: #FF5555;'>{cfo:+.1f} Hz</span><br>"
                             f"<span style='color: #FFFFFF'><b>CFO Fino:</b></span> <span style='color: #FF5555;'>{cfo_fino:+.1f} Hz</span><br>"
                             f"<span style='color: #FFFFFF'><b>SNR:</b></span> <span style='color: #55FF55;'>{snr:.1f} dB</span>"
                             f"</div>"
@@ -928,6 +1029,7 @@ class MainWindow(QMainWindow):
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
         self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+        self.q4L_ideal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF0000")
 
         # --- WATERFALL (Espectrograma) ---
         self.waterfall_image = pg.ImageItem()
@@ -937,24 +1039,6 @@ class MainWindow(QMainWindow):
         self.waterfall_enabled = False
         self.waterfall_buffer = None
 
-        # --- AÑADIR ESTA LÍNEA DE UMBRAL PARA EL S-C (Línea discontinua roja a 0.7) ---
-        self.q3_sc_threshold = pg.InfiniteLine(
-            pos=0.7, 
-            angle=0, 
-            pen=pg.mkPen(color="#FF3333", width=0.75, style=Qt.PenStyle.SolidLine), 
-            movable=False
-        )
-        self.q3_widget.addItem(self.q3_sc_threshold)
-        self.q3_sc_threshold.hide() # Arranca oculta
-
-        self.q3_sc_threshold2 = pg.InfiniteLine(
-            pos=0.7, 
-            angle=0, 
-            pen=pg.mkPen(color="#FF3333", width=0.5, style=Qt.PenStyle.DashLine), 
-            movable=False
-        )
-        self.q3_widget.addItem(self.q3_sc_threshold2)
-        self.q3_sc_threshold2.hide() # Arranca oculta
 
         # --- NUEVOS ELEMENTOS EVM PARA Q3 ---
         self.q3_evm_peak_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(100, 100, 255, 100))
@@ -976,50 +1060,58 @@ class MainWindow(QMainWindow):
         self.q3_evm_limit.hide()
         self.q3b_evm_limit.hide()
 
-        # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
-        self.wifi_regions = []
-        self.wifi_labels = [] # Guardamos los textos para ocultarlos/mostrarlos
+        # --- ICONOS DE AYUDA (EVM) ---
+        # Panel Q3
+        self.help_q3 = QLabel("?", self.q3_widget)
+        self.help_q3.setStyleSheet("background-color: rgba(60, 60, 60, 200); color: white; border-radius: 10px; font-weight: bold;")
+        self.help_q3.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.help_q3.resize(20, 20)
+        self.help_q3.move(10, 10)
         
-        # Formato: (Inicio, Fin, Color_Fondo, Nombre, Color_Texto_Opaco)
-        regiones_data = [
-            (0, 160, (100, 150, 255, 60), "STS", (150, 190, 255)),     # Azul
-            (160, 192, (150, 150, 150, 60), "GI2", (210, 210, 210)),   # Gris
-            (192, 256, (100, 255, 100, 60), "LTS1", (150, 255, 150)),  # Verde
-            (256, 320, (150, 255, 150, 60), "LTS2", (190, 255, 190)),  # Verde claro
-            (320, 400, (255, 200, 0, 60), "SIGNAL", (255, 220, 100))   # Naranja
-        ]
+        self.tooltip_q3 = QLabel("Azul oscuro: EVM RMS de la subportadora\nCeleste: EVM Pico de la subportadora\nVioleta: Portadoras\nBlanco: Límite del estándar", self.q3_widget)
+        self.tooltip_q3.setStyleSheet("background-color: rgba(30, 30, 30, 240); color: white; border: 1px solid #777; padding: 8px; border-radius: 5px; font-size: 14px;")
+        self.tooltip_q3.adjustSize()
+        self.tooltip_q3.move(35, 10)
+        self.tooltip_q3.hide()
         
-        for start, end, color_bg, nombre, color_txt in regiones_data:
-            # 1. Creamos la región estática
-            lr = pg.LinearRegionItem(values=[start, end], brush=color_bg, movable=False)
-            for line in lr.lines: 
-                line.setPen(pg.mkPen(None))
-                line.setHoverPen(pg.mkPen(None))
-            
-            self.q3_widget.addItem(lr)
-            self.wifi_regions.append(lr)
-            lr.hide()
-            
-            # 2. Creamos el texto flotante
-            # anchor=(0.5, 1) alinea el texto perfectamente centrado en X
-            label = pg.TextItem(anchor=(0.5, 1))
-            x_center = (start + end) / 2
-            
-            # Posición: Centro de la caja en X, y altura fija en Y=1.45 (cerca del tope superior)
-            label.setPos(x_center, 1.25) 
-            
-            # Formateamos con HTML para darle la fuente, el color sólido (sin transparencia) y negrita
-            html_format = f'<div style="text-align: center;"><span style="color: rgb({color_txt[0]}, {color_txt[1]}, {color_txt[2]}); font-size: 13pt; font-weight: bold;">{nombre}</span></div>'
-            label.setHtml(html_format)
-            
-            self.q3_widget.addItem(label)
-            self.wifi_labels.append(label)
-            label.hide()
+        self.help_q3.enterEvent = lambda e: self.tooltip_q3.show()
+        self.help_q3.leaveEvent = lambda e: self.tooltip_q3.hide()
+        self.help_q3.hide()
+
+        # Panel Q3b
+        self.help_q3b = QLabel("?", self.q3b_widget)
+        self.help_q3b.setStyleSheet("background-color: rgba(60, 60, 60, 200); color: white; border-radius: 10px; font-weight: bold;")
+        self.help_q3b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.help_q3b.resize(20, 20)
+        self.help_q3b.move(10, 10)
+        
+        self.tooltip_q3b = QLabel("Verde: EVM RMS de cada símbolo OFDM\nRojo punteado: EVM Pico de cada símbolo\nBlanco: Límite del estándar", self.q3b_widget)
+        self.tooltip_q3b.setStyleSheet("background-color: rgba(30, 30, 30, 240); color: white; border: 1px solid #777; padding: 8px; border-radius: 5px; font-size: 14px;")
+        self.tooltip_q3b.adjustSize()
+        self.tooltip_q3b.move(35, 10)
+        self.tooltip_q3b.hide()
+        
+        self.help_q3b.enterEvent = lambda e: self.tooltip_q3b.show()
+        self.help_q3b.leaveEvent = lambda e: self.tooltip_q3b.hide()
+        self.help_q3b.hide()
+
+        # Botón Constelación Ideal en Q4L
+        self.btn_ideal_const = QPushButton("⌖", self.q4L_widget)
+        self.btn_ideal_const.setStyleSheet("QPushButton { background-color: rgba(60, 60, 60, 200); color: white; border-radius: 10px; font-weight: bold; font-size: 16px; border: none; } QPushButton:checked { background-color: rgba(200, 200, 200, 220); color: black; }")
+        self.btn_ideal_const.setCheckable(True)
+        self.btn_ideal_const.resize(24, 24)
+        self.btn_ideal_const.move(10, 10)
+        self.btn_ideal_const.setToolTip("Mostrar Constelación Ideal")
+        self.btn_ideal_const.hide()
 
         # Ocultamos por defecto
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_container.hide()
+
+        # --- Instalamos event filters para doble-click maximizar ---
+        for w in [self.freq_plot, self.q2_widget, self.q3_widget, self.q3b_widget, self.q4_container]:
+            w.installEventFilter(self)
 
         # Agregamos el contenedor entero al layout principal
         main_layout.addWidget(self.plot_container, stretch=4)

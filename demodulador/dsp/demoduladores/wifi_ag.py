@@ -481,6 +481,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             pilot_idx_ordered = [7, 21, 43, 57]  # orden en FFT
 
                             constelacion_corr = []
+                            pilots_corr = []
+                            pilots_ideales = []
                             for k in range(N_simbolos):
                                 offset = inicio_datos + k * (N_CP + N_FFT)
                                 simbolo = frame_norm[offset + N_CP : offset + N_CP + N_FFT]
@@ -497,13 +499,18 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 rot = pilots_rx * np.conj(pilots_exp)
                                 fase_residual = np.angle(np.mean(rot))
 
-                                # Corregir fase en las subportadoras de datos
+                                # Corregir fase en las subportadoras de datos y pilotos
                                 S_eq[data_idx] *= np.exp(-1j * fase_residual)
+                                pilots_rx_corr = pilots_rx * np.exp(-1j * fase_residual)
 
                                 constelacion_corr.append(S_eq[data_idx])
+                                pilots_corr.append(pilots_rx_corr)
+                                pilots_ideales.append(pilots_exp)
 
                             constelacion_corr = np.array(constelacion_corr)
                             puntos_corr = constelacion_corr.flatten()
+                            pilots_corr = np.array(pilots_corr)
+                            pilots_ideales = np.array(pilots_ideales)
 
                             # --- CÁLCULO DE EVM ---
                             H_datos = H[data_idx]
@@ -543,14 +550,23 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 if P_ref == 0: P_ref = 1e-10
                                 
                                 evm_matrix_pct = np.abs(puntos_validos - ideales_matrix) / np.sqrt(P_ref) * 100
+                                evm_pilots_pct = np.abs(pilots_corr - pilots_ideales) / np.sqrt(P_ref) * 100
+                                
+                                # Combinar datos y pilotos para EVM global (por símbolo)
+                                evm_all_pct = np.concatenate((evm_matrix_pct, evm_pilots_pct), axis=1)
                                 
                                 # Por simbolo
-                                evm_rms_sym  = np.sqrt(np.mean(evm_matrix_pct**2, axis=1))
-                                evm_peak_sym = np.max(evm_matrix_pct, axis=1)
+                                evm_rms_sym  = np.sqrt(np.mean(evm_all_pct**2, axis=1))
+                                evm_peak_sym = np.max(evm_all_pct, axis=1)
                                 
-                                # Por portadora
-                                evm_rms_subc  = np.sqrt(np.mean(evm_matrix_pct**2, axis=0))
-                                evm_peak_subc = np.max(evm_matrix_pct, axis=0)
+                                # Por portadora (datos y pilotos)
+                                evm_rms_subc_data = np.sqrt(np.mean(evm_matrix_pct**2, axis=0))
+                                evm_peak_subc_data = np.max(evm_matrix_pct, axis=0)
+                                evm_rms_subc_pilots = np.sqrt(np.mean(evm_pilots_pct**2, axis=0))
+                                evm_peak_subc_pilots = np.max(evm_pilots_pct, axis=0)
+                                
+                                evm_rms_subc = np.concatenate((evm_rms_subc_data, evm_rms_subc_pilots))
+                                evm_peak_subc = np.concatenate((evm_peak_subc_data, evm_peak_subc_pilots))
                                 
                                 def to_db(pct): return 20 * np.log10(np.maximum(pct, 1e-10) / 100)
                                 
@@ -559,7 +575,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 
                                 # Reordenar subportadoras de -26 a +26
                                 data_idx_validos = np.array(data_idx)[mask_validas]
-                                subp_num = np.where(data_idx_validos < 32, data_idx_validos, data_idx_validos - 64)
+                                # Concatenar indices de datos y pilotos
+                                all_idx_validos = np.concatenate((data_idx_validos, pilot_idx_ordered))
+                                subp_num = np.where(all_idx_validos < 32, all_idx_validos, all_idx_validos - 64)
                                 orden = np.argsort(subp_num)
                                 
                                 evm_rms_subc_db = to_db(evm_rms_subc[orden])
