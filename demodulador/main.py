@@ -62,6 +62,8 @@ class MainWindow(QMainWindow):
         # --- VARIABLES INTERNAS DE LA UI ---
         self.current_freq_multiplier = 1e6
         self.is_paused = False
+        self._maximized_widget = None
+        self._saved_visibility = {}
 
         # Iniciamos managers
         self.trace_manager = TraceManager()
@@ -513,6 +515,11 @@ class MainWindow(QMainWindow):
         event.accept()
         
     def keyPressEvent(self, event):
+        # Escape restaura el panel maximizado
+        if event.key() == Qt.Key.Key_Escape and self._maximized_widget is not None:
+            self._restore_panels()
+            return
+
         # Pausa con el espacio
         if event.key() == Qt.Key.Key_Space:
             self.pause_btn.click() # Simula el click físico en el botón
@@ -527,6 +534,62 @@ class MainWindow(QMainWindow):
         )
         if not handled:
             super().keyPressEvent(event)
+
+    # --- SISTEMA DE MAXIMIZAR/RESTAURAR PANELES (doble-click) ---
+    def eventFilter(self, obj, event):
+        if event.type() == event.Type.MouseButtonDblClick:
+            if self._maximized_widget is None:
+                self._maximize_panel(obj)
+            else:
+                self._restore_panels()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _maximize_panel(self, widget):
+        """Oculta los demás paneles y expande la celda del seleccionado para que ocupe toda la grilla."""
+        all_panels = [self.freq_plot, self.q2_widget, self.q3_widget, 
+                      self.q3b_widget, self.q4_container]
+        
+        # Guardar estado original
+        self._saved_visibility = {w: w.isVisible() for w in all_panels}
+        self._saved_row_stretches = {i: self.plot_layout.rowStretch(i) for i in range(self.plot_layout.rowCount())}
+        self._saved_col_stretches = {i: self.plot_layout.columnStretch(i) for i in range(self.plot_layout.columnCount())}
+        
+        # Encontrar dónde está el widget en la grilla
+        idx = self.plot_layout.indexOf(widget)
+        if idx == -1: return
+        row, col, rowSpan, colSpan = self.plot_layout.getItemPosition(idx)
+        
+        # Ocultar todos menos el seleccionado
+        for w in all_panels:
+            if w is not widget:
+                w.hide()
+        widget.show()
+        
+        # Darle todo el stretch a la fila/columna de nuestro widget, y 0 al resto
+        for i in range(self.plot_layout.rowCount()):
+            self.plot_layout.setRowStretch(i, 1 if (row <= i < row + rowSpan) else 0)
+        for i in range(self.plot_layout.columnCount()):
+            self.plot_layout.setColumnStretch(i, 1 if (col <= i < col + colSpan) else 0)
+            
+        self._maximized_widget = widget
+
+    def _restore_panels(self):
+        """Restaura todos los paneles a sus posiciones y tamaños originales."""
+        if self._maximized_widget is None: return
+        
+        # Restaurar visibilidad
+        for w, was_visible in self._saved_visibility.items():
+            w.setVisible(was_visible)
+            
+        # Restaurar stretches
+        for i, s in self._saved_row_stretches.items():
+            self.plot_layout.setRowStretch(i, s)
+        for i, s in self._saved_col_stretches.items():
+            self.plot_layout.setColumnStretch(i, s)
+            
+        self._maximized_widget = None
+        self._saved_visibility = {}
 
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
@@ -1020,6 +1083,10 @@ class MainWindow(QMainWindow):
         self.q2_widget.hide()
         self.q3_widget.hide()
         self.q4_container.hide()
+
+        # --- Instalamos event filters para doble-click maximizar ---
+        for w in [self.freq_plot, self.q2_widget, self.q3_widget, self.q3b_widget, self.q4_container]:
+            w.installEventFilter(self)
 
         # Agregamos el contenedor entero al layout principal
         main_layout.addWidget(self.plot_container, stretch=4)
