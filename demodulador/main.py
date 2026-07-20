@@ -39,7 +39,7 @@ state = {
 
 class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
-    data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object)
+    data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object, object)
 
 emitter = SignalEmitter()
 
@@ -108,7 +108,8 @@ class MainWindow(QMainWindow):
                     resultados.get('audio_time_R'), 
                     resultados.get('t_axis_audio'),
                     resultados.get('metricas'),
-                    resultados.get('mpx_time')
+                    resultados.get('mpx_time'),
+                    resultados.get('evm_data')
                 )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
@@ -126,6 +127,13 @@ class MainWindow(QMainWindow):
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+        self.q3_curve.show()
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.hide()
+            self.q3_evm_peak_subc.hide()
+            self.q3_evm_rms_sym.hide()
+            self.q3_evm_peak_sym.hide()
+            self.q3_evm_limit.hide()
         
         self.audio_container.hide()
         # Configuramos las pantallas
@@ -167,6 +175,8 @@ class MainWindow(QMainWindow):
         self.q3_widget.show()
         self.q4_container.show() # Mostramos el contenedor entero
         self.plot_layout.setRowStretch(1, 1)
+        self.plot_layout.setRowStretch(2, 0)
+        if hasattr(self, 'q3b_widget'): self.q3b_widget.hide()
 
         # Ajustamos Sample Rate Visual (Decimado)
         self.previous_sr_text = self.sr_combo.currentText()
@@ -217,6 +227,7 @@ class MainWindow(QMainWindow):
         
         self.plot_layout.setRowStretch(0, 1)
         self.plot_layout.setRowStretch(1, 1)
+        self.plot_layout.setRowStretch(2, 1)
 
         # --- CUADRANTE 2: SEÑAL EN EL TIEMPO (I) ---
         self.q2_widget.setTitle("Señal Baseband en el Tiempo")
@@ -229,25 +240,37 @@ class MainWindow(QMainWindow):
         # Restauramos la línea continua (quitamos los puntos sueltos que habíamos puesto para la constelación)
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
         
-        # --- CUADRANTE 3: Metrica S-C ---
-        self.q3_widget.setTitle("Metrica S-C normalizada")
+        # --- CUADRANTE 3: EVM ---
+        self.q3_widget.setTitle("EVM por Subportadora")
         self.q3_widget.getViewBox().invertY(False)
         self.q3_widget.setXLink(None)
-        self.q3_widget.setLabel('bottom', 'T')
-        self.q3_widget.setLabel('left', 'Relación')
-        self.q3_widget.setXRange(0, 400)
-        self.q3_widget.setYRange(0, 1.5)
+        self.q3_widget.setLabel('bottom', 'Subportadora')
+        self.q3_widget.setLabel('left', 'EVM [dB]')
+        self.q3_widget.setXRange(-27, 27)
+        self.q3_widget.setYRange(-40, 0)
         
-        # Mostramos las cajas de colores
-        # Mostramos las cajas de colores y sus textos
+        self.q3b_widget.setTitle("EVM por Símbolo")
+        self.q3b_widget.getViewBox().invertY(False)
+        self.q3b_widget.setXLink(None)
+        self.q3b_widget.setLabel('bottom', 'Símbolo')
+        self.q3b_widget.setLabel('left', 'EVM [dB]')
+        self.q3b_widget.setYRange(-40, 0)
+        
         for lr in getattr(self, 'wifi_regions', []): lr.hide()
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         
-        # Volvemos a setear línea normal (por si veníamos de otro modo)
-        self.q3_curve.setData([], [], pen=pg.mkPen(color="#FFC800", width=1.5), symbol=None)
-
-        self.q3_sc_threshold2.show()
-        self.q3_sc_threshold.show()
+        self.q3_curve.hide()
+        self.q3_sc_threshold2.hide()
+        self.q3_sc_threshold.hide()
+        
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.show()
+            self.q3_evm_peak_subc.show()
+            self.q3_evm_rms_sym.show()
+            self.q3_evm_peak_sym.show()
+            self.q3_evm_limit.show()
+            self.q3b_evm_limit.show()
+            self.q3b_widget.show()
 
         # --- CUADRANTE 4: CONSTELACIÓN (SÍMBOLOS DE DATOS) ---
         self.q4L_widget.setTitle("Constelación")
@@ -323,6 +346,7 @@ class MainWindow(QMainWindow):
             self.q3_widget.getViewBox().invertY(False)
             self.q3_widget.setXLink(None)
             self.q3_widget.hide()
+            if hasattr(self, 'q3b_widget'): self.q3b_widget.hide()
             
         self.q4_container.hide() # Ocultamos el contenedor
 
@@ -331,8 +355,16 @@ class MainWindow(QMainWindow):
         for lbl in getattr(self, 'wifi_labels', []): lbl.hide()
         # Restauramos el color original de la curva
         self.q3_curve.setPen(pg.mkPen(color="#FF9500", width=1.5))
+        self.q3_curve.show()
+        if hasattr(self, 'q3_evm_rms_subc'):
+            self.q3_evm_rms_subc.hide()
+            self.q3_evm_peak_subc.hide()
+            self.q3_evm_rms_sym.hide()
+            self.q3_evm_peak_sym.hide()
+            self.q3_evm_limit.hide()
 
         self.plot_layout.setRowStretch(1, 0)
+        self.plot_layout.setRowStretch(2, 0)
 
         # Asegurarnos de que las curvas usen líneas y no puntos de constelación
         self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
@@ -541,7 +573,7 @@ class MainWindow(QMainWindow):
                 self.waterfall_image.clear()
                 self.q3_widget.hide()
 
-    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None):
+    def update_plot(self, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
         if self.is_paused:
             return
         
@@ -629,8 +661,40 @@ class MainWindow(QMainWindow):
                     signal_env = np.abs(raw_samples)
                     self.q2_curve.setData(t_axis_us, signal_env)
                 
-                # --- GRÁFICAMOS SCHMIDL & COX EN EL Q3 ---
-                if mpx_time is not None:
+                # --- GRÁFICAMOS EVM EN EL Q3 ---
+                if evm_data is not None and hasattr(self, 'q3_evm_rms_subc'):
+                    y_floor = -40
+                    # Barras crecen hacia arriba desde el piso del gráfico (como en el notebook)
+                    subc_rms_db = np.asarray(evm_data['subc_rms'])
+                    subc_peak_db = np.asarray(evm_data['subc_peak'])
+                    self.q3_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor)
+                    self.q3_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor)
+                    
+                    n_syms = len(evm_data['sym_rms'])
+                    if n_syms > 0:
+                        sym_x = np.arange(n_syms)
+                        self.q3_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
+                        self.q3_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
+                        self.q3b_widget.setXRange(0, max(n_syms - 1, 1))
+                    else:
+                        self.q3_evm_rms_sym.setData([], [])
+                        self.q3_evm_peak_sym.setData([], [])
+                        
+                    metrics = fm_metrics.get('wifi_metrics', {}) if fm_metrics else {}
+                    mod = metrics.get('mod', '')
+                    mbps = metrics.get('mbps', '')
+                    if mod:
+                        # Límites EVM del estándar IEEE 802.11a/g (Table 17-10)
+                        EVM_LIMITS_DB = {
+                            6: -5, 9: -8, 12: -10, 18: -13,
+                            24: -16, 36: -19, 48: -22, 54: -25
+                        }
+                        limite_db = EVM_LIMITS_DB.get(int(mbps), -25)
+                        self.q3_evm_limit.setPos(limite_db)
+                        self.q3b_evm_limit.setPos(limite_db)
+                        self.q3_widget.setTitle(f"EVM por Subportadora ({mod} / {mbps} Mbps) — Límite: {limite_db} dB")
+                        self.q3b_widget.setTitle(f"EVM por Símbolo ({mod} / {mbps} Mbps) — Límite: {limite_db} dB")
+                elif mpx_time is not None and not hasattr(self, 'q3_evm_rms_subc'):
                     eje_x_sc = np.arange(len(mpx_time))
                     self.q3_curve.setData(eje_x_sc, mpx_time)
 
@@ -845,12 +909,18 @@ class MainWindow(QMainWindow):
         self.plot_layout.setSpacing(5) 
         self.plot_layout.setRowStretch(0, 1) 
         self.plot_layout.setRowStretch(1, 0) 
+        self.plot_layout.setRowStretch(2, 0) 
 
         # Agregamos a la grilla principal
         self.plot_layout.addWidget(self.freq_plot, 0, 0)
         self.plot_layout.addWidget(self.q2_widget, 0, 1) 
         self.plot_layout.addWidget(self.q3_widget, 1, 0) 
-        self.plot_layout.addWidget(self.q4_container, 1, 1) 
+        
+        self.q3b_widget = pg.PlotWidget(title="EVM por Símbolo")
+        self.plot_layout.addWidget(self.q3b_widget, 2, 0)
+        self.q3b_widget.hide()
+        
+        self.plot_layout.addWidget(self.q4_container, 1, 1, 2, 1) 
 
         # Dejamos las curvas creadas
         self.q2_curve = self.q2_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
@@ -885,6 +955,26 @@ class MainWindow(QMainWindow):
         )
         self.q3_widget.addItem(self.q3_sc_threshold2)
         self.q3_sc_threshold2.hide() # Arranca oculta
+
+        # --- NUEVOS ELEMENTOS EVM PARA Q3 ---
+        self.q3_evm_peak_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(100, 100, 255, 100))
+        self.q3_evm_rms_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(0, 0, 150, 200))
+        self.q3_evm_rms_sym = self.q3b_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
+        self.q3_evm_peak_sym = self.q3b_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
+        self.q3_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+        self.q3b_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+        
+        self.q3_widget.addItem(self.q3_evm_peak_subc)
+        self.q3_widget.addItem(self.q3_evm_rms_subc)
+        self.q3_widget.addItem(self.q3_evm_limit)
+        self.q3b_widget.addItem(self.q3b_evm_limit)
+        
+        self.q3_evm_rms_subc.hide()
+        self.q3_evm_peak_subc.hide()
+        self.q3_evm_rms_sym.hide()
+        self.q3_evm_peak_sym.hide()
+        self.q3_evm_limit.hide()
+        self.q3b_evm_limit.hide()
 
         # --- REGIONES DE COLOR Y TEXTOS PARA WIFI A/G ---
         self.wifi_regions = []

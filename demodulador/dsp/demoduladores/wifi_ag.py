@@ -505,6 +505,75 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             constelacion_corr = np.array(constelacion_corr)
                             puntos_corr = constelacion_corr.flatten()
 
+                            # --- CÁLCULO DE EVM ---
+                            H_datos = H[data_idx]
+                            mask_validas = np.abs(H_datos) > 1e-6
+                            
+                            NIVELES_MODULACION = {
+                                'BPSK':   np.array([-1, 1]),
+                                'QPSK':   np.array([-1, 1]),
+                                '16-QAM': np.array([-3, -1, 1, 3]),
+                                '64-QAM': np.array([-7, -5, -3, -1, 1, 3, 5, 7])
+                            }
+                            
+                            niveles_base = NIVELES_MODULACION.get(mod, np.array([-1, 1]))
+                            multiplicador_2d = 1 if mod == 'BPSK' else 2
+                            P_teorica = np.mean(niveles_base**2) * multiplicador_2d
+                            
+                            puntos_validos = constelacion_corr[:, mask_validas]
+                            
+                            if len(puntos_validos) > 0:
+                                P_rx = np.mean(np.abs(puntos_validos)**2)
+                                escala = np.sqrt(P_rx / P_teorica)
+                                niveles_norm = niveles_base * escala
+                                
+                                def decisor_gen(puntos_1d, niveles, es_bpsk):
+                                    I_dec = niveles[np.argmin(np.abs(puntos_1d.real[:,None] - niveles), axis=1)]
+                                    if es_bpsk:
+                                        Q_dec = np.zeros_like(I_dec)
+                                    else:
+                                        Q_dec = niveles[np.argmin(np.abs(puntos_1d.imag[:,None] - niveles), axis=1)]
+                                    return I_dec + 1j * Q_dec
+
+                                ideales_matrix = np.zeros_like(puntos_validos)
+                                for k in range(N_simbolos):
+                                    ideales_matrix[k] = decisor_gen(puntos_validos[k], niveles_norm, mod == 'BPSK')
+                                    
+                                P_ref = np.mean(np.abs(ideales_matrix)**2)
+                                if P_ref == 0: P_ref = 1e-10
+                                
+                                evm_matrix_pct = np.abs(puntos_validos - ideales_matrix) / np.sqrt(P_ref) * 100
+                                
+                                # Por simbolo
+                                evm_rms_sym  = np.sqrt(np.mean(evm_matrix_pct**2, axis=1))
+                                evm_peak_sym = np.max(evm_matrix_pct, axis=1)
+                                
+                                # Por portadora
+                                evm_rms_subc  = np.sqrt(np.mean(evm_matrix_pct**2, axis=0))
+                                evm_peak_subc = np.max(evm_matrix_pct, axis=0)
+                                
+                                def to_db(pct): return 20 * np.log10(np.maximum(pct, 1e-10) / 100)
+                                
+                                evm_rms_sym_db = to_db(evm_rms_sym)
+                                evm_peak_sym_db = to_db(evm_peak_sym)
+                                
+                                # Reordenar subportadoras de -26 a +26
+                                data_idx_validos = np.array(data_idx)[mask_validas]
+                                subp_num = np.where(data_idx_validos < 32, data_idx_validos, data_idx_validos - 64)
+                                orden = np.argsort(subp_num)
+                                
+                                evm_rms_subc_db = to_db(evm_rms_subc[orden])
+                                evm_peak_subc_db = to_db(evm_peak_subc[orden])
+                                subp_ordenadas = subp_num[orden]
+                                
+                                evm_data = {
+                                    'subc_x': subp_ordenadas,
+                                    'subc_rms': evm_rms_subc_db,
+                                    'subc_peak': evm_peak_subc_db,
+                                    'sym_rms': evm_rms_sym_db,
+                                    'sym_peak': evm_peak_sym_db
+                                }
+
                             break
 
             # 3. CÁLCULO DE ESPECTRO
@@ -531,7 +600,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
                 'audio_time_R': audio_R_out,
                 'psd_mpx': S_data.real if 'S_data' in locals() else None,
                 'f_axis_mpx': S_data.imag if 'S_data' in locals() else None,
-                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': wifi_metrics} 
+                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': wifi_metrics},
+                'evm_data': evm_data if 'evm_data' in locals() else None
             }
 
             with self._lock:
