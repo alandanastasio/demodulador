@@ -136,6 +136,12 @@ class MainWindow(QMainWindow):
             self.q3_evm_limit.hide()
             if hasattr(self, 'help_q3'): self.help_q3.hide()
             if hasattr(self, 'btn_ideal_const'): self.btn_ideal_const.hide()
+            
+        # Asegurarnos de que las curvas usen líneas y no puntos de constelación (por si venimos de WiFi)
+        self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        self.q4R_curve.setData([], [], pen=pg.mkPen(color="#FF00FF", width=1.5), symbol=None)
+        if hasattr(self, 'q4L_ideal_curve'): self.q4L_ideal_curve.hide()
+        if hasattr(self, 'q4L_signal_curve'): self.q4L_signal_curve.setData([], [])
         
         self.audio_container.hide()
         # Configuramos las pantallas
@@ -369,6 +375,9 @@ class MainWindow(QMainWindow):
 
         # Asegurarnos de que las curvas usen líneas y no puntos de constelación
         self.q4L_curve.setData([], [], pen=pg.mkPen(color="#00FFFF", width=1.5), symbol=None)
+        if hasattr(self, 'q4L_ideal_curve'): self.q4L_ideal_curve.hide()
+        if hasattr(self, 'q4L_signal_curve'): self.q4L_signal_curve.setData([], [])
+        
         # Mostrar el gráfico R que ocultamos en WiFi
         self.q4R_widget.show()
         self.q2_curve.setData([], [], pen=pg.mkPen(color="#C3FF00", width=1.5), symbol=None)
