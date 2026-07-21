@@ -1,6 +1,6 @@
 import numpy as np
 import threading
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import uniform_filter1d, binary_closing
 from .base import DemoduladorBase
 import time
 
@@ -130,8 +130,14 @@ class DemoduladorWiFiAG(DemoduladorBase):
         self.last_heavy_results = {}
         self.nuevos_datos_listos = False
         self._lock = threading.Lock()  # Protege last_heavy_results y nuevos_datos_listos
-        self.pausa_entre_snapshots = 0.3
+        self.pausa_entre_snapshots = 0.05
         self.proxima_captura = 0.0
+        self.ultimo_puntos_corr = None
+        self.ultimo_wifi_metrics = {}
+        self.ultimo_evm_data = None
+        self.ultimo_S_data = None
+        self.ultimo_chunk_norm = None
+        self.ultimo_M_norm = None
 
     @property
     def id(self): return "wifi_ag"
@@ -150,6 +156,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
         with self._lock:
             self.nuevos_datos_listos = False
             self.last_heavy_results = {}
+            self.ultimo_puntos_corr = None
+            self.ultimo_wifi_metrics = {}
+            self.ultimo_evm_data = None
+            self.ultimo_S_data = None
+            self.ultimo_chunk_norm = None
+            self.ultimo_M_norm = None
 
     def procesar(self, muestras_iq):
         with self._lock:
@@ -182,6 +194,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
             chunk_norm = np.array([])
             inicio_recorte = 0
             wifi_metrics = {}
+            S_data = None
 
             # --- 0. LIMPIEZA DE HARDWARE ---
             # Eliminamos la fuga del oscilador local (DC Offset) de todo el bloque
@@ -198,7 +211,13 @@ class DemoduladorWiFiAG(DemoduladorBase):
             
 
             energia_norm = energia_suave / max_energia
-            en_burst = energia_norm > 0.3
+            en_burst_raw = energia_norm > 0.3
+            
+            # --- PROTECCIÓN CONTRA FALSO FIN DE BURST ---
+            # Aplicamos cierre morfológico: Si hay una caída de energía menor a 100 muestras (5us)
+            # producida por fading o ruido, se "rellena" conectando el burst.
+            en_burst = binary_closing(en_burst_raw, structure=np.ones(100))
+            
             cambios = np.diff(en_burst.astype(int))
             inicios_burst = np.where(cambios == 1)[0]
             fines_burst   = np.where(cambios == -1)[0]
@@ -245,7 +264,10 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     # Buscamos el primer índice donde la correlación normalizada supera 0.7
                     indices_sts = np.where(M_norm > 0.7)[0]
                     
-                    if len(indices_sts) > 0:
+                    # Validación de Meseta (Plateau Check): 
+                    # El STS real dura ~160 muestras, la correlación debe mantenerse alta. 
+                    # Si solo hay unos pocos picos aislados (ej. < 32), es ruido transitorio y se descarta.
+                    if len(indices_sts) > 32:
                         muestra_local = indices_sts[0]
                         muestra_abs = ini_ext + muestra_local
                         
@@ -418,14 +440,25 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             paridad_rx   = info_bits[17]
                             paridad_ok   = (paridad_calc == paridad_rx)
 
+                            # TAIL (bits 18-23): Deben ser obligatoriamente ceros
+                            tail_bits = bits_decoded[18:24]
+                            tail_ok = (np.sum(tail_bits) == 0)
+
                             wifi_metrics.update({
                                 'rate_code': bin(rate_code),
                                 'mod': mod,
                                 'code_rate': code_rate,
                                 'mbps': mbps,
                                 'length': length,
-                                'paridad_ok': paridad_ok
+                                'paridad_ok': paridad_ok,
+                                'tail_ok': tail_ok
                             })
+
+                            # --- VALIDACIÓN ESTRICTA L-SIG (Rechazo de Falsos Positivos) ---
+                            # Si la modulación no existe, la paridad falla, o el tail no es cero, NO es un paquete válido.
+                            if mod == "?" or not paridad_ok or not tail_ok:
+                                S_data = None
+                                continue
 
                             # Demodulacion de los simbolos de datos (64-QAM)
                             N_CP  = 16
@@ -439,9 +472,15 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             # Inicio de los simbolos de datos: STS + GI2 + 2*LTS + SIGNAL
                             inicio_datos = N_STS + N_GI2 + 2 * N_LTS + (N_CP + N_FFT)
 
-                            # Cuantos simbolos entran en el frame
+                            # --- CÁLCULO EXACTO DE LONGITUD L-SIG (Evasión de truncamiento) ---
+                            N_DBPS = int(4 * mbps) # Bits de datos por símbolo OFDM
+                            N_simbolos_exacto = int(np.ceil((16 + 8 * length + 6) / N_DBPS))
+
+                            # Limitamos solo por si el hardware cortó el bloque físicamente
                             muestras_disponibles = len(frame_norm) - inicio_datos
-                            N_simbolos = muestras_disponibles // (N_CP + N_FFT)
+                            N_simbolos_max = muestras_disponibles // (N_CP + N_FFT)
+                            
+                            N_simbolos = min(N_simbolos_exacto, N_simbolos_max)
 
                             # Demodular cada simbolo
                             constelacion = []
@@ -591,6 +630,13 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                     'sym_rms': evm_rms_sym_db,
                                     'sym_peak': evm_peak_sym_db
                                 }
+                                
+                                self.ultimo_puntos_corr = puntos_corr
+                                self.ultimo_wifi_metrics = wifi_metrics
+                                self.ultimo_evm_data = evm_data
+                                self.ultimo_S_data = S_data
+                                self.ultimo_chunk_norm = chunk_norm
+                                self.ultimo_M_norm = M_norm
 
                             break
 
@@ -606,20 +652,23 @@ class DemoduladorWiFiAG(DemoduladorBase):
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
-            # ENVIAMOS ARRAYS VACÍOS EN LUGAR DE NONE PARA FORZAR LA LIMPIEZA DE LA GUI
-            audio_L_out = puntos_corr.real if puntos_corr is not None else np.array([])
-            audio_R_out = puntos_corr.imag if puntos_corr is not None else np.array([])
+            # ENVIAMOS LA ÚLTIMA CONSTELACIÓN VÁLIDA Y BURST (FREEZE) PARA QUE NO TITILE
+            p_corr = self.ultimo_puntos_corr
+            s_dat = self.ultimo_S_data
+            
+            audio_L_out = p_corr.real if p_corr is not None else np.array([])
+            audio_R_out = p_corr.imag if p_corr is not None else np.array([])
             
             resultados = {
                 'psd_rf': PSD,
-                'rf_chunk': chunk_norm,
-                'mpx_time': M_norm,  
+                'rf_chunk': self.ultimo_chunk_norm if self.ultimo_chunk_norm is not None else chunk_norm,
+                'mpx_time': self.ultimo_M_norm if self.ultimo_M_norm is not None else M_norm,  
                 'audio_time_L': audio_L_out,
                 'audio_time_R': audio_R_out,
-                'psd_mpx': S_data.real if 'S_data' in locals() else None,
-                'f_axis_mpx': S_data.imag if 'S_data' in locals() else None,
-                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': wifi_metrics},
-                'evm_data': evm_data if 'evm_data' in locals() else None
+                'psd_mpx': s_dat.real if s_dat is not None else np.array([]),
+                'f_axis_mpx': s_dat.imag if s_dat is not None else np.array([]),
+                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': self.ultimo_wifi_metrics},
+                'evm_data': self.ultimo_evm_data
             }
 
             with self._lock:
