@@ -18,6 +18,18 @@ class USRPB200Handler(SDRBase):
         self._thread = None
         self.muestras_por_bloque = 32768
         
+        # Fijamos el reloj maestro a 60 MHz desde el arranque.
+        # 60 MHz es el "mínimo común múltiplo" mágico para nuestras tasas:
+        # 60 / 20 MHz = 3 (WiFi)
+        # 60 / 2.4 MHz = 25 (FM)
+        # 60 / 2.0 MHz = 30 (SA)
+        # Al no tener que cambiar el reloj maestro sobre la marcha, evitamos que la B200
+        # se congele o el AD9361 crashee (el famoso bug del RFVCO).
+        try:
+            self.usrp.set_master_clock_rate(60e6)
+        except Exception as e:
+            print(f"Nota: No se pudo forzar 60MHz de master clock: {e}")
+            
         # Configuramos el streamer.
         # fc32: Host format (Float Complex 32 bits = np.complex64)
         # sc16: Wire format (Short Complex 16 bits) -> Optimiza el ancho de banda USB
@@ -68,6 +80,7 @@ class USRPB200Handler(SDRBase):
                     recv_buffer = np.zeros(chunk_size, dtype=np.complex64)
 
                 samps_received = 0
+                zero_samps_count = 0
                 
                 while samps_received < chunk_size and self.is_running:
                     # Sobrescribimos el buffer existente en lugar de crear uno nuevo
@@ -75,8 +88,17 @@ class USRPB200Handler(SDRBase):
                     
                     if metadata.error_code != uhd.types.RXMetadataErrorCode.none:
                         if metadata.error_code != uhd.types.RXMetadataErrorCode.timeout:
-                            # Ignoramos timeouts cortos, pero alertamos de otras cosas (como overflows)
-                            pass 
+                            # Si es un overflow (O), no descartamos el bloque entero de inmediato
+                            pass
+                            
+                    if samps == 0:
+                        zero_samps_count += 1
+                        if zero_samps_count > 10:
+                            # Demasiados errores seguidos, el stream probablemente murió o está muy atrasado.
+                            # Reiniciamos el bloque para evitar un freeze infinito
+                            break
+                    else:
+                        zero_samps_count = 0
                             
                     samps_received += samps
                 

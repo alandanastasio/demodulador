@@ -1,10 +1,13 @@
 import numpy as np
 from .base import DemoduladorBase
 
+import time
+
 class SpectrumAnalyzer(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 10e6
         self.fft_size = 4096
+        self.last_update = 0
 
     @property
     def id(self): return "sa"
@@ -21,6 +24,11 @@ class SpectrumAnalyzer(DemoduladorBase):
         Recibe muestras crudas y devuelve únicamente el espectro RF.
         No genera audio ni métricas.
         """
+        now = time.time()
+        if getattr(self, 'last_update', 0) and now - self.last_update < 1.0 / 30.0:
+            return None
+        self.last_update = now
+        
         fs = self.fft_size
         
         # Necesitamos tener al menos suficientes muestras para una FFT

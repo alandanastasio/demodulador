@@ -25,12 +25,12 @@ class MarkerManager:
         self.ui.freq_plot.addItem(self.marker_text_box, ignoreBounds=True)
         self.marker_text_box.hide()
         
-        self.ui.q2_widget.addItem(self.mpx_marker_text_box, ignoreBounds=True)
+        self.ui.wbfm_mpx_widget.addItem(self.mpx_marker_text_box, ignoreBounds=True)
         self.mpx_marker_text_box.hide()
 
         # Atamos los eventos de clics del mouse usando "self.ui"
         self.ui.freq_plot.scene().sigMouseClicked.connect(self.on_mouse_clicked)
-        self.ui.q2_widget.scene().sigMouseClicked.connect(self.on_mpx_mouse_clicked)
+        self.ui.wbfm_mpx_widget.scene().sigMouseClicked.connect(self.on_mpx_mouse_clicked)
 
     # === LÓGICA DE CONTROL (CLICS Y MENÚS) ===
     
@@ -44,7 +44,7 @@ class MarkerManager:
                     self.ui.freq_plot.addItem(self.markers_info[key]['item'])
                     self.marker_text_box.show()
                 else:
-                    self.ui.q2_widget.addItem(self.markers_info[key]['item'])
+                    self.ui.wbfm_mpx_widget.addItem(self.markers_info[key]['item'])
                     self.mpx_marker_text_box.show()
 
     def clear_markers(self):
@@ -53,7 +53,7 @@ class MarkerManager:
                 if data['current_plot'] == 'rf':
                     self.ui.freq_plot.removeItem(data['item'])
                 else:
-                    self.ui.q2_widget.removeItem(data['item'])
+                    self.ui.wbfm_mpx_widget.removeItem(data['item'])
             data['active'] = False
         
         self.marker_text_box.hide()
@@ -66,7 +66,7 @@ class MarkerManager:
             if self.markers_info[key]['current_plot'] == 'rf':
                 self.ui.freq_plot.removeItem(self.markers_info[key]['item'])
             else:
-                self.ui.q2_widget.removeItem(self.markers_info[key]['item'])
+                self.ui.wbfm_mpx_widget.removeItem(self.markers_info[key]['item'])
             self.markers_info[key]['active'] = False
         
         if self.current_moving_marker == key:
@@ -86,7 +86,7 @@ class MarkerManager:
                 marker['freq'] = mouse_point.x()
                 
                 if marker['current_plot'] != 'rf':
-                    self.ui.q2_widget.removeItem(marker['item'])
+                    self.ui.wbfm_mpx_widget.removeItem(marker['item'])
                     self.ui.freq_plot.addItem(marker['item'])
                     marker['current_plot'] = 'rf'
                     self.marker_text_box.show()
@@ -95,14 +95,14 @@ class MarkerManager:
 
     def on_mpx_mouse_clicked(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.current_moving_marker is not None:
-            if self.ui.q2_widget.sceneBoundingRect().contains(event.scenePos()):
-                mouse_point = self.ui.q2_widget.getViewBox().mapSceneToView(event.scenePos())
+            if self.ui.wbfm_mpx_widget.sceneBoundingRect().contains(event.scenePos()):
+                mouse_point = self.ui.wbfm_mpx_widget.getViewBox().mapSceneToView(event.scenePos())
                 marker = self.markers_info[self.current_moving_marker]
                 marker['freq'] = mouse_point.x()
                 
                 if marker['current_plot'] != 'mpx':
                     self.ui.freq_plot.removeItem(marker['item'])
-                    self.ui.q2_widget.addItem(marker['item'])
+                    self.ui.wbfm_mpx_widget.addItem(marker['item'])
                     marker['current_plot'] = 'mpx'
                     self.mpx_marker_text_box.show()
                     if not any(m['active'] and m['current_plot'] == 'rf' for m in self.markers_info.values()):
@@ -200,7 +200,7 @@ class MarkerManager:
             
             # Renderizar para MPX
             if demod_mode in ['wbfm', 'wbfm_audio']:
-                self._process_single_plot_render('mpx', f_axis_audio, psd_audio, self.mpx_marker_text_box, self.ui.q2_widget)
+                self._process_single_plot_render('mpx', f_axis_audio, psd_audio, self.mpx_marker_text_box, self.ui.wbfm_mpx_widget)
         else:
             self.marker_text_box.hide()
             self.mpx_marker_text_box.hide()
