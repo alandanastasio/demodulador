@@ -266,9 +266,23 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     
                     # Validación de Meseta (Plateau Check): 
                     # El STS real dura ~160 muestras, la correlación debe mantenerse alta. 
-                    # Si solo hay unos pocos picos aislados (ej. < 32), es ruido transitorio y se descarta.
                     if len(indices_sts) > 32:
-                        muestra_local = indices_sts[0]
+                        # --- DETECTOR DE CAÍDA DE MESETA (Al estilo del max_counter de VHDL) ---
+                        # En vez de usar la subida de la meseta (que depende de transitorios),
+                        # buscamos exactamente dónde se termina la meseta (el falling edge).
+                        saltos = np.where(np.diff(indices_sts) > 1)[0]
+                        if len(saltos) > 0:
+                            fin_meseta = indices_sts[saltos[0]]
+                        else:
+                            fin_meseta = indices_sts[-1]
+                            
+                        # La métrica empieza a caer teóricamente en la muestra 128 del STS, 
+                        # y cruza el 0.7 aproximadamente en la muestra 132.
+                        # Retrocedemos 132 muestras para encontrar el inicio exacto del STS.
+                        muestra_local = fin_meseta - 132
+                        
+                        if muestra_local < 0:
+                            muestra_local = indices_sts[0] # Fallback por si el bloque se recortó muy justo
                         muestra_abs = ini_ext + muestra_local
                         
                         margen_visual = 150
