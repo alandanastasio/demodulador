@@ -4,7 +4,7 @@ import pyqtgraph as pg
 import datetime
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtGui import QAction, QActionGroup, QPainterPath
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
@@ -285,7 +285,7 @@ class MainWindow(QMainWindow):
         self.q4L_widget.setLabel('left', 'Cuadratura (Q)')
         self.q4L_widget.setXRange(-1.5, 1.5)
         self.q4L_widget.setYRange(-1, 1)
-        self.q4L_widget.showGrid(x=True, y=True, alpha=0.5) # Agregamos una grilla de fondo
+        self.q4L_widget.showGrid(x=False, y=False) # Ocultamos la grilla
         self.q4L_widget.setAspectLocked(True)
         
         # Quitamos la línea (pen=None) y usamos puntos (symbol='o')
@@ -1029,7 +1029,14 @@ class MainWindow(QMainWindow):
         self.q4L_curve = self.q4L_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
         self.q4R_curve = self.q4R_widget.plot([], pen=pg.mkPen(color="#FF00FF", width=1.5))
         self.q4L_signal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
-        self.q4L_ideal_curve = self.q4L_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF0000")
+        
+        cross_path = QPainterPath()
+        cross_path.moveTo(-0.5, 0)
+        cross_path.lineTo(0.5, 0)
+        cross_path.moveTo(0, -0.5)
+        cross_path.lineTo(0, 0.5)
+        
+        self.q4L_ideal_curve = self.q4L_widget.plot([], pen=None, symbol=cross_path, symbolSize=30, symbolPen=pg.mkPen(color="#606060", width=1), symbolBrush=None)
 
         # --- WATERFALL (Espectrograma) ---
         self.waterfall_image = pg.ImageItem()
