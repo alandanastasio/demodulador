@@ -1,10 +1,11 @@
 import sys
+import os
 import numpy as np
 import pyqtgraph as pg
 import datetime
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QPainterPath
+from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
@@ -57,6 +58,8 @@ class MainWindow(QMainWindow):
         
         # 2. CONFIGURACIÓN DE LA VENTANA
         self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}]")
+        icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.png")
+        self.setWindowIcon(QIcon(icon_path))
         self.resize(QSize(1200, 600))
         self.setMinimumSize(QSize(800, 400))
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")

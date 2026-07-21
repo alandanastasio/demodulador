@@ -1,6 +1,8 @@
 import sys
+import os
 import usb.core
 from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QLabel, QPushButton, QListWidget, QWidget, QListWidgetItem, QApplication
 from hardware.hackrf_handler import HackRFHandler
 from hardware.rtlsdr_handler import RtlSdrHandler
@@ -12,6 +14,8 @@ class StartupWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DEMODULADOR SDR")
+        icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.png")
+        self.setWindowIcon(QIcon(icon_path))
         self.resize(QSize(400, 350))
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
@@ -116,6 +120,9 @@ class StartupWindow(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setDesktopFileName("demodulador.desktop")
+    icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.png")
+    app.setWindowIcon(QIcon(icon_path))
     startup_window = StartupWindow()
     startup_window.show()
     sys.exit(app.exec())
