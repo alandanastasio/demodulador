@@ -2,6 +2,7 @@ import sys
 import os
 import numpy as np
 import pyqtgraph as pg
+import pyqtgraph.exporters
 import datetime
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
@@ -9,7 +10,7 @@ from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
-                             QPushButton, QListWidgetItem, QGridLayout, QCheckBox)
+                             QPushButton, QListWidgetItem, QGridLayout, QCheckBox, QMessageBox)
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
@@ -513,4 +514,24 @@ class MainWindow(QMainWindow):
         if new_val > 1000: new_val = 1000
         self.waterfall_lines = new_val
         if hasattr(self, 'wf_lines_label'):
-            self.wf_lines_label.setText(f"{self.waterfall_lines} lín.")
+            self.wf_lines_label.setText(f"{self.waterfall_lines} líneas")
+
+    def save_waterfall(self):
+        if not getattr(self, 'waterfall_enabled', False) or self.waterfall_buffer is None:
+            return
+            
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Guardar Espectrograma", "", "Imágenes PNG (*.png)"
+        )
+        if not filepath:
+            return
+            
+        if not filepath.lower().endswith('.png'):
+            filepath += '.png'
+            
+        try:
+            exporter = pg.exporters.ImageExporter(self.waterfall_widget.plotItem)
+            exporter.export(filepath)
+            QMessageBox.information(self, "Éxito", f"Espectrograma guardado correctamente en:\n{filepath}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen:\n{str(e)}")

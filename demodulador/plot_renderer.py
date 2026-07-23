@@ -53,10 +53,11 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         # Actualizamos la imagen (X: frecuencia, Y: tiempo)
                         # autoLevels=False y levels fijos evitan que pyqtgraph colapse calculando
                         # los min/max de la matriz enorme docenas de veces por segundo.
+                        # El usuario prefiere escala estática: Mínimo en -100 dBm, máximo en +30 dBm
                         self.waterfall_image.setImage(
                             self.waterfall_buffer, 
                             autoLevels=False, 
-                            levels=(-130, -30), 
+                            levels=(-100, 30), 
                             autoDownsample=True
                         )
                         

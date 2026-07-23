@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
@@ -93,8 +93,11 @@ def build_ui(self, state):
     self.waterfall_widget.getViewBox().invertY(True)
     self.waterfall_widget.setXLink(self.freq_plot)
     self.waterfall_image = pg.ImageItem()
-    self.waterfall_colormap = pg.colormap.get('viridis')
-    self.waterfall_image.setLookupTable(self.waterfall_colormap.getLookupTable())
+    
+    # El usuario prefiere el colormap 'turbo'
+    self.waterfall_colormap = pg.colormap.get('turbo')
+    # Aumentamos la resolución a 1024 colores para tener mayor sensibilidad a cambios finos de potencia
+    self.waterfall_image.setLookupTable(self.waterfall_colormap.getLookupTable(nPts=1024))
     self.waterfall_widget.addItem(self.waterfall_image)
     self.waterfall_enabled = False
     self.waterfall_buffer = None
@@ -419,6 +422,12 @@ def build_ui(self, state):
     # --- LADO DERECHO: CONTROLES ---
     controls_layout = QVBoxLayout()
     controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+    # --- TÍTULO PRINCIPAL ---
+    self.sa_config_label = QLabel("CONFIGURACIÓN SA")
+    self.sa_config_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; margin-bottom: 5px;")
+    controls_layout.addWidget(self.sa_config_label)
+
     form_layout = QFormLayout()
 
    # 1. FRECUENCIA CENTRAL (Común a todos)
@@ -522,10 +531,30 @@ def build_ui(self, state):
     self.zero_span_label = QLabel("MODO SA:")
     form_layout.addRow(self.zero_span_label, self.zero_span_btn)
 
+    # Agregamos todo lo del form_layout a la barra lateral
+    controls_layout.addLayout(form_layout)
+
+    # --- LÍNEA SEPARADORA ---
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFrameShadow(QFrame.Shadow.Sunken)
+    line.setStyleSheet("background-color: #555;")
+    controls_layout.addWidget(line)
+
+    # --- SECCIÓN ESPECTROGRAMA ---
+    self.waterfall_label = QLabel("ESPECTROGRAMA")
+    self.waterfall_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; margin-top: 5px;")
+    controls_layout.addWidget(self.waterfall_label)
+
     self.waterfall_checkbox = QCheckBox("Activar Waterfall")
-    self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
+    self.waterfall_checkbox.setStyleSheet("color: #ccc;")
     self.waterfall_checkbox.stateChanged.connect(self.on_waterfall_toggled)
 
+    wf_btns_layout = QHBoxLayout()
+    wf_btns_layout.setContentsMargins(0, 0, 0, 0)
+    wf_btns_layout.addWidget(self.waterfall_checkbox)
+    wf_btns_layout.addStretch()
+    
     self.wf_btn_menos = QPushButton("-")
     self.wf_btn_menos.setCursor(Qt.CursorShape.PointingHandCursor)
     self.wf_btn_menos.setFixedSize(QSize(25, 25))
@@ -533,6 +562,10 @@ def build_ui(self, state):
     self.wf_btn_menos.clicked.connect(lambda: self.change_waterfall_lines(-50))
     self.wf_btn_menos.setToolTip("Disminuir tiempo (Líneas)")
 
+    self.wf_lines_label = QLabel(f"{getattr(self, 'waterfall_lines', 200)} líneas")
+    self.wf_lines_label.setStyleSheet("color: #aaa; font-size: 14px; font-weight: bold;")
+    self.wf_lines_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    
     self.wf_btn_mas = QPushButton("+")
     self.wf_btn_mas.setCursor(Qt.CursorShape.PointingHandCursor)
     self.wf_btn_mas.setFixedSize(QSize(25, 25))
@@ -540,24 +573,27 @@ def build_ui(self, state):
     self.wf_btn_mas.clicked.connect(lambda: self.change_waterfall_lines(50))
     self.wf_btn_mas.setToolTip("Aumentar tiempo (Líneas)")
     
-    self.wf_lines_label = QLabel(f"{getattr(self, 'waterfall_lines', 200)} lín.")
-    self.wf_lines_label.setStyleSheet("color: #aaa; font-size: 11px;")
-    self.wf_lines_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    self.wf_lines_label.setFixedWidth(50)
-    
-    wf_layout = QHBoxLayout()
-    wf_layout.setContentsMargins(0, 0, 0, 0)
-    wf_layout.addWidget(self.waterfall_checkbox)
-    wf_layout.addStretch()
-    wf_layout.addWidget(self.wf_btn_menos)
-    wf_layout.addWidget(self.wf_lines_label)
-    wf_layout.addWidget(self.wf_btn_mas)
+    wf_btns_layout.addWidget(self.wf_btn_menos)
+    wf_btns_layout.addWidget(self.wf_lines_label)
+    wf_btns_layout.addWidget(self.wf_btn_mas)
 
-    self.waterfall_label = QLabel("ESPECTROGRAMA:")
-    form_layout.addRow(self.waterfall_label, wf_layout)
+    self.waterfall_controls_widget = QWidget()
+    self.waterfall_controls_widget.setLayout(wf_btns_layout)
+    controls_layout.addWidget(self.waterfall_controls_widget)
 
-    controls_layout.addLayout(form_layout)
+    self.wf_btn_save = QPushButton("💾 Guardar imagen")
+    self.wf_btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_save.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555; margin-top: 5px;")
+    self.wf_btn_save.clicked.connect(self.save_waterfall)
+    self.wf_btn_save.setToolTip("Guardar Espectrograma como Imagen PNG")
+    controls_layout.addWidget(self.wf_btn_save)
 
+    # --- LÍNEA SEPARADORA 2 ---
+    line2 = QFrame()
+    line2.setFrameShape(QFrame.Shape.HLine)
+    line2.setFrameShadow(QFrame.Shadow.Sunken)
+    line2.setStyleSheet("background-color: #555;")
+    controls_layout.addWidget(line2)
     # 5. BOTONES DE AUDIO ESTÉREO
     self.audio_container = QWidget() # Creamos un contenedor
     audio_layout = QHBoxLayout(self.audio_container)
