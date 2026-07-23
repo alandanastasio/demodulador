@@ -490,7 +490,7 @@ class MainWindow(QMainWindow):
             self.waterfall_buffer = None
             if state.get('demod_mode') == 'none':
                 self.waterfall_widget.setTitle("Espectrograma (Waterfall)")
-                self.waterfall_widget.setLabel('left', 'Tiempo [ms]')
+                self.waterfall_widget.setLabel('left', 'Tiempo [s]')
                 self.waterfall_widget.enableAutoRange(axis='xy')
                 self.waterfall_widget.getViewBox().invertY(True)
                 self.waterfall_widget.setXLink(self.freq_plot)
@@ -507,4 +507,10 @@ class MainWindow(QMainWindow):
                 self.waterfall_widget.hide()
                 self.layout_normal.setRowStretch(1, 0)
 
-
+    def change_waterfall_lines(self, delta):
+        new_val = getattr(self, 'waterfall_lines', 200) + delta
+        if new_val < 50: new_val = 50
+        if new_val > 1000: new_val = 1000
+        self.waterfall_lines = new_val
+        if hasattr(self, 'wf_lines_label'):
+            self.wf_lines_label.setText(f"{self.waterfall_lines} lín.")

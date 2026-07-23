@@ -89,7 +89,7 @@ def build_ui(self, state):
     self.layout_normal.setSpacing(5)
     
     self.waterfall_widget = pg.PlotWidget(title="Espectrograma (Waterfall)")
-    self.waterfall_widget.setLabel('left', 'Tiempo [ms]')
+    self.waterfall_widget.setLabel('left', 'Tiempo [s]')
     self.waterfall_widget.getViewBox().invertY(True)
     self.waterfall_widget.setXLink(self.freq_plot)
     self.waterfall_image = pg.ImageItem()
@@ -98,6 +98,7 @@ def build_ui(self, state):
     self.waterfall_widget.addItem(self.waterfall_image)
     self.waterfall_enabled = False
     self.waterfall_buffer = None
+    self.waterfall_lines = 200
     
     self.layout_normal.addWidget(self.waterfall_widget)
     self.modes_stack.addWidget(self.page_normal)
@@ -524,8 +525,36 @@ def build_ui(self, state):
     self.waterfall_checkbox = QCheckBox("Activar Waterfall")
     self.waterfall_checkbox.setStyleSheet("color: white; font-weight: bold;")
     self.waterfall_checkbox.stateChanged.connect(self.on_waterfall_toggled)
+
+    self.wf_btn_menos = QPushButton("-")
+    self.wf_btn_menos.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_menos.setFixedSize(QSize(25, 25))
+    self.wf_btn_menos.setStyleSheet("background-color: #444; color: white; font-weight: bold; border-radius: 4px; border: 1px solid #555;")
+    self.wf_btn_menos.clicked.connect(lambda: self.change_waterfall_lines(-50))
+    self.wf_btn_menos.setToolTip("Disminuir tiempo (Líneas)")
+
+    self.wf_btn_mas = QPushButton("+")
+    self.wf_btn_mas.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_mas.setFixedSize(QSize(25, 25))
+    self.wf_btn_mas.setStyleSheet("background-color: #444; color: white; font-weight: bold; border-radius: 4px; border: 1px solid #555;")
+    self.wf_btn_mas.clicked.connect(lambda: self.change_waterfall_lines(50))
+    self.wf_btn_mas.setToolTip("Aumentar tiempo (Líneas)")
+    
+    self.wf_lines_label = QLabel(f"{getattr(self, 'waterfall_lines', 200)} lín.")
+    self.wf_lines_label.setStyleSheet("color: #aaa; font-size: 11px;")
+    self.wf_lines_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    self.wf_lines_label.setFixedWidth(50)
+    
+    wf_layout = QHBoxLayout()
+    wf_layout.setContentsMargins(0, 0, 0, 0)
+    wf_layout.addWidget(self.waterfall_checkbox)
+    wf_layout.addStretch()
+    wf_layout.addWidget(self.wf_btn_menos)
+    wf_layout.addWidget(self.wf_lines_label)
+    wf_layout.addWidget(self.wf_btn_mas)
+
     self.waterfall_label = QLabel("ESPECTROGRAMA:")
-    form_layout.addRow(self.waterfall_label, self.waterfall_checkbox)
+    form_layout.addRow(self.waterfall_label, wf_layout)
 
     controls_layout.addLayout(form_layout)
 

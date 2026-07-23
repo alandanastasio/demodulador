@@ -1,6 +1,7 @@
 import pyqtgraph as pg
 import numpy as np
 from PyQt6.QtCore import Qt
+import time
 
 def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
     if self.is_paused:
@@ -35,15 +36,14 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 
                 # --- LÓGICA DE WATERFALL ---
                 if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none':
-                    if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != len(PSD):
-                        self.waterfall_lines = 200
+                    if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != len(PSD) or self.waterfall_buffer.shape[1] != self.waterfall_lines:
                         self.waterfall_buffer = np.zeros((len(PSD), self.waterfall_lines))
                         self.waterfall_buffer.fill(-130)
                         self.waterfall_counter = 0
                     
                     self.waterfall_counter = getattr(self, 'waterfall_counter', 0) + 1
                     
-                    if self.waterfall_counter >= 7:
+                    if self.waterfall_counter >= 5:
                         self.waterfall_counter = 0
                         
                         # Desplazamos las columnas de tiempo hacia la derecha (o izquierda, según el waterfall)
@@ -63,13 +63,26 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         # Ajustamos la escala para que coincida con el eje X de frecuencias
                         f_min, f_max = self.f_axis[0], self.f_axis[-1]
                         
-                        if raw_samples is not None and state.get('sample_rate'):
-                            block_time_ms = (len(raw_samples) / state['sample_rate']) * 1000.0
-                            total_time_ms = block_time_ms * 7 * self.waterfall_lines
+                        # Medimos el tiempo exacto que pasó desde la última vez que agregamos una línea
+                        now = time.time()
+                        if not hasattr(self, 'wf_last_time'):
+                            self.wf_last_time = now
+                            dt = 1.0 / 30.0 * 5 # Valor por defecto razonable
                         else:
-                            total_time_ms = self.waterfall_lines * 7
+                            dt = now - self.wf_last_time
+                            self.wf_last_time = now
                             
-                        self.waterfall_image.setRect(pg.QtCore.QRectF(f_min, 0, f_max - f_min, total_time_ms))
+                        # Usamos un filtro pasa-bajos simple para estabilizar la escala
+                        if not hasattr(self, 'wf_dt_avg'):
+                            self.wf_dt_avg = dt
+                        else:
+                            self.wf_dt_avg = 0.9 * self.wf_dt_avg + 0.1 * dt
+                            
+                        # El tiempo total del eje es el tiempo promedio por línea * cantidad de líneas
+                        total_time_s = self.wf_dt_avg * self.waterfall_lines
+                        
+                        self.waterfall_image.setRect(pg.QtCore.QRectF(f_min, 0, f_max - f_min, total_time_s))
+                        self.waterfall_widget.setLabel('left', 'Tiempo [s]')
 
                 # --- LÓGICA DE MARKERS Y DELTAS ---
                 self.marker_manager.update_render(
