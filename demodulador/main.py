@@ -6,7 +6,7 @@ import pyqtgraph.exporters
 import datetime
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon
+from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon, QPainter
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
                              QToolBar, QToolButton, QMenu, QFileDialog, QListWidget,
@@ -515,6 +515,11 @@ class MainWindow(QMainWindow):
         self.waterfall_lines = new_val
         if hasattr(self, 'wf_lines_label'):
             self.wf_lines_label.setText(f"{self.waterfall_lines} líneas")
+
+    def on_smooth_toggled(self, state):
+        smooth_on = (state == Qt.CheckState.Checked.value or state == 2)
+        self.waterfall_widget.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, smooth_on)
+        self.waterfall_widget.update()
 
     def save_waterfall(self):
         if not getattr(self, 'waterfall_enabled', False) or self.waterfall_buffer is None:

@@ -1,5 +1,5 @@
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QAction, QPainterPath, QActionGroup
+from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter
 from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame
 import pyqtgraph as pg
 import numpy as np
@@ -91,6 +91,7 @@ def build_ui(self, state):
     self.waterfall_widget = pg.PlotWidget(title="Espectrograma (Waterfall)")
     self.waterfall_widget.setLabel('left', 'Tiempo [s]')
     self.waterfall_widget.getViewBox().invertY(True)
+    self.waterfall_widget.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     self.waterfall_widget.setXLink(self.freq_plot)
     self.waterfall_image = pg.ImageItem()
     
@@ -581,12 +582,26 @@ def build_ui(self, state):
     self.waterfall_controls_widget.setLayout(wf_btns_layout)
     controls_layout.addWidget(self.waterfall_controls_widget)
 
+    self.wf_smooth_checkbox = QCheckBox("Suavizado")
+    self.wf_smooth_checkbox.setStyleSheet("color: #ccc; margin-top: 5px;")
+    self.wf_smooth_checkbox.setChecked(True)
+    self.wf_smooth_checkbox.stateChanged.connect(self.on_smooth_toggled)
+
     self.wf_btn_save = QPushButton("💾 Guardar imagen")
     self.wf_btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
     self.wf_btn_save.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555; margin-top: 5px;")
     self.wf_btn_save.clicked.connect(self.save_waterfall)
     self.wf_btn_save.setToolTip("Guardar Espectrograma como Imagen PNG")
-    controls_layout.addWidget(self.wf_btn_save)
+    
+    wf_bottom_layout = QHBoxLayout()
+    wf_bottom_layout.setContentsMargins(0, 0, 0, 0)
+    wf_bottom_layout.addWidget(self.wf_smooth_checkbox)
+    wf_bottom_layout.addStretch()
+    wf_bottom_layout.addWidget(self.wf_btn_save)
+    
+    self.wf_bottom_widget = QWidget()
+    self.wf_bottom_widget.setLayout(wf_bottom_layout)
+    controls_layout.addWidget(self.wf_bottom_widget)
 
     # --- LÍNEA SEPARADORA 2 ---
     line2 = QFrame()
