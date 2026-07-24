@@ -95,7 +95,7 @@ def build_ui(self, state):
     self.waterfall_widget.setXLink(self.freq_plot)
     self.waterfall_image = pg.ImageItem()
     
-    # El usuario prefiere el colormap 'turbo'
+    # Aplicamos la paleta de color Viridis Turbo
     self.waterfall_colormap = pg.colormap.get('turbo')
     # Aumentamos la resolución a 1024 colores para tener mayor sensibilidad a cambios finos de potencia
     self.waterfall_image.setLookupTable(self.waterfall_colormap.getLookupTable(nPts=1024))

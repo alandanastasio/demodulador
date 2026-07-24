@@ -23,3 +23,8 @@ dependencies = [
 
 [tool.uv.sources]
 bladerf = { git = "https://github.com/Nuand/bladeRF.git", subdirectory = "host/libraries/libbladeRF_bindings/python" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
