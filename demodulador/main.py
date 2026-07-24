@@ -132,6 +132,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
         if hasattr(self, 'zero_span_btn'): 
             self.zero_span_btn.setChecked(False)
             state['zero_span'] = False
@@ -178,6 +184,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
         if hasattr(self, 'zero_span_btn'): 
             self.zero_span_btn.setChecked(False)
             state['zero_span'] = False
@@ -247,6 +259,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.show()
             self.waterfall_label.show()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.show()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.show()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.show()
         if hasattr(self, 'zero_span_btn'): 
             self.zero_span_btn.show()
             self.zero_span_label.show()

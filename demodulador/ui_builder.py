@@ -604,11 +604,11 @@ def build_ui(self, state):
     controls_layout.addWidget(self.wf_bottom_widget)
 
     # --- LÍNEA SEPARADORA 2 ---
-    line2 = QFrame()
-    line2.setFrameShape(QFrame.Shape.HLine)
-    line2.setFrameShadow(QFrame.Shadow.Sunken)
-    line2.setStyleSheet("background-color: #555;")
-    controls_layout.addWidget(line2)
+    self.waterfall_line2 = QFrame()
+    self.waterfall_line2.setFrameShape(QFrame.Shape.HLine)
+    self.waterfall_line2.setFrameShadow(QFrame.Shadow.Sunken)
+    self.waterfall_line2.setStyleSheet("background-color: #555;")
+    controls_layout.addWidget(self.waterfall_line2)
     # 5. BOTONES DE AUDIO ESTÉREO
     self.audio_container = QWidget() # Creamos un contenedor
     audio_layout = QHBoxLayout(self.audio_container)
