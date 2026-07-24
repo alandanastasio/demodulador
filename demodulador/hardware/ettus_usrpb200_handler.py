@@ -5,16 +5,21 @@ import uhd
 from .sdr_base import SDRBase
 
 class USRPB200Handler(SDRBase):
-    def __init__(self, rx_callback):
+    def __init__(self, rx_callback, serial=None):
         super().__init__(rx_callback)
+        self.serial = serial
         
+        args = "type=b200"
+        if self.serial:
+            args += f",serial={self.serial}"
+            
         # Inicializamos el USRP. Le pasamos type=b200 para asegurarnos de agarrar la placa correcta.
         try:
-            self.usrp = uhd.usrp.MultiUSRP("type=b200")
+            self.usrp = uhd.usrp.MultiUSRP(args)
         except RuntimeError as e:
             print("⏳ [B200] Cargando firmware y esperando renumeración USB...")
             time.sleep(3.5) # Le damos tiempo a Ubuntu para que monte el nuevo USB
-            self.usrp = uhd.usrp.MultiUSRP("type=b200")
+            self.usrp = uhd.usrp.MultiUSRP(args)
         self._thread = None
         self.muestras_por_bloque = 32768
         
@@ -39,6 +44,8 @@ class USRPB200Handler(SDRBase):
 
     @property
     def nombre(self) -> str:
+        if self.serial:
+            return f"Ettus USRP B200 ({self.serial})"
         return "Ettus USRP B200"
 
     def configurar(self, sample_rate: float, center_freq: float):

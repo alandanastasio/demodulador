@@ -83,8 +83,17 @@ class StartupWindow(QMainWindow):
                 devices_found += 1
         except: pass
         try:
-            if usb.core.find(idVendor=0x2500):
-                self.device_list.addItem("Ettus USRP B200")
+            import uhd
+            for dev_addr in uhd.find("type=b200"):
+                try:
+                    info = dev_addr.to_dict()
+                    sn = info.get("serial")
+                    if sn:
+                        self.device_list.addItem(f"Ettus USRP B200 (SN: {sn})")
+                    else:
+                        self.device_list.addItem("Ettus USRP B200")
+                except:
+                    self.device_list.addItem("Ettus USRP B200")
                 devices_found += 1
         except: pass
 
@@ -108,8 +117,11 @@ class StartupWindow(QMainWindow):
             print("Iniciando bladeRF...")
             radio_handler = BladeRFHandler(rx_callback=None)
         elif "Ettus USRP B200" in device_name:
-            print("Iniciando Ettus B200...")
-            radio_handler = USRPB200Handler(rx_callback=None)
+            print(f"Iniciando {device_name}...")
+            serial = None
+            if "SN: " in device_name:
+                serial = device_name.split("SN: ")[1].strip(" )")
+            radio_handler = USRPB200Handler(rx_callback=None, serial=serial)
         else:
             return
 
