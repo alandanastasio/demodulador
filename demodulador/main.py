@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
             self.sr_combo.setCurrentText("40 MHz")
         elif self.sr_combo.findText("20 MHz") != -1: # For bladeRF
             self.sr_combo.setCurrentText("20 MHz")
-        self.sr_combo.setEnabled(False)
+        self.sr_combo.setEnabled(True) # Unlock for user control
         self.sr_combo.blockSignals(False)
         self._restore_panels()
 

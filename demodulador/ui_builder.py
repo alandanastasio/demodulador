@@ -545,6 +545,9 @@ def build_ui(self, state):
         self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "16 MHz", "20 MHz", "32 MHz"])
         # Arrancamos en 2 MHz para evitar el Overflow apenas abre el programa
         self.sr_combo.setCurrentText("2 MHz") 
+    elif "File" in self.radio.nombre:
+        self.sr_combo.addItems(["1.92 MHz", "3.84 MHz", "7.68 MHz", "15.36 MHz", "30.72 MHz"])
+        self.sr_combo.setCurrentText("3.84 MHz")
         
     self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
     form_layout.addRow(self.sr_label, self.sr_combo)

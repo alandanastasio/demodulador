@@ -66,6 +66,144 @@ def generar_sss(N_id_1: int, N_id_2: int, subframe: int = 0):
             d[2*n + 1] = s0[n] * c1[n] * z1_m1[n]
     return d
 
+def generar_secuencia_gold(length, c_init):
+    """Genera la secuencia pseudo-aleatoria c(n) según 3GPP TS 36.211 §7.2.
+    Usa dos m-sequences x1 y x2 de largo 31, con Nc=1600 de offset."""
+    Nc = 1600
+    total = length + Nc
+    
+    x1 = np.zeros(total + 31, dtype=int)
+    x2 = np.zeros(total + 31, dtype=int)
+    
+    # x1 se inicializa con x1(0)=1
+    x1[0] = 1
+    
+    # x2 se inicializa con c_init en binario
+    for i in range(31):
+        x2[i] = (c_init >> i) & 1
+    
+    # Generar las m-sequences
+    for n in range(total):
+        x1[n + 31] = (x1[n + 3] + x1[n]) % 2
+        x2[n + 31] = (x2[n + 3] + x2[n + 2] + x2[n + 1] + x2[n]) % 2
+    
+    c = np.zeros(length, dtype=int)
+    for n in range(length):
+        c[n] = (x1[n + Nc] + x2[n + Nc]) % 2
+    
+    return c
+
+def generar_crs(cell_id, ns, l, num_rb):
+    """Genera los pilotos CRS para un slot ns, símbolo l, según 3GPP TS 36.211 §6.10.1.
+    
+    Args:
+        cell_id: Physical Cell ID (N_cell_id)
+        ns: Número de slot (0-19)
+        l: Índice de símbolo OFDM dentro del slot (0 o 4 para normal CP)
+        num_rb: Número de Resource Blocks del sistema (ej: 15 para 3 MHz)
+    
+    Returns:
+        r_l: Secuencia compleja de pilotos CRS (2*num_rb valores)
+    """
+    N_maxRB = 110  # máximo RBs en LTE
+    c_init = (1 << 10) * (7 * (ns + 1) + l + 1) * (2 * cell_id + 1) + 2 * cell_id + 1  # Ecuación estándar: adaptada para Normal CP (Ncp=1)
+    
+    c = generar_secuencia_gold(4 * N_maxRB, c_init)
+    
+    # r(m) = (1/sqrt(2)) * (1-2*c(2m)) + j*(1/sqrt(2)) * (1-2*c(2m+1))
+    m = np.arange(2 * num_rb) + N_maxRB - num_rb
+    r_l = (1/np.sqrt(2)) * (1 - 2*c[2*m].astype(float)) + \
+          1j * (1/np.sqrt(2)) * (1 - 2*c[2*m + 1].astype(float))
+    
+    return r_l
+
+def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
+    """Estima el canal usando los pilotos CRS y ecualiza todos los símbolos del subframe.
+    
+    CRS se ubican en los símbolos 0 y 4 de cada slot (normal CP, puerto 0).
+    Dentro de cada símbolo, los pilotos van cada 6 subportadoras con offset = cell_id % 6.
+    
+    Args:
+        subframe_fft: Array (14, fft_size) con los símbolos en frecuencia (fftshift aplicado)
+        cell_id: Physical Cell ID
+        fft_size: Tamaño de la FFT
+        num_rb: Número de Resource Blocks
+        ns_base: Número del primer slot absoluto del subframe (ej: 0 para sf0, 10 para sf5)
+    
+    Returns:
+        subframe_eq: Array ecualizado (misma forma que subframe_fft)
+    """
+    centro = fft_size // 2
+    num_sc = num_rb * 12  # subportadoras ocupadas totales
+    mitad_sc = num_sc // 2
+    
+    # Índices absolutos de las subportadoras ocupadas (saltando DC)
+    idx_portadoras = np.array(list(range(centro - mitad_sc, centro)) + 
+                              list(range(centro + 1, centro + mitad_sc + 1)))
+    
+    v_shift = cell_id % 6
+    
+    # Los símbolos con CRS en normal CP, puerto 0: símbolo 0 y 4 de cada slot
+    # En un subframe (2 slots): símbolos 0, 4, 7, 11
+    # (l_in_slot, slot_absoluto)
+    crs_symbols = [(0, ns_base), (4, ns_base), (0, ns_base + 1), (4, ns_base + 1)]
+    sym_indices = [0, 4, 7, 11]  # índice global en el subframe
+    
+    # Para el offset vertical (v): símbolo 0 tiene v=0, símbolo 4 tiene v=3
+    v_offsets = {0: 0, 4: 3}
+    
+    # Estimación de canal: H_est en cada subportadora
+    H_est = np.ones((14, fft_size), dtype=complex)
+    
+    for sym_global, (l, ns) in zip(sym_indices, crs_symbols):
+        crs_ref = generar_crs(cell_id, ns, l, num_rb)
+        
+        # Offset del piloto en la grilla de subportadoras
+        v = v_offsets[l]
+        pilot_offset = (v + v_shift) % 6
+        
+        # Posiciones de los pilotos dentro de las subportadoras ocupadas (0-indexed)
+        pilot_local = np.arange(pilot_offset, num_sc, 6)
+        
+        # Posiciones absolutas en el array fftshift (saltando DC)
+        pilot_abs = idx_portadoras[pilot_local]
+        
+        # Extraer los valores recibidos en las posiciones de piloto
+        rx_pilots = subframe_fft[sym_global, pilot_abs]
+        
+        n_pilots = len(pilot_local)
+        ref_pilots = crs_ref[:n_pilots]
+        
+        # Estimación LS: H = Rx / Ref
+        H_pilots = rx_pilots / ref_pilots
+        
+        # Asignación nearest-neighbor: cada subportadora usa el piloto más cercano.
+        pilot_positions = pilot_local
+        all_positions = np.arange(num_sc)
+        
+        # Para cada subportadora, encontrar el piloto más cercano
+        nearest_idx = np.argmin(np.abs(all_positions[:, None] - pilot_positions[None, :]), axis=1)
+        H_interp = H_pilots[nearest_idx]
+        
+        H_est[sym_global, idx_portadoras] = H_interp
+    
+    # Interpolar H entre los 4 símbolos CRS para los símbolos intermedios.
+    # Usamos nearest-neighbor también en el dominio temporal para evitar cancelaciones.
+    sym_pos = np.array(sym_indices)
+    all_sym = np.arange(14)
+    
+    for sc in idx_portadoras:
+        h_values = H_est[sym_indices, sc]
+        nearest_idx = np.argmin(np.abs(all_sym[:, None] - sym_pos[None, :]), axis=1)
+        H_est[:, sc] = h_values[nearest_idx]
+    
+    # Ecualización ZF vectorizada: Y_eq = Y / H_est
+    subframe_eq = subframe_fft.copy()
+    mask = np.abs(H_est[:, idx_portadoras]) > 1e-10
+    subframe_eq[:, idx_portadoras] = np.where(mask, subframe_fft[:, idx_portadoras] / H_est[:, idx_portadoras], subframe_fft[:, idx_portadoras])
+    
+    return subframe_eq
+
 class DemoduladorLTE(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 30.72e6 
@@ -204,16 +342,24 @@ class DemoduladorLTE(DemoduladorBase):
             # --- FASE 3: Remoción de CP, FFT y Extracción de Subtrama ---
             subframe_fft = None
             if es_pico_valido:
-                muestras_atras = 5 * (fs + self.cp_len_2) + (fs + self.cp_len_1)
+                # mejor_pos apunta al INICIO del símbolo OFDM del PSS (sin CP).
+                # El PSS está en el símbolo 6 del subframe (último del slot 0).
+                # Para ir del inicio del PSS al inicio del subframe:
+                #   cp_del_PSS + 5*(Tu+cp_corto) + (Tu+cp_largo)
+                muestras_atras = self.cp_len_2 + 5 * (fs + self.cp_len_2) + (fs + self.cp_len_1)
                 inicio_trama = mejor_pos - muestras_atras
                 
                 longitud_subframe = 2 * (fs + self.cp_len_1) + 12 * (fs + self.cp_len_2)
                 
-                inicio_trama_original = inicio_trama
+                # Determinamos en qué mitad de la trama de 10ms cayó el PSS
+                muestras_5ms = int(self.sample_rate * 0.005)
+                pss_en_segunda_mitad = (mejor_pos >= muestras_5ms)
+                
                 # Si el PSS está muy al principio y nos caemos del arreglo,
                 # usamos el segundo PSS de la trama (que está a 5ms exactos)
                 if inicio_trama < 0:
-                    inicio_trama += int(self.sample_rate * 0.005)
+                    inicio_trama += muestras_5ms
+                    pss_en_segunda_mitad = True
                 
                 if inicio_trama >= 0 and inicio_trama + longitud_subframe <= N_iq:
                     subframe_fft = []
@@ -226,7 +372,7 @@ class DemoduladorLTE(DemoduladorBase):
                         idx_tu = idx_actual + cp_len
                         simbolo_tu = chunk_procesar[idx_tu : idx_tu + fs]
                         
-                        simbolo_f = np.fft.fftshift(np.fft.fft(simbolo_tu)) / np.sqrt(fs)
+                        simbolo_f = np.fft.fftshift(np.fft.fft(simbolo_tu))
                         subframe_fft.append(simbolo_f)
                         
                         idx_actual += cp_len + fs
@@ -244,12 +390,11 @@ class DemoduladorLTE(DemoduladorBase):
                     mejor_corr_sss = 0
                     mejor_N_id_1 = -1
                     
-                    # El subframe de inicio determina la secuencia SSS
-                    subf_idx = 0 if inicio_trama_original == inicio_trama else 5
+                    # El subframe depende de dónde cayó el PSS en la trama
+                    subf_idx = 5 if pss_en_segunda_mitad else 0
                     
                     for n_id_1 in range(168):
                         d_ref = generar_sss(n_id_1, mejor_N_id_2, subf_idx)
-                        # Correlación en frecuencia
                         corr = np.abs(np.vdot(d_ref, sss_rx))
                         if corr > mejor_corr_sss:
                             mejor_corr_sss = corr
@@ -258,6 +403,14 @@ class DemoduladorLTE(DemoduladorBase):
                     cell_id = 3 * mejor_N_id_1 + mejor_N_id_2
                     self.ultimo_lte_metrics['N_id_1'] = mejor_N_id_1
                     self.ultimo_lte_metrics['cell_id'] = cell_id
+                    
+                    # --- FASE 5: Estimación de Canal (CRS) y Ecualización ---
+                    fs_to_rb = {128: 6, 256: 15, 512: 25, 1024: 50, 1536: 75, 2048: 100}
+                    num_rb = fs_to_rb.get(fs, 15)
+                    # Los slots absolutos dependen del subframe:
+                    # subframe 0 → slots 0,1 | subframe 5 → slots 10,11
+                    ns_base = 10 if pss_en_segunda_mitad else 0
+                    subframe_fft = ecualizar_con_crs(subframe_fft, cell_id, fs, num_rb, ns_base)
                     
                 else:
                     self.ultimo_lte_metrics['trama_valida'] = False
@@ -292,16 +445,36 @@ class DemoduladorLTE(DemoduladorBase):
                 
                 puntos_corr = constelacion.flatten()
                 
-                evm_sym = np.random.uniform(-10, -5, 14)
-                evm_subc = np.random.uniform(-15, -8, num_sc)
+                # --- EVM real por símbolo y por subportadora ---
+                # Detectamos el punto ideal más cercano de la constelación QPSK
+                qpsk_ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
+                
+                evm_por_sym = np.zeros(14)
+                evm_por_subc = np.zeros(num_sc)
+                
+                for s in range(14):
+                    sym_pts = constelacion[s, :]
+                    # Para cada punto, encontrar el punto QPSK más cercano
+                    distancias = np.abs(sym_pts[:, None] - qpsk_ref[None, :])  # (num_sc, 4)
+                    idx_min = np.argmin(distancias, axis=1)
+                    errores = sym_pts - qpsk_ref[idx_min]
+                    evm_por_sym[s] = np.sqrt(np.mean(np.abs(errores)**2))
+                    evm_por_subc += np.abs(errores)**2
+                
+                evm_por_subc = np.sqrt(evm_por_subc / 14)
+                
+                # Convertir a dB
+                evm_sym_db = 20 * np.log10(np.maximum(evm_por_sym, 1e-10))
+                evm_subc_db = 20 * np.log10(np.maximum(evm_por_subc, 1e-10))
+                
                 eje_x_subc = np.concatenate((np.arange(-mitad_sc, 0), np.arange(1, mitad_sc + 1)))
                 
                 evm_data = {
                     'subc_x': eje_x_subc,
-                    'subc_rms': evm_subc,
-                    'subc_peak': evm_subc + 2,
-                    'sym_rms': evm_sym,
-                    'sym_peak': evm_sym + 3
+                    'subc_rms': evm_subc_db,
+                    'subc_peak': evm_subc_db + 2,
+                    'sym_rms': evm_sym_db,
+                    'sym_peak': evm_sym_db + 3
                 }
                 
                 self.ultimo_puntos_corr = puntos_corr
