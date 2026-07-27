@@ -412,6 +412,51 @@ class DemoduladorLTE(DemoduladorBase):
                     ns_base = 10 if pss_en_segunda_mitad else 0
                     subframe_fft = ecualizar_con_crs(subframe_fft, cell_id, fs, num_rb, ns_base)
                     
+                    # --- FASE 6: Extracción y Desaleatorización del PBCH ---
+                    # El PBCH se encuentra sólo en el subframe 0, símbolos 7, 8, 9 y 10.
+                    # Ocupa las 72 subportadoras centrales (sin incluir DC), esquivando los CRS.
+                    if not pss_en_segunda_mitad:  # Sólo en subframe 0
+                        idx_pbch = list(range(centro - 36, centro)) + list(range(centro + 1, centro + 37))
+                        v_shift = cell_id % 6
+                        pbch_qpsk = []
+                        
+                        for l_slot in range(4):
+                            sym_idx = 7 + l_slot
+                            for k_idx, sc_abs in enumerate(idx_pbch):
+                                k_local = k_idx + 54  # Para que el rango de 72 esté centrado en el bloque de 180 (90 - 36 = 54)
+                                
+                                is_crs = False
+                                # El PBCH asume siempre 4 puertos de antena para el mapeo:
+                                if l_slot == 0:
+                                    if (k_local - (0 + v_shift)) % 6 == 0: is_crs = True # Puerto 0
+                                    if (k_local - (3 + v_shift)) % 6 == 0: is_crs = True # Puerto 1
+                                elif l_slot == 1:
+                                    if (k_local - (0 + v_shift)) % 6 == 0: is_crs = True # Puerto 2
+                                    if (k_local - (3 + v_shift)) % 6 == 0: is_crs = True # Puerto 3
+                                    
+                                if not is_crs:
+                                    pbch_qpsk.append(subframe_fft[sym_idx, sc_abs])
+                                    
+                        pbch_qpsk = np.array(pbch_qpsk)
+                        if len(pbch_qpsk) == 240:
+                            # Demodulación QPSK a bits blandos (soft bits)
+                            soft_bits = []
+                            for sym in pbch_qpsk:
+                                soft_bits.append(sym.real)
+                                soft_bits.append(sym.imag)
+                            soft_bits = np.array(soft_bits)
+                            
+                            # Desaleatorización (Descrambling) usando el Cell ID
+                            c = generar_secuencia_gold(1920, cell_id)
+                            # Probamos la primera fase (480 bits de los 1920)
+                            scrambled_0 = soft_bits * (1 - 2*c[:480])
+                            
+                            # Para TM1 todos los bits dan 0 (positivos en LLR). Contamos los 1s
+                            unos = np.sum((scrambled_0 < 0).astype(int))
+                            self.ultimo_lte_metrics['pbch_ones'] = unos
+                            self.ultimo_lte_metrics['pbch_ok'] = True
+                        else:
+                            self.ultimo_lte_metrics['pbch_ok'] = False
                 else:
                     self.ultimo_lte_metrics['trama_valida'] = False
             
@@ -439,11 +484,21 @@ class DemoduladorLTE(DemoduladorBase):
                 idx_portadoras = list(range(centro - mitad_sc, centro)) + list(range(centro + 1, centro + mitad_sc + 1))
                 constelacion = subframe_fft[:, idx_portadoras]
                 
-                p_avg = np.mean(np.abs(constelacion)**2)
+                idx_sync = np.array(list(range(mitad_sc - 31, mitad_sc)) + list(range(mitad_sc, mitad_sc + 31)))
+                pss_pts = constelacion[6, idx_sync].copy()
+                sss_pts = constelacion[5, idx_sync].copy()
+                constelacion[6, idx_sync] = np.nan + 1j*np.nan
+                constelacion[5, idx_sync] = np.nan + 1j*np.nan
+                
+                p_avg = np.nanmean(np.abs(constelacion)**2)
                 if p_avg > 0:
                     constelacion = constelacion / np.sqrt(p_avg)
+                    pss_pts = pss_pts / np.sqrt(p_avg)
+                    sss_pts = sss_pts / np.sqrt(p_avg)
                 
-                puntos_corr = constelacion.flatten()
+                puntos_corr = constelacion[~np.isnan(constelacion)]
+                self.ultimo_pss_pts = pss_pts
+                self.ultimo_sss_pts = sss_pts
                 
                 # --- EVM real por símbolo y por subportadora ---
                 # Detectamos el punto ideal más cercano de la constelación QPSK
@@ -458,10 +513,19 @@ class DemoduladorLTE(DemoduladorBase):
                     distancias = np.abs(sym_pts[:, None] - qpsk_ref[None, :])  # (num_sc, 4)
                     idx_min = np.argmin(distancias, axis=1)
                     errores = sym_pts - qpsk_ref[idx_min]
-                    evm_por_sym[s] = np.sqrt(np.mean(np.abs(errores)**2))
-                    evm_por_subc += np.abs(errores)**2
+                    
+                    # Ignoramos los NaNs para no arruinar el EVM de los símbolos 5 y 6
+                    evm_por_sym[s] = np.sqrt(np.nanmean(np.abs(errores)**2))
+                    
+                    # Acumulamos el error por subportadora, considerando que para PSS/SSS esas subportadoras no suman error
+                    err_subc = np.abs(errores)**2
+                    err_subc[np.isnan(err_subc)] = 0
+                    evm_por_subc += err_subc
                 
-                evm_por_subc = np.sqrt(evm_por_subc / 14)
+                # Símbolo 5 y 6 tienen 62 subportadoras menos, así que el promedio debe tener en cuenta que dividimos por 13 en esas subportadoras
+                cuentas = np.full(num_sc, 14.0)
+                cuentas[idx_sync] = 12.0
+                evm_por_subc = np.sqrt(evm_por_subc / cuentas)
                 
                 # Convertir a dB
                 evm_sym_db = 20 * np.log10(np.maximum(evm_por_sym, 1e-10))
@@ -502,7 +566,11 @@ class DemoduladorLTE(DemoduladorBase):
                 'audio_time_R': puntos_corr.imag if len(puntos_corr) > 0 else np.array([]),
                 'psd_mpx': np.array([]),
                 'f_axis_mpx': np.array([]),
-                'metricas': {'lte_metrics': self.ultimo_lte_metrics},
+                'metricas': {
+                    'lte_metrics': self.ultimo_lte_metrics,
+                    'pss_pts': self.ultimo_pss_pts if hasattr(self, 'ultimo_pss_pts') else np.array([]),
+                    'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([])
+                },
                 'evm_data': evm_data
             }
 

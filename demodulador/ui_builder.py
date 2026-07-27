@@ -300,13 +300,31 @@ def build_ui(self, state):
     self.lte_const_widget.setAspectLocked(True)
     
     self.lte_const_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
-    self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+    self.lte_pss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF6600") # Naranja
+    self.lte_sss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF00FF") # Magenta
+    self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FFFFFF")
     
     cross_path_lte = QPainterPath()
     cross_path_lte.moveTo(-0.5, 0); cross_path_lte.lineTo(0.5, 0)
     cross_path_lte.moveTo(0, -0.5); cross_path_lte.lineTo(0, 0.5)
     self.lte_const_ideal_curve = self.lte_const_widget.plot([], pen=None, symbol=cross_path_lte, symbolSize=30, symbolPen=pg.mkPen(color="#606060", width=1), symbolBrush=None)
     self.lte_const_ideal_curve.hide()
+    
+    # --- ICONOS DE AYUDA (CONSTELACIÓN LTE) ---
+    self.help_lte_const = QLabel("?", self.lte_const_widget)
+    self.help_lte_const.setStyleSheet("background-color: rgba(60, 60, 60, 200); color: white; border-radius: 10px; font-weight: bold;")
+    self.help_lte_const.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    self.help_lte_const.resize(20, 20)
+    self.help_lte_const.move(10, 10)
+    
+    self.tooltip_lte_const = QLabel("Celeste: Datos (PBCH/PDSCH/PDCCH)\nNaranja: PSS (Zadoff-Chu)\nMagenta: SSS (M-sequences)", self.lte_const_widget)
+    self.tooltip_lte_const.setStyleSheet("background-color: rgba(30, 30, 30, 240); color: white; border: 1px solid #777; padding: 8px; border-radius: 5px; font-size: 14px;")
+    self.tooltip_lte_const.adjustSize()
+    self.tooltip_lte_const.move(35, 10)
+    self.tooltip_lte_const.hide()
+    
+    self.help_lte_const.enterEvent = lambda e: self.tooltip_lte_const.show()
+    self.help_lte_const.leaveEvent = lambda e: self.tooltip_lte_const.hide()
     
     self.layout_lte.addWidget(self.lte_time_widget, 0, 1)
     self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)

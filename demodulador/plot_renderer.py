@@ -322,6 +322,20 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     symbolPen=None, 
                     symbolBrush="#00FFFF"
                 )
+                
+                if fm_metrics and 'pss_pts' in fm_metrics and 'sss_pts' in fm_metrics:
+                    pss_pts = fm_metrics['pss_pts']
+                    sss_pts = fm_metrics['sss_pts']
+                    if len(pss_pts) > 0:
+                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
+                    else:
+                        self.lte_pss_curve.setData([], [])
+                        
+                    if len(sss_pts) > 0:
+                        self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF00FF")
+                    else:
+                        self.lte_sss_curve.setData([], [])
+                        
                 self.lte_const_widget.scene().update()
                 
             if fm_metrics and 'lte_metrics' in fm_metrics:
@@ -333,8 +347,12 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     n_id_1 = lte.get('N_id_1', '?')
                     cell_id = lte.get('cell_id', '?')
                     
+                    pbch_ok = lte.get('pbch_ok', False)
+                    pbch_ones = lte.get('pbch_ones', 0)
+                    
                     color_pss = "#00FF00" if pss_found else "#FF0000"
                     color_trama = "#00FF00" if trama_valida else "#FF0000"
+                    color_pbch = "#00FF00" if pbch_ok else "#FF5555"
                     
                     html_lte = (
                         f"<div style='line-height: 1.5;'>"
@@ -342,7 +360,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_2}</span><br>"
                         f"<span style='color: #FFFFFF'><b>N_ID_1 (Grupo):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_1}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span>"
+                        f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PBCH TM1 Bits = 0:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{pbch_ones}/480</span>"
                         f"</div>"
                     )
                     if hasattr(self, 'lte_metrics_label'):
