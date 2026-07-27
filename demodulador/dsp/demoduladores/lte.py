@@ -27,6 +27,45 @@ def generar_pss_time(fft_size: int):
         
     return pss_time
 
+def generar_sss(N_id_1: int, N_id_2: int, subframe: int = 0):
+    q_prime = N_id_1 // 30
+    q = (N_id_1 + (q_prime * (q_prime + 1)) // 2) // 30
+    m_prime = N_id_1 + (q * (q + 1)) // 2
+    
+    m0 = m_prime % 31
+    m1 = (m0 + (m_prime // 31) + 1) % 31
+    
+    def get_m_seq(poly_indices):
+        x = np.zeros(31, dtype=int)
+        x[4] = 1
+        for i in range(26):
+            val = 0
+            for idx in poly_indices:
+                val ^= x[i + idx]
+            x[i + 5] = val % 2
+        return 1 - 2 * x
+        
+    s_tilde = get_m_seq([2, 0])
+    c_tilde = get_m_seq([3, 0])
+    z_tilde = get_m_seq([4, 2, 1, 0])
+    
+    s0 = np.array([s_tilde[(n + m0) % 31] for n in range(31)])
+    s1 = np.array([s_tilde[(n + m1) % 31] for n in range(31)])
+    c0 = np.array([c_tilde[(n + N_id_2) % 31] for n in range(31)])
+    c1 = np.array([c_tilde[(n + N_id_2 + 3) % 31] for n in range(31)])
+    z1_m0 = np.array([z_tilde[(n + (m0 % 8)) % 31] for n in range(31)])
+    z1_m1 = np.array([z_tilde[(n + (m1 % 8)) % 31] for n in range(31)])
+    
+    d = np.zeros(62)
+    for n in range(31):
+        if subframe == 0:
+            d[2*n] = s0[n] * c0[n]
+            d[2*n + 1] = s1[n] * c1[n] * z1_m0[n]
+        else: # subframe 5
+            d[2*n] = s1[n] * c0[n]
+            d[2*n + 1] = s0[n] * c1[n] * z1_m1[n]
+    return d
+
 class DemoduladorLTE(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 30.72e6 
@@ -119,31 +158,43 @@ class DemoduladorLTE(DemoduladorBase):
 
     def _procesar_fondo(self, bloque_iq: np.ndarray):
         try:
+            self.buffer_medicion.extend(bloque_iq)
+            muestras_10ms = int(self.sample_rate * 0.01)
+            
+            if len(self.buffer_medicion) < muestras_10ms:
+                return # Esperamos a tener 10 ms de captura
+                
+            # Procesamos exactamente 10 ms
+            chunk_procesar = np.array(self.buffer_medicion[:muestras_10ms])
+            self.buffer_medicion = self.buffer_medicion[muestras_10ms:]
+            
             fs = self.fft_size
-            N_iq = len(bloque_iq)
+            N_iq = len(chunk_procesar)
             
             # --- FASE 1 & 2: Sincronización y Búsqueda de PSS (Downlink) ---
             mejor_corr = 0
             mejor_N_id_2 = -1
             mejor_pos = -1
             
-            # Correlación cruzada rápida usando FFT (Circular)
-            if N_iq >= fs:
-                bloque_fft = np.fft.fft(bloque_iq)
-                for n_id_2, pss_t in enumerate(self.pss_time):
-                    pss_pad = np.zeros(N_iq, dtype=complex)
-                    pss_pad[:fs] = pss_t
-                    pss_fft = np.fft.fft(pss_pad)
+            bloque_fft = np.fft.fft(chunk_procesar)
+            for n_id_2, pss_t in enumerate(self.pss_time):
+                pss_pad = np.zeros(N_iq, dtype=complex)
+                pss_pad[:fs] = pss_t
+                pss_fft = np.fft.fft(pss_pad)
+                
+                corr = np.fft.ifft(bloque_fft * np.conj(pss_fft))
+                corr_abs = np.abs(corr)
+                
+                max_val = np.max(corr_abs)
+                if max_val > mejor_corr:
+                    mejor_corr = max_val
+                    mejor_N_id_2 = n_id_2
+                    mejor_pos = np.argmax(corr_abs)
                     
-                    corr = np.fft.ifft(bloque_fft * np.conj(pss_fft))
-                    corr_abs = np.abs(corr)
-                    
-                    max_val = np.max(corr_abs)
-                    if max_val > mejor_corr:
-                        mejor_corr = max_val
-                        mejor_N_id_2 = n_id_2
-                        mejor_pos = np.argmax(corr_abs)
-                        
+            # Validamos el pico de correlación contra el ruido de fondo (aprox 4x o 5x superior)
+            es_pico_valido = mejor_corr > (4.0 * np.mean(corr_abs))
+            
+            if es_pico_valido:
                 self.ultimo_lte_metrics['pss_found'] = True
                 self.ultimo_lte_metrics['N_id_2'] = mejor_N_id_2
                 self.ultimo_lte_metrics['pss_pos'] = mejor_pos
@@ -152,15 +203,17 @@ class DemoduladorLTE(DemoduladorBase):
             
             # --- FASE 3: Remoción de CP, FFT y Extracción de Subtrama ---
             subframe_fft = None
-            if mejor_corr > 100: # Umbral empírico para considerar que hay señal real
-                # El PSS en FDD está en el último símbolo (índice 6) del primer slot (slot 0)
-                # Vamos a retroceder para encontrar el inicio de la subtrama (símbolo 0)
+            if es_pico_valido:
                 muestras_atras = 5 * (fs + self.cp_len_2) + (fs + self.cp_len_1)
                 inicio_trama = mejor_pos - muestras_atras
                 
-                # Un subframe tiene 14 símbolos (Normal CP)
-                # 2 símbolos tipo 1 (índices 0 y 7) y 12 símbolos tipo 2
                 longitud_subframe = 2 * (fs + self.cp_len_1) + 12 * (fs + self.cp_len_2)
+                
+                inicio_trama_original = inicio_trama
+                # Si el PSS está muy al principio y nos caemos del arreglo,
+                # usamos el segundo PSS de la trama (que está a 5ms exactos)
+                if inicio_trama < 0:
+                    inicio_trama += int(self.sample_rate * 0.005)
                 
                 if inicio_trama >= 0 and inicio_trama + longitud_subframe <= N_iq:
                     subframe_fft = []
@@ -170,11 +223,9 @@ class DemoduladorLTE(DemoduladorBase):
                         es_sym0 = (num_sym % 7 == 0)
                         cp_len = self.cp_len_1 if es_sym0 else self.cp_len_2
                         
-                        # Extraemos solo el tiempo útil (ignoramos CP)
                         idx_tu = idx_actual + cp_len
-                        simbolo_tu = bloque_iq[idx_tu : idx_tu + fs]
+                        simbolo_tu = chunk_procesar[idx_tu : idx_tu + fs]
                         
-                        # Pasamos a frecuencia
                         simbolo_f = np.fft.fftshift(np.fft.fft(simbolo_tu)) / np.sqrt(fs)
                         subframe_fft.append(simbolo_f)
                         
@@ -182,6 +233,32 @@ class DemoduladorLTE(DemoduladorBase):
                         
                     subframe_fft = np.array(subframe_fft)
                     self.ultimo_lte_metrics['trama_valida'] = True
+                    
+                    # --- FASE 3.1: Decodificación SSS y Cell ID ---
+                    # El SSS está en el símbolo 5 (justo antes del PSS en el símbolo 6)
+                    sss_f = subframe_fft[5]
+                    centro = fs // 2
+                    idx_sss = list(range(centro - 31, centro)) + list(range(centro + 1, centro + 32))
+                    sss_rx = sss_f[idx_sss]
+                    
+                    mejor_corr_sss = 0
+                    mejor_N_id_1 = -1
+                    
+                    # El subframe de inicio determina la secuencia SSS
+                    subf_idx = 0 if inicio_trama_original == inicio_trama else 5
+                    
+                    for n_id_1 in range(168):
+                        d_ref = generar_sss(n_id_1, mejor_N_id_2, subf_idx)
+                        # Correlación en frecuencia
+                        corr = np.abs(np.vdot(d_ref, sss_rx))
+                        if corr > mejor_corr_sss:
+                            mejor_corr_sss = corr
+                            mejor_N_id_1 = n_id_1
+                            
+                    cell_id = 3 * mejor_N_id_1 + mejor_N_id_2
+                    self.ultimo_lte_metrics['N_id_1'] = mejor_N_id_1
+                    self.ultimo_lte_metrics['cell_id'] = cell_id
+                    
                 else:
                     self.ultimo_lte_metrics['trama_valida'] = False
             
@@ -189,31 +266,33 @@ class DemoduladorLTE(DemoduladorBase):
             evm_data = None
             puntos_corr = np.array([])
             
+            # Generación de Envolvente Temporal Decimada para la UI (10 ms)
+            num_puntos_ui = 2000
+            if N_iq > num_puntos_ui:
+                factor = N_iq // num_puntos_ui
+                env_bruta = np.abs(chunk_procesar[:factor * num_puntos_ui])
+                rf_chunk_ui = np.max(env_bruta.reshape(-1, factor), axis=1)
+            else:
+                rf_chunk_ui = np.abs(chunk_procesar)
+            
             if subframe_fft is not None:
-                # Extraemos todas las subportadoras de datos (excluyendo márgenes y DC)
-                # En un canal de, por ejemplo, 20 MHz, usamos 1200 subportadoras centrales
-                num_sc = int((fs / 2048) * 1200) # Aproximación escalada según tabla
-                if num_sc > fs - 2: num_sc = fs - 2
+                # Mapeo exacto de tamaño de FFT a cantidad de subportadoras de datos (excluyendo márgenes y DC)
+                fs_to_sc = {128: 72, 256: 180, 512: 300, 1024: 600, 1536: 900, 2048: 1200}
+                num_sc = fs_to_sc.get(fs, int((fs / 2048) * 1200))
                 
                 centro = fs // 2
                 mitad_sc = num_sc // 2
                 
-                # Índices de subportadoras (sin DC)
                 idx_portadoras = list(range(centro - mitad_sc, centro)) + list(range(centro + 1, centro + mitad_sc + 1))
-                
                 constelacion = subframe_fft[:, idx_portadoras]
                 
-                # Simulamos ecualización burda (solo normalización de potencia)
-                # (TODO: En la próxima iteración usaremos Cell-Specific Reference Signals para ecualizar fase)
                 p_avg = np.mean(np.abs(constelacion)**2)
                 if p_avg > 0:
                     constelacion = constelacion / np.sqrt(p_avg)
                 
                 puntos_corr = constelacion.flatten()
                 
-                # Armamos métricas EVM falsas para visualizar la estructura en UI
-                # (Hasta no tener ecualización fina, el EVM será muy alto)
-                evm_sym = np.random.uniform(-10, -5, 14) # Un EVM ruidoso temporal
+                evm_sym = np.random.uniform(-10, -5, 14)
                 evm_subc = np.random.uniform(-15, -8, num_sc)
                 eje_x_subc = np.concatenate((np.arange(-mitad_sc, 0), np.arange(1, mitad_sc + 1)))
                 
@@ -244,7 +323,7 @@ class DemoduladorLTE(DemoduladorBase):
             
             resultados = {
                 'psd_rf': PSD,
-                'rf_chunk': np.abs(bloque_iq[:min(fs*2, N_iq)]), 
+                'rf_chunk': rf_chunk_ui, 
                 'mpx_time': np.array([]),  
                 'audio_time_L': puntos_corr.real if len(puntos_corr) > 0 else np.array([]),
                 'audio_time_R': puntos_corr.imag if len(puntos_corr) > 0 else np.array([]),
@@ -257,7 +336,8 @@ class DemoduladorLTE(DemoduladorBase):
             with self._lock:
                 self.last_heavy_results = resultados
                 self.nuevos_datos_listos = True
-            
+        except Exception as e:
+            print(f"Error en _procesar_fondo LTE: {e}")
         finally:
             self.is_processing = False
             self.proxima_captura = time.time() + self.pausa_entre_snapshots

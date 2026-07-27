@@ -155,11 +155,6 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
-
-        self.radio.set_muestras_por_bloque(32768)
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
-            
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("2.4 MHz (Decimado a 300k)") == -1:
             self.sr_combo.addItem("2.4 MHz (Decimado a 300k)")

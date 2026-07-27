@@ -286,10 +286,10 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
         # --- RENDERIZADO ESPECÍFICO DE LTE ---
         if state.get('demod_mode') == 'lte':
             if raw_samples is not None:
-                # 1. Generamos el eje de tiempo en microsegundos (us)
-                t_axis_us = (np.arange(len(raw_samples)) / state['sample_rate']) * 1e6
-                signal_env = np.abs(raw_samples)
-                self.lte_time_curve.setData(t_axis_us, signal_env)
+                # La señal en 'raw_samples' ya viene decimada (ej. 2000 puntos) representando 10 ms.
+                # Ya es la envolvente (valor absoluto), no hace falta np.abs
+                t_axis_us = np.linspace(0, 10000, len(raw_samples))
+                self.lte_time_curve.setData(t_axis_us, raw_samples)
             
             if evm_data is not None and hasattr(self, 'lte_evm_rms_subc'):
                 y_floor = -40
@@ -328,15 +328,20 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 lte = fm_metrics['lte_metrics']
                 if lte is not None:
                     pss_found = lte.get('pss_found', False)
-                    N_id_2 = lte.get('N_id_2', -1)
                     trama_valida = lte.get('trama_valida', False)
-                    color_pss = "#00B000" if pss_found else "#FF3333"
-                    color_trama = "#00B000" if trama_valida else "#FF3333"
+                    n_id_2 = lte.get('N_id_2', '?')
+                    n_id_1 = lte.get('N_id_1', '?')
+                    cell_id = lte.get('cell_id', '?')
+                    
+                    color_pss = "#00FF00" if pss_found else "#FF0000"
+                    color_trama = "#00FF00" if trama_valida else "#FF0000"
                     
                     html_lte = (
                         f"<div style='line-height: 1.5;'>"
                         f"<span style='color: #FFFFFF'><b>PSS Encontrado:</b></span> <span style='color: {color_pss}; font-weight: bold;'>{'SI' if pss_found else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF;'>{N_id_2 if pss_found else '?'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_2}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>N_ID_1 (Grupo):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_1}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span>"
                         f"</div>"
                     )
