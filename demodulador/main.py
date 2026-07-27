@@ -22,6 +22,7 @@ from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
+from dsp.demoduladores.lte import DemoduladorLTE
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -278,7 +279,8 @@ class MainWindow(QMainWindow):
             while pot2 < muestras: pot2 *= 2
             self.radio.set_muestras_por_bloque(pot2)
 
-        self.demodulador_actual = None
+        self.demodulador_actual = DemoduladorLTE()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
         
         self.unit_combo.setCurrentText("GHz")
