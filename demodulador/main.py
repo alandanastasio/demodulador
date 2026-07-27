@@ -271,7 +271,10 @@ class MainWindow(QMainWindow):
         self.lte_metrics_label.show()
 
         state['demod_mode'] = 'lte'
-        state['sample_rate'] = 30.72e6 
+        if "File" in self.radio.nombre:
+            state['sample_rate'] = 3.84e6 # TM1_15RB_FDD es de 3MHz (15 RBs -> 3.84 Msps)
+        else:
+            state['sample_rate'] = 30.72e6 
         
         if hasattr(self.radio, 'set_muestras_por_bloque'):
             muestras = int(state['sample_rate'] * 0.002)

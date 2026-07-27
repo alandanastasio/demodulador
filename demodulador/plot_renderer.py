@@ -282,3 +282,63 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         f"</div>"
                     )
                     self.wifi_hw_metrics_label.setText(html_hw)
+
+        # --- RENDERIZADO ESPECÍFICO DE LTE ---
+        if state.get('demod_mode') == 'lte':
+            if raw_samples is not None:
+                # 1. Generamos el eje de tiempo en microsegundos (us)
+                t_axis_us = (np.arange(len(raw_samples)) / state['sample_rate']) * 1e6
+                signal_env = np.abs(raw_samples)
+                self.lte_time_curve.setData(t_axis_us, signal_env)
+            
+            if evm_data is not None and hasattr(self, 'lte_evm_rms_subc'):
+                y_floor = -40
+                subc_rms_db = np.asarray(evm_data['subc_rms'])
+                subc_peak_db = np.asarray(evm_data['subc_peak'])
+                
+                brushes_peak = [pg.mkBrush(100, 100, 255, 100) for x in evm_data['subc_x']]
+                brushes_rms = [pg.mkBrush(0, 0, 150, 200) for x in evm_data['subc_x']]
+                
+                self.lte_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor, brushes=brushes_peak)
+                self.lte_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor, brushes=brushes_rms)
+                
+                n_syms = len(evm_data['sym_rms'])
+                if n_syms > 0:
+                    sym_x = np.arange(n_syms)
+                    self.lte_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
+                    self.lte_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
+                    self.lte_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                else:
+                    self.lte_evm_rms_sym.setData([], [])
+                    self.lte_evm_peak_sym.setData([], [])
+            
+            if audio_L is not None and audio_R is not None:
+                self.lte_const_curve.setData(
+                    audio_L, 
+                    audio_R, 
+                    pen=None, 
+                    symbol='o', 
+                    symbolSize=2.5, 
+                    symbolPen=None, 
+                    symbolBrush="#00FFFF"
+                )
+                self.lte_const_widget.scene().update()
+                
+            if fm_metrics and 'lte_metrics' in fm_metrics:
+                lte = fm_metrics['lte_metrics']
+                if lte is not None:
+                    pss_found = lte.get('pss_found', False)
+                    N_id_2 = lte.get('N_id_2', -1)
+                    trama_valida = lte.get('trama_valida', False)
+                    color_pss = "#00B000" if pss_found else "#FF3333"
+                    color_trama = "#00B000" if trama_valida else "#FF3333"
+                    
+                    html_lte = (
+                        f"<div style='line-height: 1.5;'>"
+                        f"<span style='color: #FFFFFF'><b>PSS Encontrado:</b></span> <span style='color: {color_pss}; font-weight: bold;'>{'SI' if pss_found else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF;'>{N_id_2 if pss_found else '?'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span>"
+                        f"</div>"
+                    )
+                    if hasattr(self, 'lte_metrics_label'):
+                        self.lte_metrics_label.setText(html_lte)
