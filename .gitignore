@@ -12,3 +12,17 @@ wheels/
 #Señales guardadas
 *.npz
 demodulador/capturaDSOcorrect (6).ipynb
+demodulador/research/notebook_extracted.py
+.gitignore
+demodulador/research/LTE/LTE_SSS_REMap_01.png
+.gitignore
+demodulador/research/LTE/LTE_SSS_SymbolGeneration_01.png
+demodulador/research/LTE/LTE_SSS_SymbolGeneration_02.png
+demodulador/research/LTE/LTE_uplink_downlink_channels.ipynb
+demodulador/research/LTE/parametros4G.png
+.gitignore
+demodulador/research/LTE/PUSCH100RB.dat
+demodulador/research/LTE/pss.png
+demodulador/research/LTE/TM1_15RB_FDD.dat
+demodulador/research/LTE/VSA_uplink.jpg
+demodulador/research/LTE/VSA_downlink.jpeg
