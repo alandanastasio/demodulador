@@ -152,6 +152,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.show()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
 
         self.radio.set_muestras_por_bloque(32768)
         if state.get('demod_mode', 'none') == 'none':
@@ -204,6 +206,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.show()
         self.wifi_hw_metrics_label.show()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
 
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
@@ -229,6 +233,67 @@ class MainWindow(QMainWindow):
             self.sr_combo.setCurrentText("20 MHz")
         elif self.sr_combo.findText("20.0 MHz") != -1:
             self.sr_combo.setCurrentText("20.0 MHz")
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        self._restore_panels()
+
+    def set_lte_mode(self):
+        self.layout_lte.addWidget(self.freq_plot, 0, 0)
+        self.layout_lte.setRowStretch(0, 1)
+        self.layout_lte.setRowStretch(1, 1)
+        self.layout_lte.setRowStretch(2, 1)
+        self.layout_lte.setColumnStretch(0, 1)
+        self.layout_lte.setColumnStretch(1, 1)
+        if hasattr(self, 'waterfall_checkbox'): 
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
+        if hasattr(self, 'zero_span_btn'): 
+            self.zero_span_btn.setChecked(False)
+            state['zero_span'] = False
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        
+        self.trace_manager.reset()
+        
+        self.modes_stack.setCurrentIndex(3) # PÁGINA LTE
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
+        self.lte_metrics_label.show()
+
+        state['demod_mode'] = 'lte'
+        state['sample_rate'] = 30.72e6 
+        
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            muestras = int(state['sample_rate'] * 0.002)
+            pot2 = 1
+            while pot2 < muestras: pot2 *= 2
+            self.radio.set_muestras_por_bloque(pot2)
+
+        self.demodulador_actual = None
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        self.unit_combo.setCurrentText("GHz")
+        self.freq_input.setValue(2.6)
+
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("32 MHz") != -1:
+            self.sr_combo.setCurrentText("32 MHz")
+        elif self.sr_combo.findText("40 MHz") != -1:
+            self.sr_combo.setCurrentText("40 MHz")
+        elif self.sr_combo.findText("20 MHz") != -1: # For bladeRF
+            self.sr_combo.setCurrentText("20 MHz")
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
         self._restore_panels()
@@ -276,6 +341,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)

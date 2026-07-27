@@ -253,6 +253,68 @@ def build_ui(self, state):
     
     self.modes_stack.addWidget(self.page_wifi)
 
+    # ==========================================
+    # PÁGINA 3: MODO LTE
+    # ==========================================
+    self.page_lte = QWidget()
+    self.layout_lte = QGridLayout(self.page_lte)
+    self.layout_lte.setContentsMargins(0, 0, 0, 0)
+    
+    self.lte_time_widget = pg.PlotWidget(title="Señal Baseband en el Tiempo (LTE)")
+    self.lte_time_widget.setLabel('bottom', 'Tiempo [us]')
+    self.lte_time_widget.setLabel('left', 'Amplitud')
+    self.lte_time_widget.setXRange(0, 350) 
+    self.lte_time_widget.setYRange(0, 1)
+    self.lte_time_curve = self.lte_time_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
+    
+    self.lte_evm_subc_widget = pg.PlotWidget(title="EVM por Subportadora (LTE)")
+    self.lte_evm_subc_widget.setLabel('bottom', 'Subportadora')
+    self.lte_evm_subc_widget.setLabel('left', 'EVM [dB]')
+    self.lte_evm_subc_widget.setXRange(-300, 300)
+    self.lte_evm_subc_widget.setYRange(-40, 0)
+    
+    self.lte_evm_peak_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(100, 100, 255, 100))
+    self.lte_evm_rms_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(0, 0, 150, 200))
+    self.lte_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+    self.lte_evm_subc_widget.addItem(self.lte_evm_peak_subc)
+    self.lte_evm_subc_widget.addItem(self.lte_evm_rms_subc)
+    self.lte_evm_subc_widget.addItem(self.lte_evm_limit)
+    
+    self.lte_evm_sym_widget = pg.PlotWidget(title="EVM por Símbolo (LTE)")
+    self.lte_evm_sym_widget.setLabel('bottom', 'Símbolo')
+    self.lte_evm_sym_widget.setLabel('left', 'EVM [dB]')
+    self.lte_evm_sym_widget.setYRange(-40, 0)
+    
+    self.lte_evm_rms_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
+    self.lte_evm_peak_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
+    self.lteb_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+    self.lte_evm_sym_widget.addItem(self.lte_evm_rms_sym)
+    self.lte_evm_sym_widget.addItem(self.lteb_evm_limit)
+    
+    self.lte_const_widget = pg.PlotWidget(title="Constelación (LTE)")
+    self.lte_const_widget.setLabel('bottom', 'En Fase (I)')
+    self.lte_const_widget.setLabel('left', 'Cuadratura (Q)')
+    self.lte_const_widget.setXRange(-1.5, 1.5)
+    self.lte_const_widget.setYRange(-1, 1)
+    self.lte_const_widget.showGrid(x=False, y=False)
+    self.lte_const_widget.setAspectLocked(True)
+    
+    self.lte_const_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
+    self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FF00FF")
+    
+    cross_path_lte = QPainterPath()
+    cross_path_lte.moveTo(-0.5, 0); cross_path_lte.lineTo(0.5, 0)
+    cross_path_lte.moveTo(0, -0.5); cross_path_lte.lineTo(0, 0.5)
+    self.lte_const_ideal_curve = self.lte_const_widget.plot([], pen=None, symbol=cross_path_lte, symbolSize=30, symbolPen=pg.mkPen(color="#606060", width=1), symbolBrush=None)
+    self.lte_const_ideal_curve.hide()
+    
+    self.layout_lte.addWidget(self.lte_time_widget, 0, 1)
+    self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)
+    self.layout_lte.addWidget(self.lte_evm_subc_widget, 1, 0)
+    self.layout_lte.addWidget(self.lte_evm_sym_widget, 2, 0)
+    
+    self.modes_stack.addWidget(self.page_lte)
+
     # --- CONTENEDOR PRINCIPAL ---
     self.plot_container = QWidget()
     self.plot_layout = QVBoxLayout(self.plot_container)
@@ -265,7 +327,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
 
@@ -416,6 +478,13 @@ def build_ui(self, state):
     
     self.demod_group.addAction(self.action_wifi_ag)
     self.digital_menu.addAction(self.action_wifi_ag)
+
+    self.action_lte = QAction("LTE", self)
+    self.action_lte.setCheckable(True)
+    self.action_lte.triggered.connect(self.set_lte_mode)
+    
+    self.demod_group.addAction(self.action_lte)
+    self.digital_menu.addAction(self.action_lte)
 
     # Agregamos el submenú Digital al menú principal de Demodulación
     self.demod_menu.addMenu(self.digital_menu)
@@ -662,6 +731,13 @@ def build_ui(self, state):
     self.wifi_hw_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
     self.wifi_hw_metrics_label.hide()
     controls_layout.addWidget(self.wifi_hw_metrics_label)
+
+    # --- MÉTRICAS LTE ---
+    self.lte_metrics_label = QLabel("")
+    self.lte_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+    self.lte_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+    self.lte_metrics_label.hide()
+    controls_layout.addWidget(self.lte_metrics_label)
     
     controls_widget = QWidget()
     controls_widget.setLayout(controls_layout)
