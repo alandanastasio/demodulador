@@ -361,6 +361,11 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     pbch_mib = lte.get('pbch_mib', '')
                     pbch_antenas = lte.get('pbch_antenas', '?')
                     
+                    mib_bw = lte.get('mib_bw', '?')
+                    mib_phich_dur = lte.get('mib_phich_dur', '?')
+                    mib_phich_res = lte.get('mib_phich_res', '?')
+                    mib_sfn = lte.get('mib_sfn', '?')
+                    
                     pcfich_ok = lte.get('pcfich_ok', False)
                     pcfich_cfi = lte.get('pcfich_cfi', '?')
                     
@@ -377,8 +382,10 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span><br>"
                         f"<span style='color: #FFFFFF'><b>PBCH Decodificado:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{'OK' if pbch_ok else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PBCH MIB (Bits):</b></span> <span style='color: #FFD500; font-family: monospace; font-size: 11px;'>{pbch_mib}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Antenas Rx:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pbch_antenas}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Ancho de Banda:</b></span> <span style='color: #00FF00; font-weight: bold;'>{mib_bw}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PHICH (Dur/Res):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{mib_phich_dur} / {mib_phich_res}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>System Frame Num:</b></span> <span style='color: #FFD500; font-weight: bold;'>{mib_sfn}</span><br>"
                         f"<span style='color: #FFFFFF'><b>PCFICH Decodificado:</b></span> <span style='color: {color_pcfich}; font-weight: bold;'>{'OK' if pcfich_ok else 'NO'}</span><br>"
                         f"<span style='color: #FFFFFF'><b>PCFICH CFI:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pcfich_cfi}</span>"
                         f"</div>"

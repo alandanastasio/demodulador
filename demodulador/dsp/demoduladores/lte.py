@@ -606,10 +606,31 @@ class DemoduladorLTE(DemoduladorBase):
                                 
                                 if antenas > 0:
                                     # ¡Match de CRC exitoso!
-                                    mib_bits = "".join(map(str, decoded_bits[:24]))
+                                    bits_24 = decoded_bits[:24]
+                                    mib_bits = "".join(map(str, bits_24))
+                                    
+                                    bw_val = (bits_24[0]<<2) | (bits_24[1]<<1) | bits_24[2]
+                                    bw_map = {0: '1.4 MHz', 1: '3 MHz', 2: '5 MHz', 3: '10 MHz', 4: '15 MHz', 5: '20 MHz'}
+                                    dl_bw = bw_map.get(bw_val, f"Desconocido ({bw_val})")
+                                    
+                                    phich_dur = "Normal" if bits_24[3] == 0 else "Extendido"
+                                    
+                                    phich_res_val = (bits_24[4]<<1) | bits_24[5]
+                                    res_map = {0: '1/6', 1: '1/2', 2: '1', 3: '2'}
+                                    phich_res = res_map.get(phich_res_val, str(phich_res_val))
+                                    
+                                    sfn_val = 0
+                                    for i in range(8):
+                                        sfn_val = (sfn_val << 1) | bits_24[6+i]
+                                    
                                     self.ultimo_lte_metrics['pbch_mib'] = mib_bits
                                     self.ultimo_lte_metrics['pbch_antenas'] = antenas
                                     self.ultimo_lte_metrics['pbch_ok'] = True
+                                    self.ultimo_lte_metrics['mib_bw'] = dl_bw
+                                    self.ultimo_lte_metrics['mib_phich_dur'] = phich_dur
+                                    self.ultimo_lte_metrics['mib_phich_res'] = phich_res
+                                    self.ultimo_lte_metrics['mib_sfn'] = sfn_val
+                                    
                                     fase_encontrada = True
                                     break
                                     
