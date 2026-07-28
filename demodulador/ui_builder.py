@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame
+from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
@@ -267,6 +267,49 @@ def build_ui(self, state):
     self.lte_time_widget.setYRange(0, 1)
     self.lte_time_curve = self.lte_time_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
     
+    self.lte_q1_container = QWidget()
+    self.lte_q1_layout = QGridLayout(self.lte_q1_container)
+    self.lte_q1_layout.setContentsMargins(0, 0, 0, 0)
+    
+    self.lte_q1_stack = QStackedWidget()
+    self.lte_q1_layout.addWidget(self.lte_q1_stack, 0, 0)
+    
+    self.btn_lte_q1 = QPushButton("≡", self.lte_q1_container)
+    self.btn_lte_q1.setStyleSheet("QPushButton { background-color: rgba(60, 60, 60, 200); color: white; border-radius: 12px; font-weight: bold; font-size: 18px; border: none; text-align: center; } QPushButton:hover { background-color: rgba(100, 100, 100, 220); } QPushButton::menu-indicator { image: none; }")
+    self.btn_lte_q1.resize(24, 24)
+    self.btn_lte_q1.move(10, 10)
+    self.btn_lte_q1.setToolTip("Elegir gráfico")
+    
+    self.menu_lte_q1 = QMenu(self.btn_lte_q1)
+    self.menu_lte_q1.setStyleSheet("QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
+    
+    self.action_q1_espectro = QAction("Espectro", self.lte_q1_container)
+    self.action_q1_espectro.setCheckable(True)
+    self.action_q1_espectro.setChecked(True)
+    
+    self.action_q1_tiempo = QAction("Señal en el Tiempo", self.lte_q1_container)
+    self.action_q1_tiempo.setCheckable(True)
+    
+    self.q1_group = QActionGroup(self.lte_q1_container)
+    self.q1_group.addAction(self.action_q1_espectro)
+    self.q1_group.addAction(self.action_q1_tiempo)
+    self.q1_group.setExclusive(True)
+    
+    self.menu_lte_q1.addAction(self.action_q1_espectro)
+    self.menu_lte_q1.addAction(self.action_q1_tiempo)
+    self.btn_lte_q1.clicked.connect(lambda: self.menu_lte_q1.exec(self.btn_lte_q1.mapToGlobal(self.btn_lte_q1.rect().bottomLeft())))
+    
+    self.action_q1_espectro.triggered.connect(lambda: self.lte_q1_stack.setCurrentIndex(0))
+    self.action_q1_tiempo.triggered.connect(lambda: self.lte_q1_stack.setCurrentIndex(1))
+    
+    # Añadimos el tiempo al stack en la posición 1. (El espectro se añadirá en main.py en la pos 0)
+    # Rellenamos la pos 0 con un widget vacío temporalmente para mantener los índices
+    self.lte_q1_stack.insertWidget(0, QWidget()) 
+    self.lte_q1_stack.insertWidget(1, self.lte_time_widget)
+    self.lte_q1_stack.setCurrentIndex(0)
+    
+    self.btn_lte_q1.raise_()
+    
     self.lte_evm_subc_widget = pg.PlotWidget(title="EVM por Subportadora (LTE)")
     self.lte_evm_subc_widget.setLabel('bottom', 'Subportadora')
     self.lte_evm_subc_widget.setLabel('left', 'EVM [dB]')
@@ -342,7 +385,95 @@ def build_ui(self, state):
     self.menu_lte_layers.addAction(self.action_show_sss)
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
-    self.layout_lte.addWidget(self.lte_time_widget, 0, 1)
+    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
+    
+    # Cuadrante (0,1) - Frame Summary Table
+    self.lte_frame_summary = QTableWidget(11, 5)
+    self.lte_frame_summary.setHorizontalHeaderLabels(["Channel", "EVM(%rms)", "Power(dB)", "Mod.Fmt.", "Num.RB"])
+    self.lte_frame_summary.verticalHeader().setVisible(False)
+    self.lte_frame_summary.setShowGrid(False)
+    self.lte_frame_summary.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    self.lte_frame_summary.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+    
+    self.lte_frame_summary.setStyleSheet("""
+        QTableWidget {
+            background-color: #000000;
+            color: white;
+            border: none;
+            gridline-color: transparent;
+            font-family: Arial;
+            font-size: 14px;
+        }
+        QHeaderView::section {
+            background-color: #000000;
+            color: #FF00FF;
+            font-weight: bold;
+            border: none;
+            border-bottom: 1px solid #800080;
+            padding: 6px;
+        }
+        QScrollBar:vertical, QScrollBar:horizontal {
+            border: none;
+            background: #1e1e1e;
+            width: 10px;
+            height: 10px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+            background: #555555;
+            border-radius: 5px;
+        }
+        QTableWidget::item {
+            padding: 3px;
+            margin: 0px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            border: none;
+            background: none;
+        }
+    """)
+    
+    # Configuramos el tamaño de las columnas
+    header = self.lte_frame_summary.horizontalHeader()
+    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    for i in range(1, 5):
+        header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        
+    # Ajustamos la altura de las filas
+    v_header = self.lte_frame_summary.verticalHeader()
+    v_header.setDefaultSectionSize(24)
+    v_header.setMinimumSectionSize(22)
+    
+    # Filas (Channel Name, Color, Mod.Fmt)
+    canales_lte = [
+        ("P-SS", "#FF00FF", "Z-Chu"),
+        ("S-SS", "#55AAFF", "BPSK"),
+        ("PBCH", "#00FF00", "QPSK"),
+        ("PCFICH", "#AA00FF", "QPSK"),
+        ("PHICH", "#FF3333", "BPSK (CDM)"),
+        ("PDCCH", "#FFFF00", "QPSK"),
+        ("C-RS", "#00FFFF", "QPSK"),
+        ("PDSCH_QPSK", "#FF3333", "QPSK"),
+        ("PDSCH_16QAM", "#FFD500", "16QAM"),
+        ("PDSCH_64QAM", "#AAFF00", "64QAM"),
+        ("Non-alloc", "#AAAAAA", "---")
+    ]
+    
+    for row, (nombre, color, mod_fmt) in enumerate(canales_lte):
+        item_ch = QTableWidgetItem(nombre)
+        item_ch.setForeground(QColor(color))
+        item_ch.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.lte_frame_summary.setItem(row, 0, item_ch)
+        
+        for col, default_val in enumerate(["---", "---", mod_fmt, "---"]):
+            item = QTableWidgetItem(default_val)
+            item.setForeground(QColor(color))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.lte_frame_summary.setItem(row, col + 1, item)
+            
+    self.layout_lte.addWidget(self.lte_frame_summary, 0, 1)
+    
     self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)
     self.layout_lte.addWidget(self.lte_evm_subc_widget, 1, 0)
     self.layout_lte.addWidget(self.lte_evm_sym_widget, 2, 0)

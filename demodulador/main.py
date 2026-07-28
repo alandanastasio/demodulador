@@ -234,7 +234,15 @@ class MainWindow(QMainWindow):
         self._restore_panels()
 
     def set_lte_mode(self):
-        self.layout_lte.addWidget(self.freq_plot, 0, 0)
+        # Insertamos el espectro en el stack del cuadrante 1 (reemplazando el widget temporal si existe)
+        current_w = self.lte_q1_stack.widget(0)
+        if current_w != self.freq_plot:
+            self.lte_q1_stack.removeWidget(current_w)
+            self.lte_q1_stack.insertWidget(0, self.freq_plot)
+        
+        # Mantenemos el índice según lo que esté seleccionado en el menú
+        self.lte_q1_stack.setCurrentIndex(0 if self.action_q1_espectro.isChecked() else 1)
+        
         self.layout_lte.setRowStretch(0, 1)
         self.layout_lte.setRowStretch(1, 1)
         self.layout_lte.setRowStretch(2, 1)
