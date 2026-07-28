@@ -204,6 +204,151 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
     
     return subframe_eq
 
+# --- DECODIFICADOR PBCH ---
+def decodificar_pbch(soft_bits_480):
+    # 1. Rate de-matching circular (480 -> 120)
+    w = np.zeros(120)
+    for i in range(480):
+        w[i % 120] += soft_bits_480[i]
+        
+    # 2. De-interlace en 3 streams
+    v0 = w[0::3]
+    v1 = w[1::3]
+    v2 = w[2::3]
+    
+    # 3. Sub-block de-interleaving
+    valid_seq = np.array([8, 24, 16, 0, 32, 12, 28, 20, 4, 36, 10, 26, 18, 2, 34, 14, 30, 22, 6, 38, 9, 25, 17, 1, 33, 13, 29, 21, 5, 37, 11, 27, 19, 3, 35, 15, 31, 23, 7, 39])
+    
+    d0 = np.zeros(40)
+    d1 = np.zeros(40)
+    d2 = np.zeros(40)
+    for k, original_idx in enumerate(valid_seq):
+        d0[original_idx] = v0[k]
+        d1[original_idx] = v1[k]
+        d2[original_idx] = v2[k]
+        
+    soft_bits_3streams = np.vstack((d0, d1, d2)).T
+    
+    # 4. Decodificador Viterbi (TBCC K=7, Tasa 1/3)
+    num_states = 64
+    next_state = np.zeros((num_states, 2), dtype=int)
+    outputs = np.zeros((num_states, 2, 3), dtype=int)
+    
+    for state in range(num_states):
+        for bit in (0, 1):
+            ns = (bit << 5) | (state >> 1)
+            out0 = (bit ^ ((state >> 4)&1) ^ ((state >> 3)&1) ^ ((state >> 1)&1) ^ (state & 1))
+            out1 = (bit ^ ((state >> 5)&1) ^ ((state >> 4)&1) ^ ((state >> 3)&1) ^ (state & 1))
+            out2 = (bit ^ ((state >> 5)&1) ^ ((state >> 4)&1) ^ ((state >> 2)&1) ^ (state & 1))
+            next_state[state, bit] = ns
+            outputs[state, bit] = [out0, out1, out2]
+            
+    path_metrics = np.zeros(num_states)
+    
+    # Convergencia para el Tail-Biting
+    for run in range(3):
+        for i in range(40):
+            new_metrics = np.full(num_states, -np.inf)
+            for state in range(num_states):
+                for bit in (0, 1):
+                    ns = next_state[state, bit]
+                    expected = 1 - 2 * outputs[state, bit]
+                    branch_metric = np.sum(soft_bits_3streams[i] * expected)
+                    if path_metrics[state] + branch_metric > new_metrics[ns]:
+                        new_metrics[ns] = path_metrics[state] + branch_metric
+            path_metrics = new_metrics
+            
+    # Traceback
+    best_state = np.argmax(path_metrics)
+    tb_states = np.zeros((40, num_states), dtype=int)
+    tb_bits = np.zeros((40, num_states), dtype=int)
+    
+    path_metrics = np.full(num_states, -np.inf)
+    path_metrics[best_state] = 0
+    
+    for i in range(40):
+        new_metrics = np.full(num_states, -np.inf)
+        new_tb_states = np.zeros(num_states, dtype=int)
+        new_tb_bits = np.zeros(num_states, dtype=int)
+        for state in range(num_states):
+            if path_metrics[state] == -np.inf: continue
+            for bit in (0, 1):
+                ns = next_state[state, bit]
+                expected = 1 - 2 * outputs[state, bit]
+                branch_metric = np.sum(soft_bits_3streams[i] * expected)
+                if path_metrics[state] + branch_metric > new_metrics[ns]:
+                    new_metrics[ns] = path_metrics[state] + branch_metric
+                    new_tb_states[ns] = state
+                    new_tb_bits[ns] = bit
+        path_metrics = new_metrics
+        tb_states[i] = new_tb_states
+        tb_bits[i] = new_tb_bits
+        
+    final_state = np.argmax(path_metrics)
+    curr = final_state
+    decoded = []
+    for i in range(39, -1, -1):
+        decoded.append(tb_bits[i, curr])
+        curr = tb_states[i, curr]
+        
+    decoded = np.array(decoded[::-1])
+    
+    # 5. Verificación CRC16 y Antenas
+    reg = 0
+    for bit in decoded[:24]:
+        msb = (reg >> 15) & 1
+        reg = ((reg << 1) & 0xFFFF)
+        if msb ^ bit:
+            reg ^= 0x1021
+            
+    crc_recibido = 0
+    for bit in decoded[24:]:
+        crc_recibido = (crc_recibido << 1) | bit
+        
+    mask = reg ^ crc_recibido
+    
+    antenas = 0
+    if mask == 0x0000: antenas = 1
+    elif mask == 0xFFFF: antenas = 2
+    elif mask == 0x5555: antenas = 4
+    
+    return decoded, antenas, mask
+
+def decodificar_pcfich(simbolos_16, cell_id, n_s=0):
+    # Demodulación QPSK a bits blandos (soft bits)
+    # bit0 -> Real, bit1 -> Imag
+    soft_bits = []
+    for sym in simbolos_16:
+        soft_bits.append(sym.real)
+        soft_bits.append(sym.imag)
+    soft_bits = np.array(soft_bits)
+    
+    # Scrambling
+    c_init = (n_s // 2 + 1) * (2 * cell_id + 1) * 512 + cell_id
+    c = generar_secuencia_gold(32, c_init)
+    descrambled = soft_bits * (1 - 2*c)
+    
+    # Palabras código (Codewords) para CFI
+    cfi_1 = np.array([0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1])
+    cfi_2 = np.array([1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0])
+    cfi_3 = np.array([1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1])
+    
+    # Correlación cruzada
+    score_1 = np.sum((1 - 2*cfi_1) * descrambled)
+    score_2 = np.sum((1 - 2*cfi_2) * descrambled)
+    score_3 = np.sum((1 - 2*cfi_3) * descrambled)
+    
+    scores = [score_1, score_2, score_3]
+    max_idx = np.argmax(scores)
+    cfi = max_idx + 1
+    
+    # Validación: el score ganador debe superar al segundo por un margen claro
+    sorted_scores = sorted(scores, reverse=True)
+    margen = sorted_scores[0] - sorted_scores[1]
+    es_valido = sorted_scores[0] > 3.0 and margen > 2.0
+    
+    return cfi, scores[max_idx], es_valido
+
 class DemoduladorLTE(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 30.72e6 
@@ -313,6 +458,7 @@ class DemoduladorLTE(DemoduladorBase):
             mejor_corr = 0
             mejor_N_id_2 = -1
             mejor_pos = -1
+            mejor_corr_abs = None
             
             bloque_fft = np.fft.fft(chunk_procesar)
             for n_id_2, pss_t in enumerate(self.pss_time):
@@ -328,9 +474,10 @@ class DemoduladorLTE(DemoduladorBase):
                     mejor_corr = max_val
                     mejor_N_id_2 = n_id_2
                     mejor_pos = np.argmax(corr_abs)
+                    mejor_corr_abs = corr_abs
                     
             # Validamos el pico de correlación contra el ruido de fondo (aprox 4x o 5x superior)
-            es_pico_valido = mejor_corr > (4.0 * np.mean(corr_abs))
+            es_pico_valido = mejor_corr_abs is not None and mejor_corr > (4.0 * np.mean(mejor_corr_abs))
             
             if es_pico_valido:
                 self.ultimo_lte_metrics['pss_found'] = True
@@ -338,6 +485,9 @@ class DemoduladorLTE(DemoduladorBase):
                 self.ultimo_lte_metrics['pss_pos'] = mejor_pos
             else:
                 self.ultimo_lte_metrics['pss_found'] = False
+                self.ultimo_lte_metrics['trama_valida'] = False
+                self.ultimo_lte_metrics['pbch_ok'] = False
+                self.ultimo_lte_metrics['pcfich_ok'] = False
             
             # --- FASE 3: Remoción de CP, FFT y Extracción de Subtrama ---
             subframe_fft = None
@@ -351,15 +501,10 @@ class DemoduladorLTE(DemoduladorBase):
                 
                 longitud_subframe = 2 * (fs + self.cp_len_1) + 12 * (fs + self.cp_len_2)
                 
-                # Determinamos en qué mitad de la trama de 10ms cayó el PSS
-                muestras_5ms = int(self.sample_rate * 0.005)
-                pss_en_segunda_mitad = (mejor_pos >= muestras_5ms)
-                
                 # Si el PSS está muy al principio y nos caemos del arreglo,
                 # usamos el segundo PSS de la trama (que está a 5ms exactos)
                 if inicio_trama < 0:
-                    inicio_trama += muestras_5ms
-                    pss_en_segunda_mitad = True
+                    inicio_trama += int(self.sample_rate * 0.005)
                 
                 if inicio_trama >= 0 and inicio_trama + longitud_subframe <= N_iq:
                     subframe_fft = []
@@ -389,17 +534,21 @@ class DemoduladorLTE(DemoduladorBase):
                     
                     mejor_corr_sss = 0
                     mejor_N_id_1 = -1
+                    mejor_subf_idx = 0
                     
-                    # El subframe depende de dónde cayó el PSS en la trama
-                    subf_idx = 5 if pss_en_segunda_mitad else 0
+                    # Como el PSS es idéntico en subtrama 0 y 5, no sabemos cuál atrapamos.
+                    # Probamos ambas hipótesis para el SSS.
+                    for subf in (0, 5):
+                        for n_id_1 in range(168):
+                            d_ref = generar_sss(n_id_1, mejor_N_id_2, subf)
+                            corr = np.abs(np.vdot(d_ref, sss_rx))
+                            if corr > mejor_corr_sss:
+                                mejor_corr_sss = corr
+                                mejor_N_id_1 = n_id_1
+                                mejor_subf_idx = subf
+                                
+                    pss_en_segunda_mitad = (mejor_subf_idx == 5)
                     
-                    for n_id_1 in range(168):
-                        d_ref = generar_sss(n_id_1, mejor_N_id_2, subf_idx)
-                        corr = np.abs(np.vdot(d_ref, sss_rx))
-                        if corr > mejor_corr_sss:
-                            mejor_corr_sss = corr
-                            mejor_N_id_1 = n_id_1
-                            
                     cell_id = 3 * mejor_N_id_1 + mejor_N_id_2
                     self.ultimo_lte_metrics['N_id_1'] = mejor_N_id_1
                     self.ultimo_lte_metrics['cell_id'] = cell_id
@@ -446,17 +595,58 @@ class DemoduladorLTE(DemoduladorBase):
                                 soft_bits.append(sym.imag)
                             soft_bits = np.array(soft_bits)
                             
-                            # Desaleatorización (Descrambling) usando el Cell ID
+                            # Desaleatorización (Descrambling) y decodificación a ciegas de las 4 fases
                             c = generar_secuencia_gold(1920, cell_id)
-                            # Probamos la primera fase (480 bits de los 1920)
-                            scrambled_0 = soft_bits * (1 - 2*c[:480])
                             
-                            # Para TM1 todos los bits dan 0 (positivos en LLR). Contamos los 1s
-                            unos = np.sum((scrambled_0 < 0).astype(int))
-                            self.ultimo_lte_metrics['pbch_ones'] = unos
-                            self.ultimo_lte_metrics['pbch_ok'] = True
+                            fase_encontrada = False
+                            for fase in range(4):
+                                c_fase = c[fase*480 : (fase+1)*480]
+                                scrambled = soft_bits * (1 - 2*c_fase)
+                                decoded_bits, antenas, mask = decodificar_pbch(scrambled)
+                                
+                                if antenas > 0:
+                                    # ¡Match de CRC exitoso!
+                                    mib_bits = "".join(map(str, decoded_bits[:24]))
+                                    self.ultimo_lte_metrics['pbch_mib'] = mib_bits
+                                    self.ultimo_lte_metrics['pbch_antenas'] = antenas
+                                    self.ultimo_lte_metrics['pbch_ok'] = True
+                                    fase_encontrada = True
+                                    break
+                                    
+                            if not fase_encontrada:
+                                self.ultimo_lte_metrics['pbch_ok'] = False
                         else:
                             self.ultimo_lte_metrics['pbch_ok'] = False
+                    
+                    # --- DECODIFICACIÓN PCFICH ---
+                    # El PCFICH existe en TODAS las subtramas, no sólo en la 0
+                    sym0 = subframe_fft[0]
+                    v_mod3 = (cell_id % 6) % 3
+                    mitad_bw = num_rb * 6  # Mitad del ancho de banda en subportadoras
+                    idx_portadoras = list(range(centro - mitad_bw, centro)) + list(range(centro + 1, centro + mitad_bw + 1))
+                    
+                    regs = []
+                    current_reg = []
+                    for i, sc in enumerate(idx_portadoras):
+                        if (i % 3) != v_mod3:
+                            current_reg.append(sym0[sc])
+                            if len(current_reg) == 4:
+                                regs.append(current_reg)
+                                current_reg = []
+                                
+                    regs = np.array(regs)
+                    n_reg = len(regs)
+                    k_bar_reg = cell_id % n_reg
+                    step_reg = n_reg // 4  # floor(N_REG / 4), equivalente a floor(N_RB_DL / 2)
+                    reg_indices = [(k_bar_reg + i * step_reg) % n_reg for i in range(4)]
+                    pcfich_syms = np.concatenate([regs[idx] for idx in reg_indices])
+                    
+                    # n_s es el número de slot (0 para subframe 0, 10 para subframe 5)
+                    pcfich_n_s = ns_base
+                    cfi_val, cfi_score, cfi_ok = decodificar_pcfich(pcfich_syms, cell_id, n_s=pcfich_n_s)
+                    self.ultimo_lte_metrics['pcfich_cfi'] = cfi_val
+                    self.ultimo_lte_metrics['pcfich_ok'] = cfi_ok
+                    
                 else:
                     self.ultimo_lte_metrics['trama_valida'] = False
             
@@ -541,7 +731,7 @@ class DemoduladorLTE(DemoduladorBase):
                     'sym_peak': evm_sym_db + 3
                 }
                 
-                self.ultimo_puntos_corr = puntos_corr
+            self.ultimo_puntos_corr = puntos_corr
 
             # Generamos espectro visual para UI usando la resolución que pide el usuario
             ui_fs = getattr(self, 'ui_fft_size', fs)

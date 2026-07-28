@@ -351,11 +351,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     cell_id = lte.get('cell_id', '?')
                     
                     pbch_ok = lte.get('pbch_ok', False)
-                    pbch_ones = lte.get('pbch_ones', 0)
+                    pbch_mib = lte.get('pbch_mib', '')
+                    pbch_antenas = lte.get('pbch_antenas', '?')
+                    
+                    pcfich_ok = lte.get('pcfich_ok', False)
+                    pcfich_cfi = lte.get('pcfich_cfi', '?')
                     
                     color_pss = "#00FF00" if pss_found else "#FF0000"
                     color_trama = "#00FF00" if trama_valida else "#FF0000"
                     color_pbch = "#00FF00" if pbch_ok else "#FF5555"
+                    color_pcfich = "#00FF00" if pcfich_ok else "#FF5555"
                     
                     html_lte = (
                         f"<div style='line-height: 1.5;'>"
@@ -364,7 +369,11 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         f"<span style='color: #FFFFFF'><b>N_ID_1 (Grupo):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_1}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PBCH TM1 Bits = 0:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{pbch_ones}/480</span>"
+                        f"<span style='color: #FFFFFF'><b>PBCH Decodificado:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{'OK' if pbch_ok else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PBCH MIB (Bits):</b></span> <span style='color: #FFD500; font-family: monospace; font-size: 11px;'>{pbch_mib}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Antenas Rx:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pbch_antenas}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PCFICH Decodificado:</b></span> <span style='color: {color_pcfich}; font-weight: bold;'>{'OK' if pcfich_ok else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PCFICH CFI:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pcfich_cfi}</span>"
                         f"</div>"
                     )
                     if hasattr(self, 'lte_metrics_label'):
