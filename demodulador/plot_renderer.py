@@ -392,3 +392,15 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     )
                     if hasattr(self, 'lte_metrics_label'):
                         self.lte_metrics_label.setText(html_lte)
+                        
+                    fs = lte.get('frame_summary', {})
+                    if hasattr(self, 'lte_frame_summary') and fs:
+                        for row in range(self.lte_frame_summary.rowCount()):
+                            item_ch = self.lte_frame_summary.item(row, 0)
+                            if item_ch:
+                                ch_name = item_ch.text()
+                                if ch_name in fs:
+                                    evm_str, pwr_str, rb_str = fs[ch_name]
+                                    self.lte_frame_summary.item(row, 1).setText(evm_str)
+                                    self.lte_frame_summary.item(row, 2).setText(pwr_str)
+                                    self.lte_frame_summary.item(row, 4).setText(rb_str)

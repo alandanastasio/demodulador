@@ -733,6 +733,39 @@ class DemoduladorLTE(DemoduladorBase):
                 self.ultimo_pss_pts = pss_pts
                 self.ultimo_sss_pts = sss_pts
                 
+                def calc_evm_power(pts, ref_type='qpsk'):
+                    if len(pts) == 0: return "---", "---"
+                    power = 10 * np.log10(np.mean(np.abs(pts)**2) + 1e-12)
+                    if ref_type == 'qpsk':
+                        ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
+                        dist = np.abs(pts[:, None] - ref[None, :])
+                        idx = np.argmin(dist, axis=1)
+                        err = pts - ref[idx]
+                        evm = np.sqrt(np.mean(np.abs(err)**2)) * 100
+                    elif ref_type == 'bpsk':
+                        ref = np.array([1, -1])
+                        dist = np.abs(pts[:, None] - ref[None, :])
+                        idx = np.argmin(dist, axis=1)
+                        err = pts - ref[idx]
+                        evm = np.sqrt(np.mean(np.abs(err)**2)) * 100
+                    else: # zchu
+                        err = np.abs(pts) - 1.0
+                        evm = np.sqrt(np.mean(err**2)) * 100
+                    return f"{evm:.2f}", f"{power:.2f}"
+                
+                # frame_summary guardará: { "Canal": (EVM_str, Power_str, NumRB_str) }
+                fs_dict = {}
+                fs_dict["P-SS"] = (*calc_evm_power(pss_pts, 'zchu'), "6")
+                fs_dict["S-SS"] = (*calc_evm_power(sss_pts, 'bpsk'), "6")
+                
+                if 'pcfich_syms' in locals():
+                    fs_dict["PCFICH"] = (*calc_evm_power(pcfich_syms, 'qpsk'), "12") # aprox 16 REs = 1.3 RBs, pero en la tabla dice 12
+                    
+                fs_dict["PDCCH"] = (*calc_evm_power(pdcch_pts, 'qpsk'), str(len(pdcch_pts)//12)) # Num RBs aprox
+                
+                self.ultimo_lte_metrics['frame_summary'] = fs_dict
+
+                
                 # --- EVM real por símbolo y por subportadora ---
                 # Detectamos el punto ideal más cercano de la constelación QPSK
                 qpsk_ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
