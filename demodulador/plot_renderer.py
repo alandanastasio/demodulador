@@ -313,25 +313,28 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     self.lte_evm_peak_sym.setData([], [])
             
             if audio_L is not None and audio_R is not None:
-                self.lte_const_curve.setData(
-                    audio_L, 
-                    audio_R, 
-                    pen=None, 
-                    symbol='o', 
-                    symbolSize=2.5, 
-                    symbolPen=None, 
-                    symbolBrush="#00FFFF"
-                )
+                if getattr(self, 'action_show_data', None) and self.action_show_data.isChecked():
+                    self.lte_const_curve.setData(
+                        audio_L, 
+                        audio_R, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen=None, 
+                        symbolBrush="#00FFFF"
+                    )
+                else:
+                    self.lte_const_curve.setData([], [])
                 
                 if fm_metrics and 'pss_pts' in fm_metrics and 'sss_pts' in fm_metrics:
                     pss_pts = fm_metrics['pss_pts']
                     sss_pts = fm_metrics['sss_pts']
-                    if len(pss_pts) > 0:
+                    if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
                         self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
                     else:
                         self.lte_pss_curve.setData([], [])
                         
-                    if len(sss_pts) > 0:
+                    if len(sss_pts) > 0 and getattr(self, 'action_show_sss', None) and self.action_show_sss.isChecked():
                         self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF00FF")
                     else:
                         self.lte_sss_curve.setData([], [])
