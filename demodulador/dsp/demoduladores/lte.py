@@ -647,20 +647,28 @@ class DemoduladorLTE(DemoduladorBase):
                     idx_portadoras = list(range(centro - mitad_bw, centro)) + list(range(centro + 1, centro + mitad_bw + 1))
                     
                     regs = []
+                    regs_k = []
                     current_reg = []
+                    current_reg_k = []
                     for i, sc in enumerate(idx_portadoras):
                         if (i % 3) != v_mod3:
                             current_reg.append(sym0[sc])
+                            current_reg_k.append(sc)
                             if len(current_reg) == 4:
                                 regs.append(current_reg)
+                                regs_k.append(current_reg_k)
                                 current_reg = []
+                                current_reg_k = []
                                 
                     regs = np.array(regs)
+                    regs_k = np.array(regs_k)
                     n_reg = len(regs)
                     k_bar_reg = cell_id % n_reg
                     step_reg = n_reg // 4  # floor(N_REG / 4), equivalente a floor(N_RB_DL / 2)
                     reg_indices = [(k_bar_reg + i * step_reg) % n_reg for i in range(4)]
                     pcfich_syms = np.concatenate([regs[idx] for idx in reg_indices])
+                    
+                    self.ultimo_pcfich_k_indices = set(np.concatenate([regs_k[idx] for idx in reg_indices]))
                     
                     # n_s es el número de slot (0 para subframe 0, 10 para subframe 5)
                     pcfich_n_s = ns_base
@@ -720,6 +728,7 @@ class DemoduladorLTE(DemoduladorBase):
                 pdcch_pts = []
                 crs_pts = []
                 pbch_pts = []
+                pcfich_pts = []
                 pdsch_pts = []
                 
                 for sym_idx in range(14):
@@ -756,6 +765,7 @@ class DemoduladorLTE(DemoduladorBase):
                         # PCFICH
                         is_pcfich = (sym_idx == 0) and (k in pcfich_k_indices)
                         if is_pcfich:
+                            pcfich_pts.append(pt)
                             continue
                             
                         # PDCCH / PHICH (Región de control)
@@ -771,6 +781,7 @@ class DemoduladorLTE(DemoduladorBase):
                 pdcch_pts = np.array(pdcch_pts)
                 crs_pts = np.array(crs_pts)
                 pbch_pts = np.array(pbch_pts)
+                pcfich_pts = np.array(pcfich_pts)
                 pdsch_pts = np.array(pdsch_pts)
                 
                 # Guardar para UI (sin el límite de 0.1 para que se vea completo si quieren)
@@ -887,6 +898,7 @@ class DemoduladorLTE(DemoduladorBase):
                     'pss_pts': self.ultimo_pss_pts if hasattr(self, 'ultimo_pss_pts') else np.array([]),
                     'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([]),
                     'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([]),
+                    'pcfich_pts': pcfich_pts if 'pcfich_pts' in locals() else np.array([]),
                     'pbch_pts': pbch_pts if 'pbch_pts' in locals() else np.array([]),
                     'crs_pts': crs_pts if 'crs_pts' in locals() else np.array([])
                 },

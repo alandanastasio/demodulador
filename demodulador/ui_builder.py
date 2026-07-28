@@ -346,6 +346,9 @@ def build_ui(self, state):
     self.lte_pdcch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FFFF00") # Amarillo
     self.lte_pss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF6600") # Naranja
     self.lte_sss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF00FF") # Magenta
+    self.lte_pbch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FF00") # Verde
+    self.lte_crs_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00AADD") # Celeste oscuro
+    self.lte_pcfich_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#AA00FF") # Violeta
     self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FFFFFF")
     
     cross_path_lte = QPainterPath()
@@ -375,14 +378,29 @@ def build_ui(self, state):
     self.action_show_pss.setCheckable(True)
     self.action_show_pss.setChecked(True)
     
-    self.action_show_sss = QAction("SSS m-seq (Magenta)", self.lte_const_widget)
+    self.action_show_sss = QAction("SSS m-seq (Azul Claro)", self.lte_const_widget)
     self.action_show_sss.setCheckable(True)
     self.action_show_sss.setChecked(True)
+    
+    self.action_show_pbch = QAction("PBCH (Verde)", self.lte_const_widget)
+    self.action_show_pbch.setCheckable(True)
+    self.action_show_pbch.setChecked(True)
+
+    self.action_show_crs = QAction("C-RS (Celeste Oscuro)", self.lte_const_widget)
+    self.action_show_crs.setCheckable(True)
+    self.action_show_crs.setChecked(True)
+
+    self.action_show_pcfich = QAction("PCFICH (Violeta)", self.lte_const_widget)
+    self.action_show_pcfich.setCheckable(True)
+    self.action_show_pcfich.setChecked(True)
     
     self.menu_lte_layers.addAction(self.action_show_data)
     self.menu_lte_layers.addAction(self.action_show_pdcch)
     self.menu_lte_layers.addAction(self.action_show_pss)
     self.menu_lte_layers.addAction(self.action_show_sss)
+    self.menu_lte_layers.addAction(self.action_show_pbch)
+    self.menu_lte_layers.addAction(self.action_show_crs)
+    self.menu_lte_layers.addAction(self.action_show_pcfich)
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
     self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
@@ -402,15 +420,35 @@ def build_ui(self, state):
             border: none;
             gridline-color: transparent;
             font-family: Arial;
-            font-size: 11px;
+            font-size: 14px;
         }
         QHeaderView::section {
             background-color: #000000;
-            color: #FF00FF;
+            color: #FFFFFF;
             font-weight: bold;
             border: none;
-            border-bottom: 1px solid #800080;
-            padding: 4px;
+            border-bottom: 1px solid #555555;
+            padding: 6px;
+        }
+        QScrollBar:vertical, QScrollBar:horizontal {
+            border: none;
+            background: #1e1e1e;
+            width: 10px;
+            height: 10px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+            background: #555555;
+            border-radius: 5px;
+        }
+        QTableWidget::item {
+            padding: 3px;
+            margin: 0px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            border: none;
+            background: none;
         }
     """)
     
@@ -419,17 +457,22 @@ def build_ui(self, state):
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     for i in range(1, 5):
         header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        
+    # Ajustamos la altura de las filas
+    v_header = self.lte_frame_summary.verticalHeader()
+    v_header.setDefaultSectionSize(24)
+    v_header.setMinimumSectionSize(22)
     
     # Filas (Channel Name, Color, Mod.Fmt)
     canales_lte = [
-        ("P-SS", "#FF00FF", "Z-Chu"),
-        ("S-SS", "#55AAFF", "BPSK"),
+        ("P-SS", "#FF6600", "Z-Chu"),
+        ("S-SS", "#4477FF", "BPSK"),
         ("PBCH", "#00FF00", "QPSK"),
         ("PCFICH", "#AA00FF", "QPSK"),
         ("PHICH", "#FF3333", "BPSK (CDM)"),
         ("PDCCH", "#FFFF00", "QPSK"),
-        ("C-RS", "#00FFFF", "QPSK"),
-        ("PDSCH_QPSK", "#FF3333", "QPSK"),
+        ("C-RS", "#00AADD", "QPSK"),
+        ("PDSCH_QPSK", "#00FFFF", "QPSK"),
         ("PDSCH_16QAM", "#FFD500", "16QAM"),
         ("PDSCH_64QAM", "#AAFF00", "64QAM"),
         ("Non-alloc", "#AAAAAA", "---")
