@@ -321,7 +321,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         symbol='o', 
                         symbolSize=2.5, 
                         symbolPen=None, 
-                        symbolBrush="#00FFFF"
+                        symbolBrush="#FF3333"
                     )
                 else:
                     self.lte_const_curve.setData([], [])
@@ -330,14 +330,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     pss_pts = fm_metrics['pss_pts']
                     sss_pts = fm_metrics['sss_pts']
                     pdcch_pts = fm_metrics.get('pdcch_pts', np.array([]))
+                    pbch_pts = fm_metrics.get('pbch_pts', np.array([]))
+                    crs_pts = fm_metrics.get('crs_pts', np.array([]))
                     
                     if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
-                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
+                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF66FF")
                     else:
                         self.lte_pss_curve.setData([], [])
                         
                     if len(sss_pts) > 0 and getattr(self, 'action_show_sss', None) and self.action_show_sss.isChecked():
-                        self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF00FF")
+                        self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#4477FF")
                     else:
                         self.lte_sss_curve.setData([], [])
                         
@@ -345,6 +347,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         self.lte_pdcch_curve.setData(pdcch_pts.real, pdcch_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FFFF00")
                     else:
                         self.lte_pdcch_curve.setData([], [])
+                        
+                    if len(pbch_pts) > 0 and getattr(self, 'action_show_pbch', None) and self.action_show_pbch.isChecked():
+                        self.lte_pbch_curve.setData(pbch_pts.real, pbch_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#00FF00")
+                    else:
+                        self.lte_pbch_curve.setData([], [])
+                        
+                    if len(crs_pts) > 0 and getattr(self, 'action_show_crs', None) and self.action_show_crs.isChecked():
+                        self.lte_crs_curve.setData(crs_pts.real, crs_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#00FFFF")
+                    else:
+                        self.lte_crs_curve.setData([], [])
                         
                 self.lte_const_widget.scene().update()
                 

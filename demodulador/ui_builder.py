@@ -402,7 +402,7 @@ def build_ui(self, state):
             border: none;
             gridline-color: transparent;
             font-family: Arial;
-            font-size: 14px;
+            font-size: 11px;
         }
         QHeaderView::section {
             background-color: #000000;
@@ -410,27 +410,7 @@ def build_ui(self, state):
             font-weight: bold;
             border: none;
             border-bottom: 1px solid #800080;
-            padding: 6px;
-        }
-        QScrollBar:vertical, QScrollBar:horizontal {
-            border: none;
-            background: #1e1e1e;
-            width: 10px;
-            height: 10px;
-            margin: 0px;
-        }
-        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-            background: #555555;
-            border-radius: 5px;
-        }
-        QTableWidget::item {
-            padding: 3px;
-            margin: 0px;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            border: none;
-            background: none;
+            padding: 4px;
         }
     """)
     
@@ -439,11 +419,6 @@ def build_ui(self, state):
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
     for i in range(1, 5):
         header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        
-    # Ajustamos la altura de las filas
-    v_header = self.lte_frame_summary.verticalHeader()
-    v_header.setDefaultSectionSize(24)
-    v_header.setMinimumSectionSize(22)
     
     # Filas (Channel Name, Color, Mod.Fmt)
     canales_lte = [

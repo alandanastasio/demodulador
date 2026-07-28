@@ -715,21 +715,66 @@ class DemoduladorLTE(DemoduladorBase):
                 if hasattr(self, 'ultimo_pcfich_k_indices'):
                     pcfich_k_indices = self.ultimo_pcfich_k_indices
                 
-                pdcch_pts = []
-                for sym_idx in range(cfi_val):
-                    for k in range(num_sc):
-                        is_crs = False
-                        if sym_idx == 0 or sym_idx == 1:
-                            if (k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6:
-                                is_crs = True
-                        is_pcfich = (sym_idx == 0) and (k in pcfich_k_indices)
-                        if not is_crs and not is_pcfich:
-                            pt = constelacion[sym_idx, k]
-                            if not np.isnan(pt):
-                                pdcch_pts.append(pt)
-                pdcch_pts = np.array(pdcch_pts)
+                idx_pbch = np.array(list(range(mitad_sc - 36, mitad_sc)) + list(range(mitad_sc, mitad_sc + 36)))
                 
-                puntos_corr = constelacion[~np.isnan(constelacion)]
+                pdcch_pts = []
+                crs_pts = []
+                pbch_pts = []
+                pdsch_pts = []
+                
+                for sym_idx in range(14):
+                    for k in range(num_sc):
+                        pt = constelacion[sym_idx, k]
+                        if np.isnan(pt): continue
+                        
+                        # 1. Detectar C-RS
+                        is_crs = False
+                        if sym_idx in [0, 4, 7, 11]:
+                            if (k % 6) == v_shift: is_crs = True
+                        # Para antena 1 (asumimos que puede haber 2 puertos)
+                        elif sym_idx in [0, 4, 7, 11]:
+                            if (k % 6) == (v_shift + 3) % 6: is_crs = True
+                        
+                        # En LTE, los puertos 0 y 1 transmiten en sym 0,4,7,11.
+                        # Puerto 0: v_shift (sym 0,4,7,11). Puerto 1: v_shift+3 (sym 0,4,7,11).
+                        if sym_idx in [0, 4, 7, 11] and ((k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6):
+                            is_crs = True
+                            
+                        if is_crs:
+                            crs_pts.append(pt)
+                            continue
+                            
+                        # PSS / SSS ya extraídos
+                        if (sym_idx == 6 or sym_idx == 5) and (k in idx_sync):
+                            continue
+                            
+                        # PBCH
+                        if sym_idx in [1, 2, 3] and (k in idx_pbch):
+                            pbch_pts.append(pt)
+                            continue
+                            
+                        # PCFICH
+                        is_pcfich = (sym_idx == 0) and (k in pcfich_k_indices)
+                        if is_pcfich:
+                            continue
+                            
+                        # PDCCH / PHICH (Región de control)
+                        if sym_idx < cfi_val:
+                            if np.abs(pt) > 0.1: # Ignorar Resource Elements vacíos
+                                pdcch_pts.append(pt)
+                            continue
+                            
+                        # Lo que sobra es PDSCH
+                        if np.abs(pt) > 0.1:
+                            pdsch_pts.append(pt)
+                            
+                pdcch_pts = np.array(pdcch_pts)
+                crs_pts = np.array(crs_pts)
+                pbch_pts = np.array(pbch_pts)
+                pdsch_pts = np.array(pdsch_pts)
+                
+                # Guardar para UI (sin el límite de 0.1 para que se vea completo si quieren)
+                puntos_corr = pdsch_pts
                 self.ultimo_pss_pts = pss_pts
                 self.ultimo_sss_pts = sss_pts
                 
@@ -757,11 +802,16 @@ class DemoduladorLTE(DemoduladorBase):
                 fs_dict = {}
                 fs_dict["P-SS"] = (*calc_evm_power(pss_pts, 'zchu'), "6")
                 fs_dict["S-SS"] = (*calc_evm_power(sss_pts, 'bpsk'), "6")
+                fs_dict["PBCH"] = (*calc_evm_power(pbch_pts, 'qpsk'), "6")
+                fs_dict["C-RS"] = (*calc_evm_power(crs_pts, 'qpsk'), str(num_sc//12)) # C-RS se transmite en todo el ancho de banda
                 
                 if 'pcfich_syms' in locals():
                     fs_dict["PCFICH"] = (*calc_evm_power(pcfich_syms, 'qpsk'), "12") # aprox 16 REs = 1.3 RBs, pero en la tabla dice 12
                     
                 fs_dict["PDCCH"] = (*calc_evm_power(pdcch_pts, 'qpsk'), str(len(pdcch_pts)//12)) # Num RBs aprox
+                
+                # Para el PDSCH, por ahora asumimos que todo es QPSK para hacer la medición ciega
+                fs_dict["PDSCH_QPSK"] = (*calc_evm_power(pdsch_pts, 'qpsk'), str(len(pdsch_pts)//12//11)) # aprox RBs
                 
                 self.ultimo_lte_metrics['frame_summary'] = fs_dict
 
@@ -836,7 +886,9 @@ class DemoduladorLTE(DemoduladorBase):
                     'lte_metrics': self.ultimo_lte_metrics,
                     'pss_pts': self.ultimo_pss_pts if hasattr(self, 'ultimo_pss_pts') else np.array([]),
                     'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([]),
-                    'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([])
+                    'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([]),
+                    'pbch_pts': pbch_pts if 'pbch_pts' in locals() else np.array([]),
+                    'crs_pts': crs_pts if 'crs_pts' in locals() else np.array([])
                 },
                 'evm_data': evm_data
             }
