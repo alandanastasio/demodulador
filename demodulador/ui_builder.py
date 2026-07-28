@@ -300,6 +300,7 @@ def build_ui(self, state):
     self.lte_const_widget.setAspectLocked(True)
     
     self.lte_const_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
+    self.lte_pdcch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FFFF00") # Amarillo
     self.lte_pss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF6600") # Naranja
     self.lte_sss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF00FF") # Magenta
     self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FFFFFF")
@@ -319,17 +320,24 @@ def build_ui(self, state):
     self.menu_lte_layers = QMenu(self.btn_lte_layers)
     self.menu_lte_layers.setStyleSheet("QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
     
-    self.action_show_data = QAction("Datos QPSK (Celeste)", self.lte_const_widget)
+    self.action_show_data = QAction("Datos PDSCH (Celeste)", self.lte_const_widget)
     self.action_show_data.setCheckable(True)
     self.action_show_data.setChecked(True)
+    
+    self.action_show_pdcch = QAction("Control PDCCH (Amarillo)", self.lte_const_widget)
+    self.action_show_pdcch.setCheckable(True)
+    self.action_show_pdcch.setChecked(True)
+    
     self.action_show_pss = QAction("PSS Zadoff-Chu (Naranja)", self.lte_const_widget)
     self.action_show_pss.setCheckable(True)
     self.action_show_pss.setChecked(True)
+    
     self.action_show_sss = QAction("SSS m-seq (Magenta)", self.lte_const_widget)
     self.action_show_sss.setCheckable(True)
     self.action_show_sss.setChecked(True)
     
     self.menu_lte_layers.addAction(self.action_show_data)
+    self.menu_lte_layers.addAction(self.action_show_pdcch)
     self.menu_lte_layers.addAction(self.action_show_pss)
     self.menu_lte_layers.addAction(self.action_show_sss)
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))

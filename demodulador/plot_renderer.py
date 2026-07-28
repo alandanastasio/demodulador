@@ -329,6 +329,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 if fm_metrics and 'pss_pts' in fm_metrics and 'sss_pts' in fm_metrics:
                     pss_pts = fm_metrics['pss_pts']
                     sss_pts = fm_metrics['sss_pts']
+                    pdcch_pts = fm_metrics.get('pdcch_pts', np.array([]))
+                    
                     if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
                         self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
                     else:
@@ -338,6 +340,11 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF00FF")
                     else:
                         self.lte_sss_curve.setData([], [])
+                        
+                    if len(pdcch_pts) > 0 and getattr(self, 'action_show_pdcch', None) and self.action_show_pdcch.isChecked():
+                        self.lte_pdcch_curve.setData(pdcch_pts.real, pdcch_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FFFF00")
+                    else:
+                        self.lte_pdcch_curve.setData([], [])
                         
                 self.lte_const_widget.scene().update()
                 

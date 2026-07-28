@@ -686,6 +686,28 @@ class DemoduladorLTE(DemoduladorBase):
                     pss_pts = pss_pts / np.sqrt(p_avg)
                     sss_pts = sss_pts / np.sqrt(p_avg)
                 
+                cfi_val = self.ultimo_lte_metrics.get('pcfich_cfi', 1)
+                if not (1 <= cfi_val <= 3): cfi_val = 1
+                
+                v_shift = self.ultimo_lte_metrics.get('cell_id', 0) % 6
+                pcfich_k_indices = set()
+                if hasattr(self, 'ultimo_pcfich_k_indices'):
+                    pcfich_k_indices = self.ultimo_pcfich_k_indices
+                
+                pdcch_pts = []
+                for sym_idx in range(cfi_val):
+                    for k in range(num_sc):
+                        is_crs = False
+                        if sym_idx == 0 or sym_idx == 1:
+                            if (k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6:
+                                is_crs = True
+                        is_pcfich = (sym_idx == 0) and (k in pcfich_k_indices)
+                        if not is_crs and not is_pcfich:
+                            pt = constelacion[sym_idx, k]
+                            if not np.isnan(pt):
+                                pdcch_pts.append(pt)
+                pdcch_pts = np.array(pdcch_pts)
+                
                 puntos_corr = constelacion[~np.isnan(constelacion)]
                 self.ultimo_pss_pts = pss_pts
                 self.ultimo_sss_pts = sss_pts
@@ -759,7 +781,8 @@ class DemoduladorLTE(DemoduladorBase):
                 'metricas': {
                     'lte_metrics': self.ultimo_lte_metrics,
                     'pss_pts': self.ultimo_pss_pts if hasattr(self, 'ultimo_pss_pts') else np.array([]),
-                    'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([])
+                    'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([]),
+                    'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([])
                 },
                 'evm_data': evm_data
             }
