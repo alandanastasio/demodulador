@@ -380,24 +380,7 @@ class DemoduladorLTE(DemoduladorBase):
 
     def configurar(self, sample_rate: float, fft_size: int):
         self.sample_rate = sample_rate
-        self.ui_fft_size = fft_size
-        
-        # Mapeo de frecuencias de muestreo estandar LTE a tamaño de FFT
-        # 1.92, 3.84, 7.68, 15.36, 23.04, 30.72 MHz
-        fs_mhz = round(sample_rate / 1e6, 2)
-        
-        if fs_mhz <= 1.92:
-            self.fft_size = 128
-        elif fs_mhz <= 3.84:
-            self.fft_size = 256
-        elif fs_mhz <= 7.68:
-            self.fft_size = 512
-        elif fs_mhz <= 15.36:
-            self.fft_size = 1024
-        elif fs_mhz <= 23.04:
-            self.fft_size = 1536
-        else:
-            self.fft_size = 2048
+        self.fft_size = fft_size
             
         self.Tu = self.fft_size
         # CP length in us: 5.2 for 1st symbol, 4.69 for the rest
@@ -887,8 +870,8 @@ class DemoduladorLTE(DemoduladorBase):
                 
             self.ultimo_puntos_corr = puntos_corr
 
-            # Generamos espectro visual para UI usando la resolución que pide el usuario
-            ui_fs = getattr(self, 'ui_fft_size', fs)
+            # Generamos espectro visual para UI usando la resolución de la FFT del canal
+            ui_fs = fs
             # Aseguramos tener suficientes muestras
             muestras_req = min(ui_fs, N_iq)
             chunk_psd = chunk_procesar[:muestras_req].copy()
