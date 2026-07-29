@@ -233,7 +233,18 @@ class MainWindow(QMainWindow):
         self.sr_combo.blockSignals(False)
         self._restore_panels()
 
-    def set_lte_mode(self):
+    def set_lte_mode(self, bw_mhz=5):
+        # Mapeo de ancho de banda LTE a frecuencia de muestreo y FFT
+        bw_to_config = {
+            1.4: (1.92e6, 128),
+            3:   (3.84e6, 256),
+            5:   (7.68e6, 512),
+            10:  (15.36e6, 1024),
+            15:  (23.04e6, 1536),
+            20:  (30.72e6, 2048),
+        }
+        sample_rate, fft_size = bw_to_config.get(bw_mhz, (7.68e6, 512))
+        
         # Insertamos el espectro en el stack del cuadrante 1 (reemplazando el widget temporal si existe)
         current_w = self.lte_q1_stack.widget(0)
         if current_w != self.freq_plot:
@@ -273,37 +284,47 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
 
+        # Guardamos el state del SA antes de pisar todo
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            self.sa_fft_size_text = self.fft_combo.currentText()
+
         state['demod_mode'] = 'lte'
-        if "File" in self.radio.nombre:
-            state['sample_rate'] = 3.84e6 # TM1_15RB_FDD es de 3MHz (15 RBs -> 3.84 Msps)
-        else:
-            state['sample_rate'] = 30.72e6 
+        state['sample_rate'] = sample_rate
+        state['fft_size'] = fft_size
         
         if hasattr(self.radio, 'set_muestras_por_bloque'):
-            muestras = int(state['sample_rate'] * 0.002)
+            muestras = int(sample_rate * 0.002)
             pot2 = 1
             while pot2 < muestras: pot2 *= 2
             self.radio.set_muestras_por_bloque(pot2)
 
         self.demodulador_actual = DemoduladorLTE()
-        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
-        self.radio.set_sample_rate(state['sample_rate'])
+        self.demodulador_actual.configurar(sample_rate, fft_size)
+        self.radio.set_sample_rate(sample_rate)
         
         self.unit_combo.setCurrentText("GHz")
-        self.freq_input.setValue(2.6)
+        self.freq_input.setValue(2.63)
 
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
-            
+        # Fijar y deshabilitar los combos de SR y FFT
+        sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")
         self.sr_combo.blockSignals(True)
-        if self.sr_combo.findText("32 MHz") != -1:
-            self.sr_combo.setCurrentText("32 MHz")
-        elif self.sr_combo.findText("40 MHz") != -1:
-            self.sr_combo.setCurrentText("40 MHz")
-        elif self.sr_combo.findText("20 MHz") != -1: # For bladeRF
-            self.sr_combo.setCurrentText("20 MHz")
-        self.sr_combo.setEnabled(True) # Unlock for user control
+        # Agregar el valor exacto si no existe en la lista
+        if self.sr_combo.findText(sr_text) == -1:
+            self.sr_combo.addItem(sr_text)
+        self.sr_combo.setCurrentText(sr_text)
+        self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        fft_text = str(fft_size)
+        if self.fft_combo.findText(fft_text) == -1:
+            self.fft_combo.addItem(fft_text)
+        self.fft_combo.setCurrentText(fft_text)
+        self.fft_combo.setEnabled(False)
+        self.fft_combo.blockSignals(False)
+        
+        self.update_x_axis()
         self._restore_panels()
 
     def set_wbfm_audio_mode(self):
@@ -366,6 +387,13 @@ class MainWindow(QMainWindow):
             
         self.sr_combo.setEnabled(True) 
         self.sr_combo.blockSignals(False)
+        
+        # Restaurar FFT combo si venimos de LTE
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
         
         state['demod_mode'] = 'none'
         self.demodulador_actual = SpectrumAnalyzer()

@@ -653,12 +653,25 @@ def build_ui(self, state):
     self.demod_group.addAction(self.action_wifi_ag)
     self.digital_menu.addAction(self.action_wifi_ag)
 
-    self.action_lte = QAction("LTE", self)
-    self.action_lte.setCheckable(True)
-    self.action_lte.triggered.connect(self.set_lte_mode)
+    self.lte_menu = QMenu("LTE", self)
+    self.lte_menu.setStyleSheet("""
+        QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+        QMenu::item:selected { background-color: #555555; }
+    """)
     
-    self.demod_group.addAction(self.action_lte)
-    self.digital_menu.addAction(self.action_lte)
+    lte_bws = [("1.4 MHz (6 RB)", 1.4), ("3 MHz (15 RB)", 3), ("5 MHz (25 RB)", 5),
+               ("10 MHz (50 RB)", 10), ("15 MHz (75 RB)", 15), ("20 MHz (100 RB)", 20)]
+    
+    self.lte_bw_actions = []
+    for label, bw in lte_bws:
+        action = QAction(label, self)
+        action.setCheckable(True)
+        action.triggered.connect(lambda checked, b=bw: self.set_lte_mode(b))
+        self.demod_group.addAction(action)
+        self.lte_menu.addAction(action)
+        self.lte_bw_actions.append(action)
+    
+    self.digital_menu.addMenu(self.lte_menu)
 
     # Agregamos el submenú Digital al menú principal de Demodulación
     self.demod_menu.addMenu(self.digital_menu)
