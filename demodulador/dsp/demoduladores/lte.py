@@ -670,6 +670,17 @@ class DemoduladorLTE(DemoduladorBase):
                     
                     self.ultimo_pcfich_k_indices = set(np.concatenate([regs_k[idx] for idx in reg_indices]))
                     
+                    # --- EXTRACCIÓN APROXIMADA DE PHICH ---
+                    regs_disponibles = [r for r in range(n_reg) if r not in reg_indices]
+                    if len(regs_disponibles) >= 3:
+                        step_phich = len(regs_disponibles) // 3
+                        phich_reg_indices = [regs_disponibles[(cell_id + i * step_phich) % len(regs_disponibles)] for i in range(3)]
+                        phich_syms = np.concatenate([regs[idx] for idx in phich_reg_indices])
+                        self.ultimo_phich_k_indices = set(np.concatenate([regs_k[idx] for idx in phich_reg_indices]))
+                    else:
+                        phich_syms = np.array([])
+                        self.ultimo_phich_k_indices = set()
+                    
                     # n_s es el número de slot (0 para subframe 0, 10 para subframe 5)
                     pcfich_n_s = ns_base
                     cfi_val, cfi_score, cfi_ok = decodificar_pcfich(pcfich_syms, cell_id, n_s=pcfich_n_s)
@@ -723,12 +734,17 @@ class DemoduladorLTE(DemoduladorBase):
                 if hasattr(self, 'ultimo_pcfich_k_indices'):
                     pcfich_k_indices = self.ultimo_pcfich_k_indices
                 
+                phich_k_indices = set()
+                if hasattr(self, 'ultimo_phich_k_indices'):
+                    phich_k_indices = self.ultimo_phich_k_indices
+                
                 idx_pbch = np.array(list(range(mitad_sc - 36, mitad_sc)) + list(range(mitad_sc, mitad_sc + 36)))
                 
                 pdcch_pts = []
                 crs_pts = []
                 pbch_pts = []
                 pcfich_pts = []
+                phich_pts = []
                 pdsch_pts = []
                 
                 for sym_idx in range(14):
@@ -768,7 +784,13 @@ class DemoduladorLTE(DemoduladorBase):
                             pcfich_pts.append(pt)
                             continue
                             
-                        # PDCCH / PHICH (Región de control)
+                        # PHICH
+                        is_phich = (sym_idx == 0) and (k in phich_k_indices)
+                        if is_phich:
+                            phich_pts.append(pt)
+                            continue
+                            
+                        # PDCCH (Resto de la Región de control)
                         if sym_idx < cfi_val:
                             if np.abs(pt) > 0.1: # Ignorar Resource Elements vacíos
                                 pdcch_pts.append(pt)
@@ -782,6 +804,7 @@ class DemoduladorLTE(DemoduladorBase):
                 crs_pts = np.array(crs_pts)
                 pbch_pts = np.array(pbch_pts)
                 pcfich_pts = np.array(pcfich_pts)
+                phich_pts = np.array(phich_pts)
                 pdsch_pts = np.array(pdsch_pts)
                 
                 # Guardar para UI (sin el límite de 0.1 para que se vea completo si quieren)
@@ -818,6 +841,8 @@ class DemoduladorLTE(DemoduladorBase):
                 
                 if 'pcfich_syms' in locals():
                     fs_dict["PCFICH"] = (*calc_evm_power(pcfich_syms, 'qpsk'), "12") # aprox 16 REs = 1.3 RBs, pero en la tabla dice 12
+                    
+                fs_dict["PHICH"] = (*calc_evm_power(phich_pts, 'bpsk'), "3") # 3 REGs aprox
                     
                 fs_dict["PDCCH"] = (*calc_evm_power(pdcch_pts, 'qpsk'), str(len(pdcch_pts)//12)) # Num RBs aprox
                 
@@ -899,6 +924,7 @@ class DemoduladorLTE(DemoduladorBase):
                     'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([]),
                     'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([]),
                     'pcfich_pts': pcfich_pts if 'pcfich_pts' in locals() else np.array([]),
+                    'phich_pts': phich_pts if 'phich_pts' in locals() else np.array([]),
                     'pbch_pts': pbch_pts if 'pbch_pts' in locals() else np.array([]),
                     'crs_pts': crs_pts if 'crs_pts' in locals() else np.array([])
                 },

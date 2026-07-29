@@ -333,6 +333,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     pbch_pts = fm_metrics.get('pbch_pts', np.array([]))
                     crs_pts = fm_metrics.get('crs_pts', np.array([]))
                     pcfich_pts = fm_metrics.get('pcfich_pts', np.array([]))
+                    phich_pts = fm_metrics.get('phich_pts', np.array([]))
                     
                     if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
                         self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
@@ -363,6 +364,11 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         self.lte_pcfich_curve.setData(pcfich_pts.real, pcfich_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#AA00FF")
                     else:
                         self.lte_pcfich_curve.setData([], [])
+                        
+                    if len(phich_pts) > 0 and getattr(self, 'action_show_phich', None) and self.action_show_phich.isChecked():
+                        self.lte_phich_curve.setData(phich_pts.real, phich_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF3333")
+                    else:
+                        self.lte_phich_curve.setData([], [])
                         
                 self.lte_const_widget.scene().update()
                 

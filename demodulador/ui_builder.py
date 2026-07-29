@@ -349,6 +349,7 @@ def build_ui(self, state):
     self.lte_pbch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FF00") # Verde
     self.lte_crs_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00AADD") # Celeste oscuro
     self.lte_pcfich_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#AA00FF") # Violeta
+    self.lte_phich_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF3333") # Rojo
     self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FFFFFF")
     
     cross_path_lte = QPainterPath()
@@ -394,6 +395,10 @@ def build_ui(self, state):
     self.action_show_pcfich.setCheckable(True)
     self.action_show_pcfich.setChecked(True)
     
+    self.action_show_phich = QAction("PHICH (Rojo)", self.lte_const_widget)
+    self.action_show_phich.setCheckable(True)
+    self.action_show_phich.setChecked(True)
+    
     self.menu_lte_layers.addAction(self.action_show_data)
     self.menu_lte_layers.addAction(self.action_show_pdcch)
     self.menu_lte_layers.addAction(self.action_show_pss)
@@ -401,6 +406,7 @@ def build_ui(self, state):
     self.menu_lte_layers.addAction(self.action_show_pbch)
     self.menu_lte_layers.addAction(self.action_show_crs)
     self.menu_lte_layers.addAction(self.action_show_pcfich)
+    self.menu_lte_layers.addAction(self.action_show_phich)
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
     self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
