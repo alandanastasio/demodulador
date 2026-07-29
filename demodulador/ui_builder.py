@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
@@ -367,46 +367,25 @@ def build_ui(self, state):
     self.menu_lte_layers = QMenu(self.btn_lte_layers)
     self.menu_lte_layers.setStyleSheet("QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
     
-    self.action_show_data = QAction("Datos PDSCH (Celeste)", self.lte_const_widget)
-    self.action_show_data.setCheckable(True)
-    self.action_show_data.setChecked(True)
-    
-    self.action_show_pdcch = QAction("Control PDCCH (Amarillo)", self.lte_const_widget)
-    self.action_show_pdcch.setCheckable(True)
-    self.action_show_pdcch.setChecked(True)
-    
-    self.action_show_pss = QAction("PSS Zadoff-Chu (Naranja)", self.lte_const_widget)
-    self.action_show_pss.setCheckable(True)
-    self.action_show_pss.setChecked(True)
-    
-    self.action_show_sss = QAction("SSS m-seq (Azul Claro)", self.lte_const_widget)
-    self.action_show_sss.setCheckable(True)
-    self.action_show_sss.setChecked(True)
-    
-    self.action_show_pbch = QAction("PBCH (Verde)", self.lte_const_widget)
-    self.action_show_pbch.setCheckable(True)
-    self.action_show_pbch.setChecked(True)
-
-    self.action_show_crs = QAction("C-RS (Celeste Oscuro)", self.lte_const_widget)
-    self.action_show_crs.setCheckable(True)
-    self.action_show_crs.setChecked(True)
-
-    self.action_show_pcfich = QAction("PCFICH (Violeta)", self.lte_const_widget)
-    self.action_show_pcfich.setCheckable(True)
-    self.action_show_pcfich.setChecked(True)
-    
-    self.action_show_phich = QAction("PHICH (Rojo)", self.lte_const_widget)
-    self.action_show_phich.setCheckable(True)
-    self.action_show_phich.setChecked(True)
-    
-    self.menu_lte_layers.addAction(self.action_show_data)
-    self.menu_lte_layers.addAction(self.action_show_pdcch)
-    self.menu_lte_layers.addAction(self.action_show_pss)
-    self.menu_lte_layers.addAction(self.action_show_sss)
-    self.menu_lte_layers.addAction(self.action_show_pbch)
-    self.menu_lte_layers.addAction(self.action_show_crs)
-    self.menu_lte_layers.addAction(self.action_show_pcfich)
-    self.menu_lte_layers.addAction(self.action_show_phich)
+    def add_checkable_menu_item(menu, title):
+        chk = QCheckBox(title)
+        chk.setChecked(True)
+        chk.setStyleSheet("QCheckBox { color: white; padding: 4px 8px; font-size: 13px; } QCheckBox::indicator { width: 14px; height: 14px; }")
+        # Ensure the background matches the menu so it looks seamless
+        chk.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(chk)
+        menu.addAction(action)
+        return chk
+        
+    self.action_show_data = add_checkable_menu_item(self.menu_lte_layers, "Datos PDSCH")
+    self.action_show_pdcch = add_checkable_menu_item(self.menu_lte_layers, "Control PDCCH")
+    self.action_show_pss = add_checkable_menu_item(self.menu_lte_layers, "PSS Zadoff-Chu")
+    self.action_show_sss = add_checkable_menu_item(self.menu_lte_layers, "SSS m-seq")
+    self.action_show_pbch = add_checkable_menu_item(self.menu_lte_layers, "PBCH")
+    self.action_show_crs = add_checkable_menu_item(self.menu_lte_layers, "C-RS")
+    self.action_show_pcfich = add_checkable_menu_item(self.menu_lte_layers, "PCFICH")
+    self.action_show_phich = add_checkable_menu_item(self.menu_lte_layers, "PHICH")
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
     self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
