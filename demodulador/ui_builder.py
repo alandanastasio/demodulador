@@ -399,6 +399,11 @@ def build_ui(self, state):
     self.lte_frame_summary.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
     
     self.lte_frame_summary.setStyleSheet("""
+        QToolTip {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            border: 1px solid #888888;
+        }
         QTableWidget {
             background-color: #000000;
             color: white;
@@ -450,23 +455,24 @@ def build_ui(self, state):
     
     # Filas (Channel Name, Color, Mod.Fmt)
     canales_lte = [
-        ("P-SS", "#FF6600", "Z-Chu"),
-        ("S-SS", "#4477FF", "BPSK"),
-        ("PBCH", "#00FF00", "QPSK"),
-        ("PCFICH", "#AA00FF", "QPSK"),
-        ("PHICH", "#FF3333", "BPSK (CDM)"),
-        ("PDCCH", "#FFFF00", "QPSK"),
-        ("C-RS", "#00AADD", "QPSK"),
-        ("PDSCH_QPSK", "#00FFFF", "QPSK"),
-        ("PDSCH_16QAM", "#FFD500", "16QAM"),
-        ("PDSCH_64QAM", "#AAFF00", "64QAM"),
-        ("Non-alloc", "#AAAAAA", "---")
+        ("P-SS", "#FF6600", "Z-Chu", "Primary Synchronization Signal"),
+        ("S-SS", "#4477FF", "BPSK", "Secondary Synchronization Signal"),
+        ("PBCH", "#00FF00", "QPSK", "Physical Broadcast Channel"),
+        ("PCFICH", "#AA00FF", "QPSK", "Physical Control Format Indicator Channel"),
+        ("PHICH", "#FF3333", "BPSK (CDM)", "Physical Hybrid ARQ Indicator Channel"),
+        ("PDCCH", "#FFFF00", "QPSK", "Physical Downlink Control Channel"),
+        ("C-RS", "#00AADD", "QPSK", "Cell-specific Reference Signal"),
+        ("PDSCH_QPSK", "#00FFFF", "QPSK", "Physical Downlink Shared Channel (QPSK)"),
+        ("PDSCH_16QAM", "#FFD500", "16QAM", "Physical Downlink Shared Channel (16QAM)"),
+        ("PDSCH_64QAM", "#AAFF00", "64QAM", "Physical Downlink Shared Channel (64QAM)"),
+        ("Non-alloc", "#AAAAAA", "---", "Unallocated Resource Elements")
     ]
     
-    for row, (nombre, color, mod_fmt) in enumerate(canales_lte):
+    for row, (nombre, color, mod_fmt, desc) in enumerate(canales_lte):
         item_ch = QTableWidgetItem(nombre)
         item_ch.setForeground(QColor(color))
         item_ch.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        item_ch.setToolTip(desc)
         self.lte_frame_summary.setItem(row, 0, item_ch)
         
         for col, default_val in enumerate(["---", "---", mod_fmt, "---"]):
