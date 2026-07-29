@@ -360,7 +360,6 @@ class DemoduladorLTE(DemoduladorBase):
         self.cp_len_2 = 144 # CP del resto de los símbolos del slot
         
         self.buffer_medicion = []
-        self.muestras_acumuladas = 0
         self.is_processing = False
         
         self.last_heavy_results = {}
@@ -408,7 +407,6 @@ class DemoduladorLTE(DemoduladorBase):
         self.pss_time = generar_pss_time(self.fft_size)
         
         self.buffer_medicion = []
-        self.muestras_acumuladas = 0
         self.is_processing = False
         
         with self._lock:
@@ -738,6 +736,11 @@ class DemoduladorLTE(DemoduladorBase):
                 if hasattr(self, 'ultimo_phich_k_indices'):
                     phich_k_indices = self.ultimo_phich_k_indices
                 
+                # Convertir índices absolutos (posición en FFT) a relativos (posición en constelacion)
+                abs_to_rel = {abs_idx: rel_idx for rel_idx, abs_idx in enumerate(idx_portadoras)}
+                pcfich_k_rel = set(abs_to_rel[ki] for ki in pcfich_k_indices if ki in abs_to_rel)
+                phich_k_rel = set(abs_to_rel[ki] for ki in phich_k_indices if ki in abs_to_rel)
+                
                 idx_pbch = np.array(list(range(mitad_sc - 36, mitad_sc)) + list(range(mitad_sc, mitad_sc + 36)))
                 
                 pdcch_pts = []
@@ -752,18 +755,8 @@ class DemoduladorLTE(DemoduladorBase):
                         pt = constelacion[sym_idx, k]
                         if np.isnan(pt): continue
                         
-                        # 1. Detectar C-RS
-                        is_crs = False
-                        if sym_idx in [0, 4, 7, 11]:
-                            if (k % 6) == v_shift: is_crs = True
-                        # Para antena 1 (asumimos que puede haber 2 puertos)
-                        elif sym_idx in [0, 4, 7, 11]:
-                            if (k % 6) == (v_shift + 3) % 6: is_crs = True
-                        
-                        # En LTE, los puertos 0 y 1 transmiten en sym 0,4,7,11.
-                        # Puerto 0: v_shift (sym 0,4,7,11). Puerto 1: v_shift+3 (sym 0,4,7,11).
-                        if sym_idx in [0, 4, 7, 11] and ((k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6):
-                            is_crs = True
+                        # Detectar C-RS (Puerto 0 y 1 en sym 0,4,7,11)
+                        is_crs = sym_idx in [0, 4, 7, 11] and ((k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6)
                             
                         if is_crs:
                             crs_pts.append(pt)
@@ -774,18 +767,18 @@ class DemoduladorLTE(DemoduladorBase):
                             continue
                             
                         # PBCH
-                        if sym_idx in [1, 2, 3] and (k in idx_pbch):
+                        if sym_idx in [7, 8, 9, 10] and (k in idx_pbch):
                             pbch_pts.append(pt)
                             continue
                             
                         # PCFICH
-                        is_pcfich = (sym_idx == 0) and (k in pcfich_k_indices)
+                        is_pcfich = (sym_idx == 0) and (k in pcfich_k_rel)
                         if is_pcfich:
                             pcfich_pts.append(pt)
                             continue
                             
                         # PHICH
-                        is_phich = (sym_idx == 0) and (k in phich_k_indices)
+                        is_phich = (sym_idx == 0) and (k in phich_k_rel)
                         if is_phich:
                             phich_pts.append(pt)
                             continue
@@ -839,8 +832,7 @@ class DemoduladorLTE(DemoduladorBase):
                 fs_dict["PBCH"] = (*calc_evm_power(pbch_pts, 'qpsk'), "6")
                 fs_dict["C-RS"] = (*calc_evm_power(crs_pts, 'qpsk'), str(num_sc//12)) # C-RS se transmite en todo el ancho de banda
                 
-                if 'pcfich_syms' in locals():
-                    fs_dict["PCFICH"] = (*calc_evm_power(pcfich_syms, 'qpsk'), "12") # aprox 16 REs = 1.3 RBs, pero en la tabla dice 12
+                fs_dict["PCFICH"] = (*calc_evm_power(pcfich_pts, 'qpsk'), "4") # 4 REGs de 4 REs = 16 REs
                     
                 fs_dict["PHICH"] = (*calc_evm_power(phich_pts, 'bpsk'), "3") # 3 REGs aprox
                     
@@ -899,7 +891,7 @@ class DemoduladorLTE(DemoduladorBase):
             ui_fs = getattr(self, 'ui_fft_size', fs)
             # Aseguramos tener suficientes muestras
             muestras_req = min(ui_fs, N_iq)
-            chunk_psd = bloque_iq[:muestras_req].copy()
+            chunk_psd = chunk_procesar[:muestras_req].copy()
             if len(chunk_psd) < ui_fs:
                 chunk_psd = np.pad(chunk_psd, (0, ui_fs - len(chunk_psd)))
                 
