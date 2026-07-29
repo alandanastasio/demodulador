@@ -286,10 +286,10 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
         # --- RENDERIZADO ESPECÍFICO DE LTE ---
         if state.get('demod_mode') == 'lte':
             if raw_samples is not None:
-                # La señal en 'raw_samples' ya viene decimada (ej. 2000 puntos) representando 10 ms.
-                # Ya es la envolvente (valor absoluto), no hace falta np.abs
-                t_axis_us = np.linspace(0, 10000, len(raw_samples))
-                self.lte_time_curve.setData(t_axis_us, raw_samples)
+                # Calculamos la magnitud de las muestras IQ
+                mag = np.abs(raw_samples)
+                t_axis_us = np.linspace(0, 10000, len(mag))
+                self.lte_time_curve.setData(t_axis_us, mag)
             
             if evm_data is not None and hasattr(self, 'lte_evm_rms_subc'):
                 y_floor = -40
