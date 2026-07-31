@@ -435,7 +435,24 @@ class DemoduladorLTE(DemoduladorBase):
             fs = self.fft_size
             N_iq = len(chunk_procesar)
             
-            # --- FASE 1 & 2: Sincronización y Búsqueda de PSS (Downlink) ---
+            # --- FASE 1: Corrección de CFO (Schmidl & Cox) ---
+            original = chunk_procesar[:-fs]
+            retraso = chunk_procesar[fs:]
+            producto = retraso * np.conjugate(original)
+            
+            filtro = np.ones(self.cp_len_1)
+            correlacion_sc = np.convolve(producto, filtro, mode='valid')
+            
+            inicio_simbolo = np.argmax(np.abs(correlacion_sc))
+            pico_fase = np.angle(correlacion_sc[inicio_simbolo])
+            
+            ts = 1.0 / self.sample_rate
+            cfo_estimado_hz = pico_fase / (2 * np.pi * fs * ts)
+            
+            t_vector = np.arange(N_iq) * ts
+            chunk_procesar = chunk_procesar * np.exp(-1j * 2 * np.pi * cfo_estimado_hz * t_vector)
+
+            # --- FASE 1.5 & 2: Sincronización y Búsqueda de PSS (Downlink) ---
             mejor_corr = 0
             mejor_N_id_2 = -1
             mejor_pos = -1
