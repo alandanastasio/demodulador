@@ -194,8 +194,9 @@ def build_ui(self, state):
     self.wifi_const_widget = pg.PlotWidget(title="Constelación")
     self.wifi_const_widget.setLabel('bottom', 'En Fase (I)')
     self.wifi_const_widget.setLabel('left', 'Cuadratura (Q)')
-    self.wifi_const_widget.setXRange(-1.5, 1.5)
-    self.wifi_const_widget.setYRange(-1, 1)
+    self.wifi_const_widget.setXRange(-1.5, 1.5, padding=0)
+    self.wifi_const_widget.setYRange(-1.5, 1.5, padding=0)
+    self.wifi_const_widget.getViewBox().disableAutoRange()
     self.wifi_const_widget.showGrid(x=False, y=False)
     self.wifi_const_widget.setAspectLocked(True)
     
@@ -337,8 +338,9 @@ def build_ui(self, state):
     self.lte_const_widget = pg.PlotWidget(title="Constelación (LTE)")
     self.lte_const_widget.setLabel('bottom', 'En Fase (I)')
     self.lte_const_widget.setLabel('left', 'Cuadratura (Q)')
-    self.lte_const_widget.setXRange(-1.5, 1.5)
-    self.lte_const_widget.setYRange(-1, 1)
+    self.lte_const_widget.setXRange(-1.5, 1.5, padding=0)
+    self.lte_const_widget.setYRange(-1.5, 1.5, padding=0)
+    self.lte_const_widget.getViewBox().disableAutoRange()
     self.lte_const_widget.showGrid(x=False, y=False)
     self.lte_const_widget.setAspectLocked(True)
     

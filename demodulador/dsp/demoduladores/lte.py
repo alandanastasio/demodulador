@@ -718,11 +718,8 @@ class DemoduladorLTE(DemoduladorBase):
                 constelacion[6, idx_sync] = np.nan + 1j*np.nan
                 constelacion[5, idx_sync] = np.nan + 1j*np.nan
                 
-                p_avg = np.nanmean(np.abs(constelacion)**2)
-                if p_avg > 0:
-                    constelacion = constelacion / np.sqrt(p_avg)
-                    pss_pts = pss_pts / np.sqrt(p_avg)
-                    sss_pts = sss_pts / np.sqrt(p_avg)
+                # El subframe ya fue ecualizado usando CRS en la FASE 5
+                # por lo que no es necesario volver a normalizar la amplitud.
                 
                 cfi_val = self.ultimo_lte_metrics.get('pcfich_cfi', 1)
                 if not (1 <= cfi_val <= 3): cfi_val = 1
