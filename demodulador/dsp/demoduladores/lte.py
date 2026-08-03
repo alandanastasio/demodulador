@@ -153,57 +153,52 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
     # Para el offset vertical (v): símbolo 0 tiene v=0, símbolo 4 tiene v=3
     v_offsets = {0: 0, 4: 3}
     
-    # Estimación de canal: H_est en cada subportadora
-    H_est = np.ones((14, fft_size), dtype=complex)
+    # Estimación de canal: H_est_0 (Puerto 0) y H_est_1 (Puerto 1)
+    H_est_0 = np.ones((14, fft_size), dtype=complex)
+    H_est_1 = np.ones((14, fft_size), dtype=complex)
+    
+    # Para el offset vertical (v):
+    # Port 0: símbolo 0 tiene v=0, símbolo 4 tiene v=3
+    # Port 1: símbolo 0 tiene v=3, símbolo 4 tiene v=0
+    v_offsets_p0 = {0: 0, 4: 3}
+    v_offsets_p1 = {0: 3, 4: 0}
     
     for sym_global, (l, ns) in zip(sym_indices, crs_symbols):
         crs_ref = generar_crs(cell_id, ns, l, num_rb)
         
-        # Offset del piloto en la grilla de subportadoras
-        v = v_offsets[l]
-        pilot_offset = (v + v_shift) % 6
-        
-        # Posiciones de los pilotos dentro de las subportadoras ocupadas (0-indexed)
-        pilot_local = np.arange(pilot_offset, num_sc, 6)
-        
-        # Posiciones absolutas en el array fftshift (saltando DC)
-        pilot_abs = idx_portadoras[pilot_local]
-        
-        # Extraer los valores recibidos en las posiciones de piloto
-        rx_pilots = subframe_fft[sym_global, pilot_abs]
-        
-        n_pilots = len(pilot_local)
-        ref_pilots = crs_ref[:n_pilots]
-        
-        # Estimación LS: H = Rx / Ref
-        H_pilots = rx_pilots / ref_pilots
-        
-        # Interpolación lineal en frecuencia
-        # H_pilots son valores complejos. Interpolamos parte real e imaginaria independientemente.
-        pilot_positions = pilot_local
-        all_positions = np.arange(num_sc)
-        
-        H_real = np.interp(all_positions, pilot_positions, H_pilots.real)
-        H_imag = np.interp(all_positions, pilot_positions, H_pilots.imag)
-        H_interp = H_real + 1j * H_imag
-        
-        H_est[sym_global, idx_portadoras] = H_interp
-    
+        for port, v_offsets, H_est in [(0, v_offsets_p0, H_est_0), (1, v_offsets_p1, H_est_1)]:
+            v = v_offsets[l]
+            pilot_offset = (v + v_shift) % 6
+            pilot_local = np.arange(pilot_offset, num_sc, 6)
+            pilot_abs = idx_portadoras[pilot_local]
+            
+            rx_pilots = subframe_fft[sym_global, pilot_abs]
+            n_pilots = len(pilot_local)
+            ref_pilots = crs_ref[:n_pilots]
+            
+            H_pilots = rx_pilots / ref_pilots
+            
+            all_positions = np.arange(num_sc)
+            H_real = np.interp(all_positions, pilot_local, H_pilots.real)
+            H_imag = np.interp(all_positions, pilot_local, H_pilots.imag)
+            H_interp = H_real + 1j * H_imag
+            
+            H_est[sym_global, idx_portadoras] = H_interp
+            
     # Interpolación lineal en el tiempo para los símbolos intermedios
     sym_pos = np.array(sym_indices)
     all_sym = np.arange(14)
     
     for sc in idx_portadoras:
-        h_values = H_est[sym_indices, sc]
-        # np.interp por defecto hace 'flat extrapolation' en los extremos, lo cual es ideal para sym 12, 13
-        h_real = np.interp(all_sym, sym_pos, h_values.real)
-        h_imag = np.interp(all_sym, sym_pos, h_values.imag)
-        H_est[:, sc] = h_real + 1j * h_imag
-    
-    # Ecualización MMSE vectorizada: Y_eq = Y * H* / (|H|^2 + sigma2)
+        for H_est in [H_est_0, H_est_1]:
+            h_values = H_est[sym_indices, sc]
+            h_real = np.interp(all_sym, sym_pos, h_values.real)
+            h_imag = np.interp(all_sym, sym_pos, h_values.imag)
+            H_est[:, sc] = h_real + 1j * h_imag
+            
+    # Ecualización MMSE vectorizada (SISO, Puerto 0): Y_eq = Y * H0* / (|H0|^2 + sigma2)
     subframe_eq = subframe_fft.copy()
     
-    # Estimación de la varianza del ruido usando las bandas de guarda
     margen_guarda = 20
     idx_ruido = np.concatenate((np.arange(0, max(0, centro - mitad_sc - margen_guarda)), 
                                 np.arange(min(fft_size, centro + mitad_sc + 1 + margen_guarda), fft_size)))
@@ -211,15 +206,36 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
     if len(idx_ruido) > 0:
         sigma2 = np.var(subframe_fft[:, idx_ruido])
     else:
-        sigma2 = 0.05  # Valor fallback empírico si no hay banda de guarda
+        sigma2 = 0.05
         
     Y = subframe_fft[:, idx_portadoras]
-    H = H_est[:, idx_portadoras]
+    H0 = H_est_0[:, idx_portadoras]
     
-    Y_eq = (Y * np.conj(H)) / (np.abs(H)**2 + sigma2)
+    Y_eq = (Y * np.conj(H0)) / (np.abs(H0)**2 + sigma2)
     subframe_eq[:, idx_portadoras] = Y_eq
     
-    return subframe_eq
+    return subframe_eq, H_est_0, H_est_1, sigma2
+
+def alamouti_combine(Y, H0, H1, sigma2):
+    """Combina símbolos usando SFBC (Alamouti) para 2 antenas."""
+    Y1 = Y[0::2]
+    Y2 = Y[1::2]
+    
+    H0_1 = H0[0::2]
+    H0_2 = H0[1::2]
+    
+    H1_1 = H1[0::2]
+    H1_2 = H1[1::2]
+    
+    D = np.abs(H0_1)**2 + np.abs(H1_1)**2 + sigma2
+    
+    S1 = (np.conj(H0_1) * Y1 + H1_2 * np.conj(Y2)) / D
+    S2 = (np.conj(H1_1) * Y1 - H0_2 * np.conj(Y2)) / D
+    
+    out = np.zeros_like(Y)
+    out[0::2] = S1
+    out[1::2] = S2
+    return out
 
 # --- DECODIFICADOR PBCH ---
 def decodificar_pbch(soft_bits_480):
@@ -572,7 +588,14 @@ class DemoduladorLTE(DemoduladorBase):
                     # Los slots absolutos dependen del subframe:
                     # subframe 0 → slots 0,1 | subframe 5 → slots 10,11
                     ns_base = 10 if pss_en_segunda_mitad else 0
-                    subframe_fft = ecualizar_con_crs(subframe_fft, cell_id, fs, num_rb, ns_base)
+                    
+                    # Guardamos una copia del subframe crudo (raw) para el futuro decodificador SFBC de 2 antenas
+                    subframe_fft_raw = subframe_fft.copy()
+                    subframe_eq, H_est_0, H_est_1, sigma2 = ecualizar_con_crs(subframe_fft, cell_id, fs, num_rb, ns_base)
+                    
+                    # Por ahora, sobreescribimos subframe_fft con la versión ecualizada SISO 
+                    # para no romper la compatibilidad con el resto del pipeline hasta el Paso 3.
+                    subframe_fft = subframe_eq
                     
                     # --- FASE 6: Extracción y Desaleatorización del PBCH ---
                     # El PBCH se encuentra sólo en el subframe 0, símbolos 7, 8, 9 y 10.
@@ -580,7 +603,10 @@ class DemoduladorLTE(DemoduladorBase):
                     if not pss_en_segunda_mitad:  # Sólo en subframe 0
                         idx_pbch = list(range(centro - 36, centro)) + list(range(centro + 1, centro + 37))
                         v_shift = cell_id % 6
-                        pbch_qpsk = []
+                        pbch_siso = []
+                        pbch_raw = []
+                        pbch_h0 = []
+                        pbch_h1 = []
                         
                         for l_slot in range(4):
                             sym_idx = 7 + l_slot
@@ -597,56 +623,74 @@ class DemoduladorLTE(DemoduladorBase):
                                     if (k_local - (3 + v_shift)) % 6 == 0: is_crs = True # Puerto 3
                                     
                                 if not is_crs:
-                                    pbch_qpsk.append(subframe_fft[sym_idx, sc_abs])
+                                    pbch_siso.append(subframe_fft[sym_idx, sc_abs])
+                                    pbch_raw.append(subframe_fft_raw[sym_idx, sc_abs])
+                                    pbch_h0.append(H_est_0[sym_idx, sc_abs])
+                                    pbch_h1.append(H_est_1[sym_idx, sc_abs])
                                     
-                        pbch_qpsk = np.array(pbch_qpsk)
-                        if len(pbch_qpsk) == 240:
-                            # Demodulación QPSK a bits blandos (soft bits)
-                            soft_bits = []
-                            for sym in pbch_qpsk:
-                                soft_bits.append(sym.real)
-                                soft_bits.append(sym.imag)
-                            soft_bits = np.array(soft_bits)
+                        pbch_siso = np.array(pbch_siso)
+                        pbch_raw = np.array(pbch_raw)
+                        pbch_h0 = np.array(pbch_h0)
+                        pbch_h1 = np.array(pbch_h1)
+                        
+                        if len(pbch_siso) == 240:
+                            pbch_sfbc = alamouti_combine(pbch_raw, pbch_h0, pbch_h1, sigma2)
                             
-                            # Desaleatorización (Descrambling) y decodificación a ciegas de las 4 fases
                             c = generar_secuencia_gold(1920, cell_id)
-                            
                             fase_encontrada = False
-                            for fase in range(4):
-                                c_fase = c[fase*480 : (fase+1)*480]
-                                scrambled = soft_bits * (1 - 2*c_fase)
-                                decoded_bits, antenas, mask = decodificar_pbch(scrambled)
+                            antenas_detectadas = 0
+                            mejor_pbch_eq = pbch_siso # Por defecto guardamos el SISO
+                            
+                            # Decodificación a ciegas: Probamos 1 antena (SISO) y luego 2 antenas (SFBC)
+                            for mode, pbch_eq in [("SISO", pbch_siso), ("SFBC", pbch_sfbc)]:
+                                soft_bits = np.empty(480)
+                                soft_bits[0::2] = pbch_eq.real
+                                soft_bits[1::2] = pbch_eq.imag
                                 
-                                if antenas > 0:
-                                    # ¡Match de CRC exitoso!
-                                    bits_24 = decoded_bits[:24]
-                                    mib_bits = "".join(map(str, bits_24))
+                                for fase in range(4):
+                                    c_fase = c[fase*480 : (fase+1)*480]
+                                    scrambled = soft_bits * (1 - 2*c_fase)
+                                    decoded_bits, antenas, mask = decodificar_pbch(scrambled)
                                     
-                                    bw_val = (bits_24[0]<<2) | (bits_24[1]<<1) | bits_24[2]
-                                    bw_map = {0: '1.4 MHz', 1: '3 MHz', 2: '5 MHz', 3: '10 MHz', 4: '15 MHz', 5: '20 MHz'}
-                                    dl_bw = bw_map.get(bw_val, f"Desconocido ({bw_val})")
-                                    
-                                    phich_dur = "Normal" if bits_24[3] == 0 else "Extendido"
-                                    
-                                    phich_res_val = (bits_24[4]<<1) | bits_24[5]
-                                    res_map = {0: '1/6', 1: '1/2', 2: '1', 3: '2'}
-                                    phich_res = res_map.get(phich_res_val, str(phich_res_val))
-                                    
-                                    sfn_val = 0
-                                    for i in range(8):
-                                        sfn_val = (sfn_val << 1) | bits_24[6+i]
-                                    
-                                    self.ultimo_lte_metrics['pbch_mib'] = mib_bits
-                                    self.ultimo_lte_metrics['pbch_antenas'] = antenas
-                                    self.ultimo_lte_metrics['pbch_ok'] = True
-                                    self.ultimo_lte_metrics['mib_bw'] = dl_bw
-                                    self.ultimo_lte_metrics['mib_phich_dur'] = phich_dur
-                                    self.ultimo_lte_metrics['mib_phich_res'] = phich_res
-                                    self.ultimo_lte_metrics['mib_sfn'] = sfn_val
-                                    
-                                    fase_encontrada = True
+                                    if (mode == "SISO" and antenas == 1) or (mode == "SFBC" and antenas == 2):
+                                        fase_encontrada = True
+                                        antenas_detectadas = antenas
+                                        mejor_pbch_eq = pbch_eq
+                                        break
+                                if fase_encontrada:
                                     break
                                     
+                            pbch_qpsk = mejor_pbch_eq  # Para usarlo luego en métricas (Fase 4)
+                            
+                            if antenas_detectadas > 0:
+                                # ¡Match de CRC exitoso!
+                                bits_24 = decoded_bits[:24]
+                                mib_bits = "".join(map(str, bits_24))
+                                
+                                bw_val = (bits_24[0]<<2) | (bits_24[1]<<1) | bits_24[2]
+                                bw_map = {0: '1.4 MHz', 1: '3 MHz', 2: '5 MHz', 3: '10 MHz', 4: '15 MHz', 5: '20 MHz'}
+                                dl_bw = bw_map.get(bw_val, f"Desconocido ({bw_val})")
+                                
+                                phich_dur = "Normal" if bits_24[3] == 0 else "Extendido"
+                                
+                                phich_res_val = (bits_24[4]<<1) | bits_24[5]
+                                res_map = {0: '1/6', 1: '1/2', 2: '1', 3: '2'}
+                                phich_res = res_map.get(phich_res_val, str(phich_res_val))
+                                
+                                sfn_val = 0
+                                for i in range(8):
+                                    sfn_val = (sfn_val << 1) | bits_24[6+i]
+                                
+                                self.ultimo_lte_metrics['pbch_mib'] = mib_bits
+                                self.ultimo_lte_metrics['pbch_antenas'] = antenas_detectadas
+                                self.ultimo_lte_metrics['pbch_ok'] = True
+                                self.ultimo_lte_metrics['mib_bw'] = dl_bw
+                                self.ultimo_lte_metrics['mib_phich_dur'] = phich_dur
+                                self.ultimo_lte_metrics['mib_phich_res'] = phich_res
+                                self.ultimo_lte_metrics['mib_sfn'] = sfn_val
+                                    
+                                fase_encontrada = True
+                            
                             if not fase_encontrada:
                                 self.ultimo_lte_metrics['pbch_ok'] = False
                         else:
@@ -659,37 +703,43 @@ class DemoduladorLTE(DemoduladorBase):
                     mitad_bw = num_rb * 6  # Mitad del ancho de banda en subportadoras
                     idx_portadoras = list(range(centro - mitad_bw, centro)) + list(range(centro + 1, centro + mitad_bw + 1))
                     
-                    regs = []
                     regs_k = []
-                    current_reg = []
                     current_reg_k = []
                     for i, sc in enumerate(idx_portadoras):
                         if (i % 3) != v_mod3:
-                            current_reg.append(sym0[sc])
                             current_reg_k.append(sc)
-                            if len(current_reg) == 4:
-                                regs.append(current_reg)
+                            if len(current_reg_k) == 4:
                                 regs_k.append(current_reg_k)
-                                current_reg = []
                                 current_reg_k = []
                                 
-                    regs = np.array(regs)
                     regs_k = np.array(regs_k)
-                    n_reg = len(regs)
+                    n_reg = len(regs_k)
                     k_bar_reg = cell_id % n_reg
                     step_reg = n_reg // 4  # floor(N_REG / 4), equivalente a floor(N_RB_DL / 2)
                     reg_indices = [(k_bar_reg + i * step_reg) % n_reg for i in range(4)]
-                    pcfich_syms = np.concatenate([regs[idx] for idx in reg_indices])
                     
-                    self.ultimo_pcfich_k_indices = set(np.concatenate([regs_k[idx] for idx in reg_indices]))
+                    pcfich_k_flat = np.concatenate([regs_k[idx] for idx in reg_indices])
+                    self.ultimo_pcfich_k_indices = set(pcfich_k_flat)
+                    
+                    if self.ultimo_lte_metrics.get('tx_antennas', 1) == 2:
+                        pcfich_syms = alamouti_combine(subframe_fft_raw[0, pcfich_k_flat], H_est_0[0, pcfich_k_flat], H_est_1[0, pcfich_k_flat], sigma2)
+                        subframe_fft[0, pcfich_k_flat] = pcfich_syms
+                    else:
+                        pcfich_syms = subframe_fft[0, pcfich_k_flat]
                     
                     # --- EXTRACCIÓN APROXIMADA DE PHICH ---
                     regs_disponibles = [r for r in range(n_reg) if r not in reg_indices]
                     if len(regs_disponibles) >= 3:
                         step_phich = len(regs_disponibles) // 3
                         phich_reg_indices = [regs_disponibles[(cell_id + i * step_phich) % len(regs_disponibles)] for i in range(3)]
-                        phich_syms = np.concatenate([regs[idx] for idx in phich_reg_indices])
-                        self.ultimo_phich_k_indices = set(np.concatenate([regs_k[idx] for idx in phich_reg_indices]))
+                        phich_k_flat = np.concatenate([regs_k[idx] for idx in phich_reg_indices])
+                        self.ultimo_phich_k_indices = set(phich_k_flat)
+                        
+                        if self.ultimo_lte_metrics.get('tx_antennas', 1) == 2:
+                            phich_syms = alamouti_combine(subframe_fft_raw[0, phich_k_flat], H_est_0[0, phich_k_flat], H_est_1[0, phich_k_flat], sigma2)
+                            subframe_fft[0, phich_k_flat] = phich_syms
+                        else:
+                            phich_syms = subframe_fft[0, phich_k_flat]
                     else:
                         phich_syms = np.array([])
                         self.ultimo_phich_k_indices = set()
@@ -702,6 +752,45 @@ class DemoduladorLTE(DemoduladorBase):
                     
                 else:
                     self.ultimo_lte_metrics['trama_valida'] = False
+                    
+            if self.ultimo_lte_metrics.get('tx_antennas', 1) == 2 and subframe_fft is not None and self.ultimo_lte_metrics.get('trama_valida', True):
+                # Arreglar la constelación de PBCH (que ya fue decodificada) reinyectándola para la UI
+                if not pss_en_segunda_mitad and 'pbch_qpsk' in locals():
+                    k_local_idx = 0
+                    for l_slot in range(4):
+                        sym_idx = 7 + l_slot
+                        for k_idx, sc_abs in enumerate(idx_pbch):
+                            k_local = k_idx + 54
+                            is_crs = False
+                            if l_slot == 0 and ((k_local - (0 + v_shift)) % 6 == 0 or (k_local - (3 + v_shift)) % 6 == 0): is_crs = True
+                            if l_slot == 1 and ((k_local - (0 + v_shift)) % 6 == 0 or (k_local - (3 + v_shift)) % 6 == 0): is_crs = True
+                            
+                            if not is_crs:
+                                idx_1d = l_slot * 60 + k_local_idx
+                                if idx_1d < len(pbch_qpsk):
+                                    subframe_fft[sym_idx, sc_abs] = pbch_qpsk[idx_1d]
+                                k_local_idx += 1
+                                
+                # APLICACIÓN DE SFBC AL PDCCH
+                for sym_idx in range(cfi_val):
+                    pdcch_k_abs = []
+                    for k_local, k_abs in enumerate(idx_portadoras):
+                        is_crs = sym_idx in [0, 4] and ((k_local % 6) == v_shift or (k_local % 6) == (v_shift + 3) % 6)
+                        is_pcfich = (sym_idx == 0) and (k_abs in pcfich_k_flat)
+                        is_phich = (sym_idx == 0) and (k_abs in phich_k_flat)
+                        
+                        if not (is_crs or is_pcfich or is_phich):
+                            pdcch_k_abs.append(k_abs)
+                            
+                    pdcch_k_abs = np.array(pdcch_k_abs)
+                    if len(pdcch_k_abs) > 0 and len(pdcch_k_abs) % 2 == 0:
+                        pdcch_syms = alamouti_combine(
+                            subframe_fft_raw[sym_idx, pdcch_k_abs], 
+                            H_est_0[sym_idx, pdcch_k_abs], 
+                            H_est_1[sym_idx, pdcch_k_abs], 
+                            sigma2
+                        )
+                        subframe_fft[sym_idx, pdcch_k_abs] = pdcch_syms
             
             # --- FASE 4: Constelación y Métricas para UI ---
             evm_data = None
