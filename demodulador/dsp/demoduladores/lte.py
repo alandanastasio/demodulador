@@ -177,25 +177,27 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
         # Estimación LS: H = Rx / Ref
         H_pilots = rx_pilots / ref_pilots
         
-        # Asignación nearest-neighbor: cada subportadora usa el piloto más cercano.
+        # Interpolación lineal en frecuencia
+        # H_pilots son valores complejos. Interpolamos parte real e imaginaria independientemente.
         pilot_positions = pilot_local
         all_positions = np.arange(num_sc)
         
-        # Para cada subportadora, encontrar el piloto más cercano
-        nearest_idx = np.argmin(np.abs(all_positions[:, None] - pilot_positions[None, :]), axis=1)
-        H_interp = H_pilots[nearest_idx]
+        H_real = np.interp(all_positions, pilot_positions, H_pilots.real)
+        H_imag = np.interp(all_positions, pilot_positions, H_pilots.imag)
+        H_interp = H_real + 1j * H_imag
         
         H_est[sym_global, idx_portadoras] = H_interp
     
-    # Interpolar H entre los 4 símbolos CRS para los símbolos intermedios.
-    # Usamos nearest-neighbor también en el dominio temporal para evitar cancelaciones.
+    # Interpolación lineal en el tiempo para los símbolos intermedios
     sym_pos = np.array(sym_indices)
     all_sym = np.arange(14)
     
     for sc in idx_portadoras:
         h_values = H_est[sym_indices, sc]
-        nearest_idx = np.argmin(np.abs(all_sym[:, None] - sym_pos[None, :]), axis=1)
-        H_est[:, sc] = h_values[nearest_idx]
+        # np.interp por defecto hace 'flat extrapolation' en los extremos, lo cual es ideal para sym 12, 13
+        h_real = np.interp(all_sym, sym_pos, h_values.real)
+        h_imag = np.interp(all_sym, sym_pos, h_values.imag)
+        H_est[:, sc] = h_real + 1j * h_imag
     
     # Ecualización ZF vectorizada: Y_eq = Y / H_est
     subframe_eq = subframe_fft.copy()
