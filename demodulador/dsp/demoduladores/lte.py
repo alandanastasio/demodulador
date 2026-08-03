@@ -772,10 +772,14 @@ class DemoduladorLTE(DemoduladorBase):
                                 k_local_idx += 1
                                 
                 # APLICACIÓN DE SFBC AL PDCCH
+                tx_antennas = self.ultimo_lte_metrics.get('tx_antennas', 1)
                 for sym_idx in range(cfi_val):
                     pdcch_k_abs = []
                     for k_local, k_abs in enumerate(idx_portadoras):
-                        is_crs = sym_idx in [0, 4] and ((k_local % 6) == v_shift or (k_local % 6) == (v_shift + 3) % 6)
+                        is_crs_port0 = sym_idx in [0, 4] and (k_local % 6) == v_shift
+                        is_crs_port1 = sym_idx in [0, 4] and (k_local % 6) == (v_shift + 3) % 6
+                        is_crs = is_crs_port0 or (tx_antennas > 1 and is_crs_port1)
+                        
                         is_pcfich = (sym_idx == 0) and (k_abs in pcfich_k_flat)
                         is_phich = (sym_idx == 0) and (k_abs in phich_k_flat)
                         
@@ -849,15 +853,18 @@ class DemoduladorLTE(DemoduladorBase):
                 phich_pts = []
                 pdsch_pts = []
                 
+                tx_antennas = self.ultimo_lte_metrics.get('tx_antennas', 1)
+                
                 for sym_idx in range(14):
                     for k in range(num_sc):
                         pt = constelacion[sym_idx, k]
                         if np.isnan(pt): continue
                         
-                        # Detectar C-RS (Puerto 0 y 1 en sym 0,4,7,11)
-                        is_crs = sym_idx in [0, 4, 7, 11] and ((k % 6) == v_shift or (k % 6) == (v_shift + 3) % 6)
-                            
-                        if is_crs:
+                        # Detectar C-RS
+                        is_crs_port0 = sym_idx in [0, 4, 7, 11] and (k % 6) == v_shift
+                        is_crs_port1 = sym_idx in [0, 4, 7, 11] and (k % 6) == (v_shift + 3) % 6
+                        
+                        if is_crs_port0 or (tx_antennas > 1 and is_crs_port1):
                             crs_pts.append(pt)
                             continue
                             
