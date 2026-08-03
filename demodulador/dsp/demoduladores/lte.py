@@ -730,8 +730,6 @@ class DemoduladorLTE(DemoduladorBase):
                 idx_sync = np.array(list(range(mitad_sc - 31, mitad_sc)) + list(range(mitad_sc, mitad_sc + 31)))
                 pss_pts = constelacion[6, idx_sync].copy()
                 sss_pts = constelacion[5, idx_sync].copy()
-                constelacion[6, idx_sync] = np.nan + 1j*np.nan
-                constelacion[5, idx_sync] = np.nan + 1j*np.nan
                 
                 # El subframe ya fue ecualizado usando CRS en la FASE 5
                 # por lo que no es necesario volver a normalizar la amplitud.
@@ -870,12 +868,16 @@ class DemoduladorLTE(DemoduladorBase):
                     idx_min = np.argmin(distancias, axis=1)
                     errores = sym_pts - qpsk_ref[idx_min]
                     
-                    # Ignoramos los NaNs para no arruinar el EVM de los símbolos 5 y 6
-                    evm_por_sym[s] = np.sqrt(np.nanmean(np.abs(errores)**2))
+                    # Excluir PSS/SSS del cálculo de EVM general QPSK
+                    if s in (5, 6):
+                        errores[idx_sync] = 0
+                        valid_sc = num_sc - len(idx_sync)
+                    else:
+                        valid_sc = num_sc
+                        
+                    evm_por_sym[s] = np.sqrt(np.sum(np.abs(errores)**2) / valid_sc) if valid_sc > 0 else 0
                     
-                    # Acumulamos el error por subportadora, considerando que para PSS/SSS esas subportadoras no suman error
                     err_subc = np.abs(errores)**2
-                    err_subc[np.isnan(err_subc)] = 0
                     evm_por_subc += err_subc
                 
                 # Símbolo 5 y 6 tienen 62 subportadoras menos, así que el promedio debe tener en cuenta que dividimos por 13 en esas subportadoras
