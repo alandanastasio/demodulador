@@ -912,40 +912,67 @@ class DemoduladorLTE(DemoduladorBase):
                 self.ultimo_sss_pts = sss_pts
                 
                 def calc_evm_power(pts, ref_type='qpsk'):
-                    if len(pts) == 0: return "---", "---"
-                    power = 10 * np.log10(np.mean(np.abs(pts)**2) + 1e-12)
-                    if ref_type == 'qpsk':
-                        ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
-                        dist = np.abs(pts[:, None] - ref[None, :])
-                        idx = np.argmin(dist, axis=1)
-                        err = pts - ref[idx]
-                        evm = np.sqrt(np.mean(np.abs(err)**2)) * 100
-                    elif ref_type == 'bpsk':
-                        ref = np.array([1, -1])
-                        dist = np.abs(pts[:, None] - ref[None, :])
-                        idx = np.argmin(dist, axis=1)
-                        err = pts - ref[idx]
-                        evm = np.sqrt(np.mean(np.abs(err)**2)) * 100
-                    else: # zchu
+                    if len(pts) == 0: return 0.0, 0.0
+                    rms = np.sqrt(np.mean(np.abs(pts)**2) + 1e-12)
+                    power = 10 * np.log10(rms**2)
+                    
+                    if ref_type == 'zchu':
                         err = np.abs(pts) - 1.0
                         evm = np.sqrt(np.mean(err**2)) * 100
+                        return evm, power
+                        
+                    pts_norm = pts / rms
+                    
+                    if ref_type == 'qpsk':
+                        ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
+                    elif ref_type == 'bpsk':
+                        ref = np.array([1, -1])
+                    elif ref_type == '16qam':
+                        a = np.array([-3, -1, 1, 3])
+                        ref = np.array([x + 1j*y for x in a for y in a]) / np.sqrt(10)
+                    elif ref_type == '64qam':
+                        a = np.array([-7, -5, -3, -1, 1, 3, 5, 7])
+                        ref = np.array([x + 1j*y for x in a for y in a]) / np.sqrt(42)
+                    elif ref_type == '256qam':
+                        a = np.array([-15, -13, -11, -9, -7, -5, -3, -1, 1, 3, 5, 7, 9, 11, 13, 15])
+                        ref = np.array([x + 1j*y for x in a for y in a]) / np.sqrt(170)
+                    
+                    dist = np.abs(pts_norm[:, None] - ref[None, :])
+                    idx = np.argmin(dist, axis=1)
+                    err = pts_norm - ref[idx]
+                    evm = np.sqrt(np.mean(np.abs(err)**2)) * 100
+                    return evm, power
+                    
+                def format_evm(evm, power):
+                    if evm == 0.0 and power == 0.0: return "---", "---"
                     return f"{evm:.2f}", f"{power:.2f}"
                 
                 # frame_summary guardará: { "Canal": (EVM_str, Power_str, NumRB_str) }
                 fs_dict = {}
-                fs_dict["P-SS"] = (*calc_evm_power(pss_pts, 'zchu'), "6")
-                fs_dict["S-SS"] = (*calc_evm_power(sss_pts, 'bpsk'), "6")
-                fs_dict["PBCH"] = (*calc_evm_power(pbch_pts, 'qpsk'), "6")
-                fs_dict["C-RS"] = (*calc_evm_power(crs_pts, 'qpsk'), str(num_sc//12)) # C-RS se transmite en todo el ancho de banda
+                fs_dict["P-SS"] = (*format_evm(*calc_evm_power(pss_pts, 'zchu')), "6")
+                fs_dict["S-SS"] = (*format_evm(*calc_evm_power(sss_pts, 'bpsk')), "6")
+                fs_dict["PBCH"] = (*format_evm(*calc_evm_power(pbch_pts, 'qpsk')), "6")
+                fs_dict["C-RS"] = (*format_evm(*calc_evm_power(crs_pts, 'qpsk')), str(num_sc//12))
+                fs_dict["PCFICH"] = (*format_evm(*calc_evm_power(pcfich_pts, 'qpsk')), "4")
+                fs_dict["PHICH"] = (*format_evm(*calc_evm_power(phich_pts, 'bpsk')), "3")
+                fs_dict["PDCCH"] = (*format_evm(*calc_evm_power(pdcch_pts, 'qpsk')), str(len(pdcch_pts)//12))
                 
-                fs_dict["PCFICH"] = (*calc_evm_power(pcfich_pts, 'qpsk'), "4") # 4 REGs de 4 REs = 16 REs
-                    
-                fs_dict["PHICH"] = (*calc_evm_power(phich_pts, 'bpsk'), "3") # 3 REGs aprox
-                    
-                fs_dict["PDCCH"] = (*calc_evm_power(pdcch_pts, 'qpsk'), str(len(pdcch_pts)//12)) # Num RBs aprox
+                # Detección Ciega de Modulación para PDSCH
+                modulaciones = ['qpsk', '16qam', '64qam', '256qam']
+                mejor_mod = 'qpsk'
+                mejor_evm = 999.0
+                mejor_pow = 0.0
                 
-                # Para el PDSCH, por ahora asumimos que todo es QPSK para hacer la medición ciega
-                fs_dict["PDSCH_QPSK"] = (*calc_evm_power(pdsch_pts, 'qpsk'), str(len(pdsch_pts)//12//11)) # aprox RBs
+                if len(pdsch_pts) > 0:
+                    for mod in modulaciones:
+                        evm_val, pow_val = calc_evm_power(pdsch_pts, mod)
+                        if evm_val < mejor_evm:
+                            mejor_evm = evm_val
+                            mejor_pow = pow_val
+                            mejor_mod = mod
+                
+                fs_dict[f"PDSCH_{mejor_mod.upper()}"] = (*format_evm(mejor_evm, mejor_pow), str(len(pdsch_pts)//12//11))
+                self.ultimo_lte_metrics['pdsch_modulation'] = mejor_mod
                 
                 self.ultimo_lte_metrics['frame_summary'] = fs_dict
 
