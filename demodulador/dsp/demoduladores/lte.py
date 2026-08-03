@@ -2,6 +2,7 @@ import numpy as np
 import threading
 import time
 from .base import DemoduladorBase
+from scipy import signal
 
 def generar_pss_time(fft_size: int):
     # Genera las 3 secuencias PSS en el dominio del tiempo (Zadoff-Chu)
@@ -474,13 +475,11 @@ class DemoduladorLTE(DemoduladorBase):
             mejor_pos = -1
             mejor_corr_abs = None
             
-            bloque_fft = np.fft.fft(chunk_procesar)
             for n_id_2, pss_t in enumerate(self.pss_time):
-                pss_pad = np.zeros(N_iq, dtype=complex)
-                pss_pad[:fs] = pss_t
-                pss_fft = np.fft.fft(pss_pad)
-                
-                corr = np.fft.ifft(bloque_fft * np.conj(pss_fft))
+                # Correlación lineal rápida usando superposición-suma (overlap-add/save)
+                # Esto soluciona los bugs de "wrap-around" cíclico que daba np.fft en el código anterior.
+                # 'valid' asegura que sólo calculamos posiciones donde la secuencia pss_t entra completa.
+                corr = signal.correlate(chunk_procesar, pss_t, mode='valid', method='fft')
                 corr_abs = np.abs(corr)
                 
                 max_val = np.max(corr_abs)
