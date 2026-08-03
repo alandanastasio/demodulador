@@ -809,7 +809,9 @@ class DemoduladorLTE(DemoduladorBase):
             else:
                 rf_chunk_ui = np.abs(chunk_procesar)
             
-            if subframe_fft is not None:
+            trama_valida = self.ultimo_lte_metrics.get('trama_valida', False)
+            
+            if subframe_fft is not None and trama_valida:
                 # Mapeo exacto de tamaño de FFT a cantidad de subportadoras de datos (excluyendo márgenes y DC)
                 fs_to_sc = {128: 72, 256: 180, 512: 300, 1024: 600, 1536: 900, 2048: 1200}
                 num_sc = fs_to_sc.get(fs, int((fs / 2048) * 1200))
@@ -1022,8 +1024,19 @@ class DemoduladorLTE(DemoduladorBase):
                     'sym_peak': evm_sym_db + 3
                 }
                 
+                self.ultimo_evm_data = evm_data
+                self.ultimo_pbch_pts = pbch_pts
+                self.ultimo_crs_pts = crs_pts
+                self.ultimo_pcfich_pts = pcfich_pts
+                self.ultimo_phich_pts = phich_pts
+                self.ultimo_pdcch_pts = pdcch_pts
+                
+            else:
+                puntos_corr = getattr(self, 'ultimo_puntos_corr', np.array([]))
+                evm_data = getattr(self, 'ultimo_evm_data', None)
+                
             self.ultimo_puntos_corr = puntos_corr
-
+            
             # Generamos espectro visual para UI usando la resolución de la FFT del canal
             ui_fs = fs
             # Aseguramos tener suficientes muestras
@@ -1049,13 +1062,13 @@ class DemoduladorLTE(DemoduladorBase):
                 'f_axis_mpx': np.array([]),
                 'metricas': {
                     'lte_metrics': self.ultimo_lte_metrics,
-                    'pss_pts': self.ultimo_pss_pts if hasattr(self, 'ultimo_pss_pts') else np.array([]),
-                    'sss_pts': self.ultimo_sss_pts if hasattr(self, 'ultimo_sss_pts') else np.array([]),
-                    'pdcch_pts': pdcch_pts if 'pdcch_pts' in locals() else np.array([]),
-                    'pcfich_pts': pcfich_pts if 'pcfich_pts' in locals() else np.array([]),
-                    'phich_pts': phich_pts if 'phich_pts' in locals() else np.array([]),
-                    'pbch_pts': pbch_pts if 'pbch_pts' in locals() else np.array([]),
-                    'crs_pts': crs_pts if 'crs_pts' in locals() else np.array([])
+                    'pss_pts': getattr(self, 'ultimo_pss_pts', np.array([])),
+                    'sss_pts': getattr(self, 'ultimo_sss_pts', np.array([])),
+                    'pdcch_pts': getattr(self, 'ultimo_pdcch_pts', np.array([])),
+                    'pcfich_pts': getattr(self, 'ultimo_pcfich_pts', np.array([])),
+                    'phich_pts': getattr(self, 'ultimo_phich_pts', np.array([])),
+                    'pbch_pts': getattr(self, 'ultimo_pbch_pts', np.array([])),
+                    'crs_pts': getattr(self, 'ultimo_crs_pts', np.array([]))
                 },
                 'evm_data': evm_data
             }
