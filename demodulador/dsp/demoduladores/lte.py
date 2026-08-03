@@ -199,10 +199,24 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
         h_imag = np.interp(all_sym, sym_pos, h_values.imag)
         H_est[:, sc] = h_real + 1j * h_imag
     
-    # Ecualización ZF vectorizada: Y_eq = Y / H_est
+    # Ecualización MMSE vectorizada: Y_eq = Y * H* / (|H|^2 + sigma2)
     subframe_eq = subframe_fft.copy()
-    mask = np.abs(H_est[:, idx_portadoras]) > 1e-10
-    subframe_eq[:, idx_portadoras] = np.where(mask, subframe_fft[:, idx_portadoras] / H_est[:, idx_portadoras], subframe_fft[:, idx_portadoras])
+    
+    # Estimación de la varianza del ruido usando las bandas de guarda
+    margen_guarda = 20
+    idx_ruido = np.concatenate((np.arange(0, max(0, centro - mitad_sc - margen_guarda)), 
+                                np.arange(min(fft_size, centro + mitad_sc + 1 + margen_guarda), fft_size)))
+    
+    if len(idx_ruido) > 0:
+        sigma2 = np.var(subframe_fft[:, idx_ruido])
+    else:
+        sigma2 = 0.05  # Valor fallback empírico si no hay banda de guarda
+        
+    Y = subframe_fft[:, idx_portadoras]
+    H = H_est[:, idx_portadoras]
+    
+    Y_eq = (Y * np.conj(H)) / (np.abs(H)**2 + sigma2)
+    subframe_eq[:, idx_portadoras] = Y_eq
     
     return subframe_eq
 
