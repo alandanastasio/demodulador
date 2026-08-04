@@ -977,51 +977,16 @@ class DemoduladorLTE(DemoduladorBase):
                 
                 self.ultimo_lte_metrics['frame_summary'] = fs_dict
 
-                
-                # --- EVM real por símbolo y por subportadora ---
-                # Detectamos el punto ideal más cercano de la constelación QPSK
-                qpsk_ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
-                
-                evm_por_sym = np.zeros(14)
-                evm_por_subc = np.zeros(num_sc)
-                
-                for s in range(14):
-                    sym_pts = constelacion[s, :]
-                    # Para cada punto, encontrar el punto QPSK más cercano
-                    distancias = np.abs(sym_pts[:, None] - qpsk_ref[None, :])  # (num_sc, 4)
-                    idx_min = np.argmin(distancias, axis=1)
-                    errores = sym_pts - qpsk_ref[idx_min]
-                    
-                    # Excluir PSS/SSS del cálculo de EVM general QPSK
-                    if s in (5, 6):
-                        errores[idx_sync] = 0
-                        valid_sc = num_sc - len(idx_sync)
-                    else:
-                        valid_sc = num_sc
-                        
-                    evm_por_sym[s] = np.sqrt(np.sum(np.abs(errores)**2) / valid_sc) if valid_sc > 0 else 0
-                    
-                    err_subc = np.abs(errores)**2
-                    evm_por_subc += err_subc
-                
-                # Símbolo 5 y 6 tienen 62 subportadoras menos, así que el promedio debe tener en cuenta que dividimos por 13 en esas subportadoras
-                cuentas = np.full(num_sc, 14.0)
-                cuentas[idx_sync] = 12.0
-                evm_por_subc = np.sqrt(evm_por_subc / cuentas)
-                
-                # Convertir a dB
-                evm_sym_db = 20 * np.log10(np.maximum(evm_por_sym, 1e-10))
-                evm_subc_db = 20 * np.log10(np.maximum(evm_por_subc, 1e-10))
-                
-                eje_x_subc = np.concatenate((np.arange(-mitad_sc, 0), np.arange(1, mitad_sc + 1)))
-                
+                # --- EVM real por símbolo y por portadora ---
+                # Borrado a pedido del usuario (cálculos heredados de Wi-Fi no aplicables directamente a LTE)
                 evm_data = {
-                    'subc_x': eje_x_subc,
-                    'subc_rms': evm_subc_db,
-                    'subc_peak': evm_subc_db + 2,
-                    'sym_rms': evm_sym_db,
-                    'sym_peak': evm_sym_db + 3
+                    'subc_x': [],
+                    'subc_rms': [],
+                    'subc_peak': [],
+                    'sym_rms': [],
+                    'sym_peak': []
                 }
+
                 
                 self.ultimo_evm_data = evm_data
                 self.ultimo_pbch_pts = pbch_pts
