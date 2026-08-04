@@ -122,6 +122,26 @@ def generar_crs(cell_id, ns, l, num_rb):
     return r_l
 
 @jit(nopython=True)
+def smooth_complex_array(arr, window_size):
+    n = len(arr)
+    out = np.zeros_like(arr)
+    hw = window_size // 2
+    for i in range(n):
+        start = max(0, i - hw)
+        end = min(n, i + hw + 1)
+        # np.mean is not directly supported for complex arrays with axis in some numba versions,
+        # but a simple manual sum works, or separating real/imag.
+        s_real = 0.0
+        s_imag = 0.0
+        count = 0
+        for j in range(start, end):
+            s_real += arr[j].real
+            s_imag += arr[j].imag
+            count += 1
+        out[i] = (s_real / count) + 1j * (s_imag / count)
+    return out
+
+@jit(nopython=True)
 def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
     """Estima el canal usando los pilotos CRS y ecualiza todos los símbolos del subframe."""
     centro = fft_size // 2
@@ -166,9 +186,12 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
             
             H_pilots = rx_pilots / ref_pilots
             
+            # Suavizar la estimación del canal (Moving Average)
+            H_pilots_smooth = smooth_complex_array(H_pilots, 5)
+            
             all_positions = np.arange(num_sc)
-            H_real = np.interp(all_positions, pilot_local, H_pilots.real)
-            H_imag = np.interp(all_positions, pilot_local, H_pilots.imag)
+            H_real = np.interp(all_positions, pilot_local, H_pilots_smooth.real)
+            H_imag = np.interp(all_positions, pilot_local, H_pilots_smooth.imag)
             H_interp = H_real + 1j * H_imag
             
             H_est[sym_global, idx_portadoras] = H_interp
@@ -870,9 +893,15 @@ class DemoduladorLTE(DemoduladorBase):
                         pt = constelacion[sym_idx, k]
                         if np.isnan(pt): continue
                         
-                        # Detectar C-RS
-                        is_crs_port0 = sym_idx in [0, 4, 7, 11] and (k % 6) == v_shift
-                        is_crs_port1 = sym_idx in [0, 4, 7, 11] and (k % 6) == (v_shift + 3) % 6
+                        # Detectar C-RS (Puerto 0 y Puerto 1)
+                        is_crs_port0 = False
+                        is_crs_port1 = False
+                        if sym_idx in [0, 7]:
+                            is_crs_port0 = (k % 6) == v_shift
+                            is_crs_port1 = (k % 6) == (v_shift + 3) % 6
+                        elif sym_idx in [4, 11]:
+                            is_crs_port0 = (k % 6) == (v_shift + 3) % 6
+                            is_crs_port1 = (k % 6) == v_shift
                         
                         if is_crs_port0 or (tx_antennas > 1 and is_crs_port1):
                             crs_pts.append(pt)
@@ -922,7 +951,7 @@ class DemoduladorLTE(DemoduladorBase):
                 self.ultimo_sss_pts = sss_pts
                 
                 def calc_evm_power(pts, ref_type='qpsk'):
-                    if len(pts) == 0: return 0.0, 0.0
+                    if len(pts) == 0: return None, None
                     rms = np.sqrt(np.mean(np.abs(pts)**2) + 1e-12)
                     power = 10 * np.log10(rms**2)
                     
@@ -954,7 +983,7 @@ class DemoduladorLTE(DemoduladorBase):
                     return evm, power
                     
                 def format_evm(evm, power):
-                    if evm == 0.0 and power == 0.0: return "---", "---"
+                    if evm is None: return "---", "---"
                     return f"{evm:.2f}", f"{power:.2f}"
                 
                 # frame_summary guardará: { "Canal": (EVM_str, Power_str, NumRB_str) }
