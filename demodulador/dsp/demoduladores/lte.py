@@ -494,10 +494,15 @@ class DemoduladorLTE(DemoduladorBase):
             mejor_pos = -1
             mejor_corr_abs = None
             
-            for n_id_2, pss_t in enumerate(self.pss_time):
-                # Correlación lineal rápida usando superposición-suma (overlap-add/save)
-                # Esto soluciona los bugs de "wrap-around" cíclico que daba np.fft en el código anterior.
-                # 'valid' asegura que sólo calculamos posiciones donde la secuencia pss_t entra completa.
+            # MODO TRACKING: Si antes estábamos enganchados, solo buscamos ese N_id_2
+            n_id_2_a_buscar = [0, 1, 2]
+            estaba_enganchado = self.ultimo_lte_metrics.get('trama_valida', False) and self.ultimo_lte_metrics.get('pss_found', False)
+            if estaba_enganchado:
+                n_id_2_a_buscar = [self.ultimo_lte_metrics.get('N_id_2', 0)]
+                
+            for n_id_2 in n_id_2_a_buscar:
+                pss_t = self.pss_time[n_id_2]
+                
                 corr = signal.correlate(chunk_procesar, pss_t, mode='valid', method='fft')
                 corr_abs = np.abs(corr)
                 
@@ -509,6 +514,7 @@ class DemoduladorLTE(DemoduladorBase):
                     mejor_corr_abs = corr_abs
                     
             # Validamos el pico de correlación contra el ruido de fondo (aprox 4x o 5x superior)
+            # En la señal completa, la ganancia de procesamiento es inmensa (2048). Un umbral de 4.0 es roca sólida.
             es_pico_valido = mejor_corr_abs is not None and mejor_corr > (4.0 * np.mean(mejor_corr_abs))
             
             if es_pico_valido:
