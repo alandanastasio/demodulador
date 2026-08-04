@@ -22,6 +22,7 @@ from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
+from dsp.demoduladores.lte import DemoduladorLTE
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -124,6 +125,11 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_wbfm.addWidget(self.freq_plot, 0, 0)
         self.layout_wbfm.setRowStretch(0, 1)
         self.layout_wbfm.setRowStretch(1, 1)
@@ -152,21 +158,26 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.show()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
-
-        self.radio.set_muestras_por_bloque(32768)
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
-            
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
         self.sr_combo.blockSignals(True)
-        if self.sr_combo.findText("2.4 MHz (Decimado a 300k)") == -1:
-            self.sr_combo.addItem("2.4 MHz (Decimado a 300k)")
-        self.sr_combo.setCurrentText("2.4 MHz (Decimado a 300k)")
+        if self.sr_combo.findText("3.0 MHz (Decimado a 300k)") == -1:
+            self.sr_combo.addItem("3.0 MHz (Decimado a 300k)")
+        self.sr_combo.setCurrentText("3.0 MHz (Decimado a 300k)")
         self.sr_combo.setEnabled(False) 
         self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
 
         state['demod_mode'] = 'wbfm'
-        state['sample_rate'] = 2.4e6 
+        state['sample_rate'] = 3.0e6 
         
+        self.freq_plot.show()
         self.demodulador_actual = DemoduladorWBFM()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
@@ -175,6 +186,11 @@ class MainWindow(QMainWindow):
         self._restore_panels()
 
     def set_wifi_ag_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_wifi.addWidget(self.freq_plot, 0, 0)
         self.layout_wifi.setRowStretch(0, 1)
         self.layout_wifi.setRowStretch(1, 1)
@@ -204,6 +220,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.show()
         self.wifi_hw_metrics_label.show()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
 
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
@@ -231,6 +249,108 @@ class MainWindow(QMainWindow):
             self.sr_combo.setCurrentText("20.0 MHz")
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+        self.freq_plot.show()
+        self._restore_panels()
+
+    def set_lte_mode(self, bw_mhz=5):
+        # Mapeo de ancho de banda LTE a frecuencia de muestreo y FFT
+        bw_to_config = {
+            1.4: (1.92e6, 128),
+            3:   (3.84e6, 256),
+            5:   (7.68e6, 512),
+            10:  (15.36e6, 1024),
+            15:  (23.04e6, 1536),
+            20:  (30.72e6, 2048),
+        }
+        sample_rate, fft_size = bw_to_config.get(bw_mhz, (7.68e6, 512))
+        
+        # Insertamos el espectro en el stack del cuadrante 1 (reemplazando el widget temporal si existe)
+        current_w = self.lte_q1_stack.widget(0)
+        if current_w != self.freq_plot:
+            self.lte_q1_stack.removeWidget(current_w)
+            self.lte_q1_stack.insertWidget(0, self.freq_plot)
+        
+        # Mantenemos el índice según lo que esté seleccionado en el menú
+        self.lte_q1_stack.setCurrentIndex(0 if self.action_q1_espectro.isChecked() else 1)
+        
+        self.layout_lte.setRowStretch(0, 1)
+        self.layout_lte.setRowStretch(1, 1)
+        self.layout_lte.setRowStretch(2, 1)
+        self.layout_lte.setColumnStretch(0, 1)
+        self.layout_lte.setColumnStretch(1, 1)
+        if hasattr(self, 'waterfall_checkbox'): 
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
+        if hasattr(self, 'zero_span_btn'): 
+            self.zero_span_btn.setChecked(False)
+            state['zero_span'] = False
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        
+        self.trace_manager.reset()
+        
+        self.modes_stack.setCurrentIndex(3) # PÁGINA LTE
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
+        self.lte_metrics_label.show()
+
+        # Guardamos el state del SA antes de pisar todo
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            self.sa_fft_size_text = self.fft_combo.currentText()
+
+        state['demod_mode'] = 'lte'
+        state['sample_rate'] = sample_rate
+        state['fft_size'] = fft_size
+        
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            muestras = int(sample_rate * 0.002)
+            pot2 = 1
+            while pot2 < muestras: pot2 *= 2
+            self.radio.set_muestras_por_bloque(pot2)
+
+        self.demodulador_actual = DemoduladorLTE()
+        self.demodulador_actual.configurar(sample_rate, fft_size)
+        self.radio.set_sample_rate(sample_rate)
+        
+        self.unit_combo.setCurrentText("GHz")
+        self.freq_input.setValue(2.63)
+
+        # Fijar y deshabilitar los combos de SR y FFT
+        sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")
+        self.sr_combo.blockSignals(True)
+        # Agregar el valor exacto si no existe en la lista
+        if self.sr_combo.findText(sr_text) == -1:
+            self.sr_combo.addItem(sr_text)
+        self.sr_combo.setCurrentText(sr_text)
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        fft_text = str(fft_size)
+        if self.fft_combo.findText(fft_text) == -1:
+            self.fft_combo.addItem(fft_text)
+        self.fft_combo.setCurrentText(fft_text)
+        self.fft_combo.setEnabled(False)
+        self.fft_combo.blockSignals(False)
+        
+        self.update_x_axis()
         self._restore_panels()
 
     def set_wbfm_audio_mode(self):
@@ -244,6 +364,11 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_normal.addWidget(self.freq_plot, 0, 0)
         # En modo normal, la cascada va abajo (si está activa)
         self.layout_normal.addWidget(self.waterfall_widget, 1, 0)
@@ -276,6 +401,8 @@ class MainWindow(QMainWindow):
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
@@ -283,7 +410,7 @@ class MainWindow(QMainWindow):
             self.audio_manager.toggle_audio()
         
         self.sr_combo.blockSignals(True)
-        idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
+        idx = self.sr_combo.findText("3.0 MHz (Decimado a 300k)")
         if idx != -1: self.sr_combo.removeItem(idx)
         
         if hasattr(self, 'sa_sample_rate_text'):
@@ -292,7 +419,16 @@ class MainWindow(QMainWindow):
         self.sr_combo.setEnabled(True) 
         self.sr_combo.blockSignals(False)
         
+        # Restaurar FFT combo si venimos de LTE
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+        
         state['demod_mode'] = 'none'
+        self.freq_plot.show()
         self.demodulador_actual = SpectrumAnalyzer()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.on_sr_changed(self.sr_combo.currentText()) 

@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame
+from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
@@ -10,6 +10,18 @@ def build_ui(self, state):
     self.toolbar = QToolBar("Barra Principal")
     self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
     self.toolbar.setMovable(False)
+
+    # Logo a la izquierda
+    self.logo_label = QLabel()
+    import os
+    from PyQt6.QtGui import QPixmap
+    icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.gris.png")
+    pixmap = QPixmap(icon_path)
+    # Escalarlo a la altura aproximada de los botones (ej: 32px)
+    pixmap = pixmap.scaledToHeight(32, Qt.TransformationMode.SmoothTransformation)
+    self.logo_label.setPixmap(pixmap)
+    self.logo_label.setContentsMargins(10, 0, 10, 0)
+    self.toolbar.addWidget(self.logo_label)
 
     # 1 Rec/Play
     self.rec_play_btn = QToolButton()
@@ -194,8 +206,9 @@ def build_ui(self, state):
     self.wifi_const_widget = pg.PlotWidget(title="Constelación")
     self.wifi_const_widget.setLabel('bottom', 'En Fase (I)')
     self.wifi_const_widget.setLabel('left', 'Cuadratura (Q)')
-    self.wifi_const_widget.setXRange(-1.5, 1.5)
-    self.wifi_const_widget.setYRange(-1, 1)
+    self.wifi_const_widget.setXRange(-1.5, 1.5, padding=0)
+    self.wifi_const_widget.setYRange(-1.5, 1.5, padding=0)
+    self.wifi_const_widget.getViewBox().disableAutoRange()
     self.wifi_const_widget.showGrid(x=False, y=False)
     self.wifi_const_widget.setAspectLocked(True)
     
@@ -253,6 +266,243 @@ def build_ui(self, state):
     
     self.modes_stack.addWidget(self.page_wifi)
 
+    # ==========================================
+    # PÁGINA 3: MODO LTE
+    # ==========================================
+    self.page_lte = QWidget()
+    self.layout_lte = QGridLayout(self.page_lte)
+    self.layout_lte.setContentsMargins(0, 0, 0, 0)
+    
+    self.lte_time_widget = pg.PlotWidget(title="Señal Baseband en el Tiempo (LTE)")
+    self.lte_time_widget.setLabel('bottom', 'Tiempo [us]')
+    self.lte_time_widget.setLabel('left', 'Amplitud')
+    self.lte_time_widget.setXRange(0, 350) 
+    self.lte_time_widget.setYRange(0, 1)
+    self.lte_time_curve = self.lte_time_widget.plot([], pen=pg.mkPen(color="#C3FF00", width=1.5))
+    
+    self.lte_q1_container = QWidget()
+    self.lte_q1_layout = QGridLayout(self.lte_q1_container)
+    self.lte_q1_layout.setContentsMargins(0, 0, 0, 0)
+    
+    self.lte_q1_stack = QStackedWidget()
+    self.lte_q1_layout.addWidget(self.lte_q1_stack, 0, 0)
+    
+    self.btn_lte_q1 = QPushButton("≡", self.lte_q1_container)
+    self.btn_lte_q1.setStyleSheet("QPushButton { background-color: rgba(60, 60, 60, 200); color: white; border-radius: 12px; font-weight: bold; font-size: 18px; border: none; text-align: center; } QPushButton:hover { background-color: rgba(100, 100, 100, 220); } QPushButton::menu-indicator { image: none; }")
+    self.btn_lte_q1.resize(24, 24)
+    self.btn_lte_q1.move(10, 10)
+    self.btn_lte_q1.setToolTip("Elegir gráfico")
+    
+    self.menu_lte_q1 = QMenu(self.btn_lte_q1)
+    self.menu_lte_q1.setStyleSheet("QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
+    
+    self.action_q1_espectro = QAction("Espectro", self.lte_q1_container)
+    self.action_q1_espectro.setCheckable(True)
+    self.action_q1_espectro.setChecked(True)
+    
+    self.action_q1_tiempo = QAction("Señal en el Tiempo", self.lte_q1_container)
+    self.action_q1_tiempo.setCheckable(True)
+    
+    self.q1_group = QActionGroup(self.lte_q1_container)
+    self.q1_group.addAction(self.action_q1_espectro)
+    self.q1_group.addAction(self.action_q1_tiempo)
+    self.q1_group.setExclusive(True)
+    
+    self.menu_lte_q1.addAction(self.action_q1_espectro)
+    self.menu_lte_q1.addAction(self.action_q1_tiempo)
+    self.btn_lte_q1.clicked.connect(lambda: self.menu_lte_q1.exec(self.btn_lte_q1.mapToGlobal(self.btn_lte_q1.rect().bottomLeft())))
+    
+    self.action_q1_espectro.triggered.connect(lambda: self.lte_q1_stack.setCurrentIndex(0))
+    self.action_q1_tiempo.triggered.connect(lambda: self.lte_q1_stack.setCurrentIndex(1))
+    
+    # Añadimos el tiempo al stack en la posición 1. (El espectro se añadirá en main.py en la pos 0)
+    # Rellenamos la pos 0 con un widget vacío temporalmente para mantener los índices
+    self.lte_q1_stack.insertWidget(0, QWidget()) 
+    self.lte_q1_stack.insertWidget(1, self.lte_time_widget)
+    self.lte_q1_stack.setCurrentIndex(0)
+    
+    self.btn_lte_q1.raise_()
+    
+    self.lte_evm_subc_widget = pg.PlotWidget(title="EVM por Subportadora (LTE)")
+    self.lte_evm_subc_widget.setLabel('bottom', 'Subportadora')
+    self.lte_evm_subc_widget.setLabel('left', 'EVM [dB]')
+    self.lte_evm_subc_widget.setXRange(-300, 300)
+    self.lte_evm_subc_widget.setYRange(-40, 0)
+    
+    self.lte_evm_peak_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(100, 100, 255, 100))
+    self.lte_evm_rms_subc = pg.BarGraphItem(x=[], height=[], width=0.8, brush=pg.mkBrush(0, 0, 150, 200))
+    self.lte_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+    self.lte_evm_subc_widget.addItem(self.lte_evm_peak_subc)
+    self.lte_evm_subc_widget.addItem(self.lte_evm_rms_subc)
+    self.lte_evm_subc_widget.addItem(self.lte_evm_limit)
+    
+    self.lte_evm_sym_widget = pg.PlotWidget(title="EVM por Símbolo (LTE)")
+    self.lte_evm_sym_widget.setLabel('bottom', 'Símbolo')
+    self.lte_evm_sym_widget.setLabel('left', 'EVM [dB]')
+    self.lte_evm_sym_widget.setYRange(-40, 0)
+    
+    self.lte_evm_rms_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
+    self.lte_evm_peak_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
+    self.lteb_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
+    self.lte_evm_sym_widget.addItem(self.lte_evm_rms_sym)
+    self.lte_evm_sym_widget.addItem(self.lteb_evm_limit)
+    
+    self.lte_const_widget = pg.PlotWidget(title="Constelación (LTE)")
+    self.lte_const_widget.setLabel('bottom', 'En Fase (I)')
+    self.lte_const_widget.setLabel('left', 'Cuadratura (Q)')
+    self.lte_const_widget.setXRange(-1.5, 1.5, padding=0)
+    self.lte_const_widget.setYRange(-1.5, 1.5, padding=0)
+    self.lte_const_widget.getViewBox().disableAutoRange()
+    self.lte_const_widget.showGrid(x=False, y=False)
+    self.lte_const_widget.setAspectLocked(True)
+    
+    self.lte_const_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FFFF")
+    self.lte_pdcch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FFFF00") # Amarillo
+    self.lte_pss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF6600") # Naranja
+    self.lte_sss_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF00FF") # Magenta
+    self.lte_pbch_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00FF00") # Verde
+    self.lte_crs_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#00AADD") # Celeste oscuro
+    self.lte_pcfich_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#AA00FF") # Violeta
+    self.lte_phich_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=5, symbolPen=None, symbolBrush="#FF3333") # Rojo
+    self.lte_const_signal_curve = self.lte_const_widget.plot([], pen=None, symbol='o', symbolSize=2.5, symbolPen="#FFFFFF")
+    
+    cross_path_lte = QPainterPath()
+    cross_path_lte.moveTo(-0.5, 0); cross_path_lte.lineTo(0.5, 0)
+    cross_path_lte.moveTo(0, -0.5); cross_path_lte.lineTo(0, 0.5)
+    self.lte_const_ideal_curve = self.lte_const_widget.plot([], pen=None, symbol=cross_path_lte, symbolSize=30, symbolPen=pg.mkPen(color="#606060", width=1), symbolBrush=None)
+    self.lte_const_ideal_curve.hide()
+    
+    self.btn_lte_layers = QPushButton("≡", self.lte_const_widget)
+    self.btn_lte_layers.setStyleSheet("QPushButton { background-color: rgba(60, 60, 60, 200); color: white; border-radius: 12px; font-weight: bold; font-size: 18px; border: none; text-align: center; } QPushButton:hover { background-color: rgba(100, 100, 100, 220); } QPushButton::menu-indicator { image: none; }")
+    self.btn_lte_layers.resize(24, 24)
+    self.btn_lte_layers.move(10, 10)
+    self.btn_lte_layers.setToolTip("Ocultar/Mostrar Capas")
+    
+    self.menu_lte_layers = QMenu(self.btn_lte_layers)
+    self.menu_lte_layers.setStyleSheet("QMenu { background-color: #333; color: white; border: 1px solid #555; } QMenu::item:selected { background-color: #555; }")
+    
+    def add_checkable_menu_item(menu, title):
+        chk = QCheckBox(title)
+        chk.setChecked(True)
+        chk.setStyleSheet("QCheckBox { color: white; padding: 4px 8px; font-size: 13px; } QCheckBox::indicator { width: 14px; height: 14px; }")
+        # Ensure the background matches the menu so it looks seamless
+        chk.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(chk)
+        menu.addAction(action)
+        return chk
+        
+    self.action_show_data = add_checkable_menu_item(self.menu_lte_layers, "Datos PDSCH")
+    self.action_show_pdcch = add_checkable_menu_item(self.menu_lte_layers, "Control PDCCH")
+    self.action_show_pss = add_checkable_menu_item(self.menu_lte_layers, "PSS Zadoff-Chu")
+    self.action_show_sss = add_checkable_menu_item(self.menu_lte_layers, "SSS m-seq")
+    self.action_show_pbch = add_checkable_menu_item(self.menu_lte_layers, "PBCH")
+    self.action_show_crs = add_checkable_menu_item(self.menu_lte_layers, "C-RS")
+    self.action_show_pcfich = add_checkable_menu_item(self.menu_lte_layers, "PCFICH")
+    self.action_show_phich = add_checkable_menu_item(self.menu_lte_layers, "PHICH")
+    self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
+    
+    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
+    
+    # Cuadrante (0,1) - Frame Summary Table
+    self.lte_frame_summary = QTableWidget(11, 5)
+    self.lte_frame_summary.setHorizontalHeaderLabels(["Channel", "EVM(%rms)", "Power(dB)", "Mod.Fmt.", "Num.RB"])
+    self.lte_frame_summary.verticalHeader().setVisible(False)
+    self.lte_frame_summary.setShowGrid(False)
+    self.lte_frame_summary.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    self.lte_frame_summary.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+    
+    self.lte_frame_summary.setStyleSheet("""
+        QToolTip {
+            background-color: #1e1e1e;
+            color: #ffffff;
+            border: 1px solid #888888;
+        }
+        QTableWidget {
+            background-color: #000000;
+            color: white;
+            border: none;
+            gridline-color: transparent;
+            font-family: Arial;
+            font-size: 14px;
+        }
+        QHeaderView::section {
+            background-color: #000000;
+            color: #FFFFFF;
+            font-weight: bold;
+            border: none;
+            border-bottom: 1px solid #555555;
+            padding: 6px;
+        }
+        QScrollBar:vertical, QScrollBar:horizontal {
+            border: none;
+            background: #1e1e1e;
+            width: 10px;
+            height: 10px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+            background: #555555;
+            border-radius: 5px;
+        }
+        QTableWidget::item {
+            padding: 3px;
+            margin: 0px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            border: none;
+            background: none;
+        }
+    """)
+    
+    # Configuramos el tamaño de las columnas
+    header = self.lte_frame_summary.horizontalHeader()
+    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    for i in range(1, 5):
+        header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        
+    # Ajustamos la altura de las filas
+    v_header = self.lte_frame_summary.verticalHeader()
+    v_header.setDefaultSectionSize(24)
+    v_header.setMinimumSectionSize(22)
+    
+    # Filas (Channel Name, Color, Mod.Fmt)
+    canales_lte = [
+        ("P-SS", "#FF6600", "Z-Chu", "Primary Synchronization Signal"),
+        ("S-SS", "#4477FF", "BPSK", "Secondary Synchronization Signal"),
+        ("PBCH", "#00FF00", "QPSK", "Physical Broadcast Channel"),
+        ("PCFICH", "#AA00FF", "QPSK", "Physical Control Format Indicator Channel"),
+        ("PHICH", "#FF3333", "BPSK (CDM)", "Physical Hybrid ARQ Indicator Channel"),
+        ("PDCCH", "#FFFF00", "QPSK", "Physical Downlink Control Channel"),
+        ("C-RS", "#00AADD", "QPSK", "Cell-specific Reference Signal"),
+        ("PDSCH_QPSK", "#00FFFF", "QPSK", "Physical Downlink Shared Channel (QPSK)"),
+        ("PDSCH_16QAM", "#FFD500", "16QAM", "Physical Downlink Shared Channel (16QAM)"),
+        ("PDSCH_64QAM", "#AAFF00", "64QAM", "Physical Downlink Shared Channel (64QAM)"),
+        ("Non-alloc", "#AAAAAA", "---", "Unallocated Resource Elements")
+    ]
+    
+    for row, (nombre, color, mod_fmt, desc) in enumerate(canales_lte):
+        item_ch = QTableWidgetItem(nombre)
+        item_ch.setForeground(QColor(color))
+        item_ch.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        item_ch.setToolTip(desc)
+        self.lte_frame_summary.setItem(row, 0, item_ch)
+        
+        for col, default_val in enumerate(["---", "---", mod_fmt, "---"]):
+            item = QTableWidgetItem(default_val)
+            item.setForeground(QColor(color))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.lte_frame_summary.setItem(row, col + 1, item)
+            
+    self.layout_lte.addWidget(self.lte_frame_summary, 0, 1)
+    
+    self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)
+    self.layout_lte.addWidget(self.lte_evm_subc_widget, 1, 0)
+    self.layout_lte.addWidget(self.lte_evm_sym_widget, 2, 0)
+    
+    self.modes_stack.addWidget(self.page_lte)
+
     # --- CONTENEDOR PRINCIPAL ---
     self.plot_container = QWidget()
     self.plot_layout = QVBoxLayout(self.plot_container)
@@ -265,7 +515,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
 
@@ -417,6 +667,26 @@ def build_ui(self, state):
     self.demod_group.addAction(self.action_wifi_ag)
     self.digital_menu.addAction(self.action_wifi_ag)
 
+    self.lte_menu = QMenu("LTE", self)
+    self.lte_menu.setStyleSheet("""
+        QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+        QMenu::item:selected { background-color: #555555; }
+    """)
+    
+    lte_bws = [("1.4 MHz (6 RB)", 1.4), ("3 MHz (15 RB)", 3), ("5 MHz (25 RB)", 5),
+               ("10 MHz (50 RB)", 10), ("15 MHz (75 RB)", 15), ("20 MHz (100 RB)", 20)]
+    
+    self.lte_bw_actions = []
+    for label, bw in lte_bws:
+        action = QAction(label, self)
+        action.setCheckable(True)
+        action.triggered.connect(lambda checked, b=bw: self.set_lte_mode(b))
+        self.demod_group.addAction(action)
+        self.lte_menu.addAction(action)
+        self.lte_bw_actions.append(action)
+    
+    self.digital_menu.addMenu(self.lte_menu)
+
     # Agregamos el submenú Digital al menú principal de Demodulación
     self.demod_menu.addMenu(self.digital_menu)
 
@@ -476,6 +746,9 @@ def build_ui(self, state):
         self.sr_combo.addItems(["2 MHz", "4 MHz", "8 MHz", "10 MHz", "16 MHz", "20 MHz", "32 MHz"])
         # Arrancamos en 2 MHz para evitar el Overflow apenas abre el programa
         self.sr_combo.setCurrentText("2 MHz") 
+    elif "File" in self.radio.nombre:
+        self.sr_combo.addItems(["1.92 MHz", "3.84 MHz", "7.68 MHz", "15.36 MHz", "30.72 MHz"])
+        self.sr_combo.setCurrentText("3.84 MHz")
         
     self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
     form_layout.addRow(self.sr_label, self.sr_combo)
@@ -662,6 +935,13 @@ def build_ui(self, state):
     self.wifi_hw_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
     self.wifi_hw_metrics_label.hide()
     controls_layout.addWidget(self.wifi_hw_metrics_label)
+
+    # --- MÉTRICAS LTE ---
+    self.lte_metrics_label = QLabel("")
+    self.lte_metrics_label.setTextFormat(Qt.TextFormat.RichText)
+    self.lte_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
+    self.lte_metrics_label.hide()
+    controls_layout.addWidget(self.lte_metrics_label)
     
     controls_widget = QWidget()
     controls_widget.setLayout(controls_layout)

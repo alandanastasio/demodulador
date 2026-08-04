@@ -61,8 +61,31 @@ class USRPB200Handler(SDRBase):
         self.usrp.set_rx_freq(tune_req, 0)
 
     def set_sample_rate(self, sr_hz: float):
+        was_running = self.is_running
+        if was_running:
+            self.stop_rx()
+            
+        # Para evitar el warning temporal de decimation en UHD
+        try:
+            self.usrp.set_rx_rate(sr_hz, 0)
+        except Exception:
+            pass
+            
+        try:
+            if sr_hz in [30.72e6, 15.36e6, 7.68e6, 3.84e6, 1.92e6]:
+                self.usrp.set_master_clock_rate(30.72e6)
+            elif sr_hz == 23.04e6:
+                self.usrp.set_master_clock_rate(46.08e6)
+            else:
+                self.usrp.set_master_clock_rate(60e6)
+        except Exception as e:
+            pass
+            
         self.usrp.set_rx_rate(sr_hz, 0)
         self.usrp.set_rx_bandwidth(sr_hz, 0)
+        
+        if was_running:
+            self.start_rx()
 
     def set_gain(self, gain_db: int):
         # La B200 normalmente tiene un rango de 0 a 73 o 76 dB.

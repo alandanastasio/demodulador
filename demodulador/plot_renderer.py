@@ -282,3 +282,149 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         f"</div>"
                     )
                     self.wifi_hw_metrics_label.setText(html_hw)
+
+        # --- RENDERIZADO ESPECÍFICO DE LTE ---
+        if state.get('demod_mode') == 'lte':
+            if raw_samples is not None:
+                # Calculamos la magnitud de las muestras IQ
+                mag = np.abs(raw_samples)
+                t_axis_us = np.linspace(0, 10000, len(mag))
+                self.lte_time_curve.setData(t_axis_us, mag)
+            
+            if evm_data is not None and hasattr(self, 'lte_evm_rms_subc'):
+                y_floor = -40
+                subc_rms_db = np.asarray(evm_data['subc_rms'])
+                subc_peak_db = np.asarray(evm_data['subc_peak'])
+                
+                brushes_peak = [pg.mkBrush(100, 100, 255, 100) for x in evm_data['subc_x']]
+                brushes_rms = [pg.mkBrush(0, 0, 150, 200) for x in evm_data['subc_x']]
+                
+                self.lte_evm_peak_subc.setOpts(x=evm_data['subc_x'], height=subc_peak_db - y_floor, y0=y_floor, brushes=brushes_peak)
+                self.lte_evm_rms_subc.setOpts(x=evm_data['subc_x'], height=subc_rms_db - y_floor, y0=y_floor, brushes=brushes_rms)
+                
+                n_syms = len(evm_data['sym_rms'])
+                if n_syms > 0:
+                    sym_x = np.arange(n_syms)
+                    self.lte_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
+                    self.lte_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
+                    self.lte_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                else:
+                    self.lte_evm_rms_sym.setData([], [])
+                    self.lte_evm_peak_sym.setData([], [])
+            
+            if audio_L is not None and audio_R is not None:
+                if getattr(self, 'action_show_data', None) and self.action_show_data.isChecked():
+                    self.lte_const_curve.setData(
+                        audio_L, 
+                        audio_R, 
+                        pen=None, 
+                        symbol='o', 
+                        symbolSize=2.5, 
+                        symbolPen=None, 
+                        symbolBrush="#00FFFF"
+                    )
+                else:
+                    self.lte_const_curve.setData([], [])
+                
+                if fm_metrics and 'pss_pts' in fm_metrics and 'sss_pts' in fm_metrics:
+                    pss_pts = fm_metrics['pss_pts']
+                    sss_pts = fm_metrics['sss_pts']
+                    pdcch_pts = fm_metrics.get('pdcch_pts', np.array([]))
+                    pbch_pts = fm_metrics.get('pbch_pts', np.array([]))
+                    crs_pts = fm_metrics.get('crs_pts', np.array([]))
+                    pcfich_pts = fm_metrics.get('pcfich_pts', np.array([]))
+                    phich_pts = fm_metrics.get('phich_pts', np.array([]))
+                    
+                    if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
+                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
+                    else:
+                        self.lte_pss_curve.setData([], [])
+                        
+                    if len(sss_pts) > 0 and getattr(self, 'action_show_sss', None) and self.action_show_sss.isChecked():
+                        self.lte_sss_curve.setData(sss_pts.real, sss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#4477FF")
+                    else:
+                        self.lte_sss_curve.setData([], [])
+                        
+                    if len(pdcch_pts) > 0 and getattr(self, 'action_show_pdcch', None) and self.action_show_pdcch.isChecked():
+                        self.lte_pdcch_curve.setData(pdcch_pts.real, pdcch_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FFFF00")
+                    else:
+                        self.lte_pdcch_curve.setData([], [])
+                        
+                    if len(pbch_pts) > 0 and getattr(self, 'action_show_pbch', None) and self.action_show_pbch.isChecked():
+                        self.lte_pbch_curve.setData(pbch_pts.real, pbch_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#00FF00")
+                    else:
+                        self.lte_pbch_curve.setData([], [])
+                        
+                    if len(crs_pts) > 0 and getattr(self, 'action_show_crs', None) and self.action_show_crs.isChecked():
+                        self.lte_crs_curve.setData(crs_pts.real, crs_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#00AADD")
+                    else:
+                        self.lte_crs_curve.setData([], [])
+                        
+                    if len(pcfich_pts) > 0 and getattr(self, 'action_show_pcfich', None) and self.action_show_pcfich.isChecked():
+                        self.lte_pcfich_curve.setData(pcfich_pts.real, pcfich_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#AA00FF")
+                    else:
+                        self.lte_pcfich_curve.setData([], [])
+                        
+                    if len(phich_pts) > 0 and getattr(self, 'action_show_phich', None) and self.action_show_phich.isChecked():
+                        self.lte_phich_curve.setData(phich_pts.real, phich_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF3333")
+                    else:
+                        self.lte_phich_curve.setData([], [])
+                        
+                self.lte_const_widget.scene().update()
+                
+            if fm_metrics and 'lte_metrics' in fm_metrics:
+                lte = fm_metrics['lte_metrics']
+                if lte is not None:
+                    pss_found = lte.get('pss_found', False)
+                    trama_valida = lte.get('trama_valida', False)
+                    n_id_2 = lte.get('N_id_2', '?')
+                    n_id_1 = lte.get('N_id_1', '?')
+                    cell_id = lte.get('cell_id', '?')
+                    
+                    pbch_ok = lte.get('pbch_ok', False)
+                    pbch_mib = lte.get('pbch_mib', '')
+                    pbch_antenas = lte.get('pbch_antenas', '?')
+                    
+                    mib_bw = lte.get('mib_bw', '?')
+                    mib_phich_dur = lte.get('mib_phich_dur', '?')
+                    mib_phich_res = lte.get('mib_phich_res', '?')
+                    mib_sfn = lte.get('mib_sfn', '?')
+                    
+                    pcfich_ok = lte.get('pcfich_ok', False)
+                    pcfich_cfi = lte.get('pcfich_cfi', '?')
+                    
+                    color_pss = "#00FF00" if pss_found else "#FF0000"
+                    color_trama = "#00FF00" if trama_valida else "#FF0000"
+                    color_pbch = "#00FF00" if pbch_ok else "#FF5555"
+                    color_pcfich = "#00FF00" if pcfich_ok else "#FF5555"
+                    
+                    html_lte = (
+                        f"<div style='line-height: 1.5;'>"
+                        f"<span style='color: #FFFFFF'><b>PSS Encontrado:</b></span> <span style='color: {color_pss}; font-weight: bold;'>{'SI' if pss_found else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_2}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>N_ID_1 (Grupo):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_1}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PBCH Decodificado:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{'OK' if pbch_ok else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Antenas Rx:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pbch_antenas}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Ancho de Banda:</b></span> <span style='color: #00FF00; font-weight: bold;'>{mib_bw}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PHICH (Dur/Res):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{mib_phich_dur} / {mib_phich_res}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>System Frame Num:</b></span> <span style='color: #FFD500; font-weight: bold;'>{mib_sfn}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PCFICH Decodificado:</b></span> <span style='color: {color_pcfich}; font-weight: bold;'>{'OK' if pcfich_ok else 'NO'}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>PCFICH CFI:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pcfich_cfi}</span>"
+                        f"</div>"
+                    )
+                    if hasattr(self, 'lte_metrics_label'):
+                        self.lte_metrics_label.setText(html_lte)
+                        
+                    fs = lte.get('frame_summary', {})
+                    if hasattr(self, 'lte_frame_summary') and fs:
+                        for row in range(self.lte_frame_summary.rowCount()):
+                            item_ch = self.lte_frame_summary.item(row, 0)
+                            if item_ch:
+                                ch_name = item_ch.text()
+                                if ch_name in fs:
+                                    evm_str, pwr_str, rb_str = fs[ch_name]
+                                    self.lte_frame_summary.item(row, 1).setText(evm_str)
+                                    self.lte_frame_summary.item(row, 2).setText(pwr_str)
+                                    self.lte_frame_summary.item(row, 4).setText(rb_str)
