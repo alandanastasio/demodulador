@@ -128,6 +128,9 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         self.pll_filtro_integral = 0.0
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
+        if muestras_iq is None:
+            self.buffer_medicion = []
+            return None
         self.fm_buffer = np.append(self.fm_buffer, muestras_iq)
         hw_sr = int(self.sample_rate)
         

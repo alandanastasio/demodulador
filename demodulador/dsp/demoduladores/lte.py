@@ -438,6 +438,10 @@ class DemoduladorLTE(DemoduladorBase):
                 self.nuevos_datos_listos = False
                 return self.last_heavy_results
 
+        if muestras_iq is None:
+            self.buffer_medicion = []
+            return None
+
         ahora = time.time()
         
         if self.is_processing or ahora < self.proxima_captura:

@@ -24,6 +24,8 @@ class SpectrumAnalyzer(DemoduladorBase):
         Recibe muestras crudas y devuelve únicamente el espectro RF.
         No genera audio ni métricas.
         """
+        if muestras_iq is None:
+            return None
         now = time.time()
         if getattr(self, 'last_update', 0) and now - self.last_update < 1.0 / 30.0:
             return None
