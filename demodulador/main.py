@@ -125,6 +125,11 @@ class MainWindow(QMainWindow):
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
 
     def set_wbfm_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_wbfm.addWidget(self.freq_plot, 0, 0)
         self.layout_wbfm.setRowStretch(0, 1)
         self.layout_wbfm.setRowStretch(1, 1)
@@ -156,15 +161,23 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
         self.sr_combo.blockSignals(True)
-        if self.sr_combo.findText("2.4 MHz (Decimado a 300k)") == -1:
-            self.sr_combo.addItem("2.4 MHz (Decimado a 300k)")
-        self.sr_combo.setCurrentText("2.4 MHz (Decimado a 300k)")
+        if self.sr_combo.findText("3.0 MHz (Decimado a 300k)") == -1:
+            self.sr_combo.addItem("3.0 MHz (Decimado a 300k)")
+        self.sr_combo.setCurrentText("3.0 MHz (Decimado a 300k)")
         self.sr_combo.setEnabled(False) 
         self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
 
         state['demod_mode'] = 'wbfm'
-        state['sample_rate'] = 2.4e6 
+        state['sample_rate'] = 3.0e6 
         
+        self.freq_plot.show()
         self.demodulador_actual = DemoduladorWBFM()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
@@ -173,6 +186,11 @@ class MainWindow(QMainWindow):
         self._restore_panels()
 
     def set_wifi_ag_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_wifi.addWidget(self.freq_plot, 0, 0)
         self.layout_wifi.setRowStretch(0, 1)
         self.layout_wifi.setRowStretch(1, 1)
@@ -231,6 +249,14 @@ class MainWindow(QMainWindow):
             self.sr_combo.setCurrentText("20.0 MHz")
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+        self.freq_plot.show()
         self._restore_panels()
 
     def set_lte_mode(self, bw_mhz=5):
@@ -338,6 +364,11 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
         self.layout_normal.addWidget(self.freq_plot, 0, 0)
         # En modo normal, la cascada va abajo (si está activa)
         self.layout_normal.addWidget(self.waterfall_widget, 1, 0)
@@ -379,7 +410,7 @@ class MainWindow(QMainWindow):
             self.audio_manager.toggle_audio()
         
         self.sr_combo.blockSignals(True)
-        idx = self.sr_combo.findText("2.4 MHz (Decimado a 300k)")
+        idx = self.sr_combo.findText("3.0 MHz (Decimado a 300k)")
         if idx != -1: self.sr_combo.removeItem(idx)
         
         if hasattr(self, 'sa_sample_rate_text'):
@@ -392,10 +423,12 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(True)
         if hasattr(self, 'sa_fft_size_text'):
             self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
         self.fft_combo.setEnabled(True)
         self.fft_combo.blockSignals(False)
         
         state['demod_mode'] = 'none'
+        self.freq_plot.show()
         self.demodulador_actual = SpectrumAnalyzer()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.on_sr_changed(self.sr_combo.currentText()) 

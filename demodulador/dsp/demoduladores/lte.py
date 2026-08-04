@@ -403,7 +403,7 @@ class DemoduladorLTE(DemoduladorBase):
         
         self.ultimo_chunk_norm = None
         self.ultimo_lte_metrics = {}
-        self.ultimo_puntos_corr = None
+        self.ultimo_puntos_corr = np.array([])
 
     @property
     def id(self): return "lte"
@@ -430,7 +430,7 @@ class DemoduladorLTE(DemoduladorBase):
             self.last_heavy_results = {}
             self.ultimo_chunk_norm = None
             self.ultimo_lte_metrics = {}
-            self.ultimo_puntos_corr = None
+            self.ultimo_puntos_corr = np.array([])
 
     def procesar(self, muestras_iq):
         with self._lock:
@@ -443,28 +443,27 @@ class DemoduladorLTE(DemoduladorBase):
         if self.is_processing or ahora < self.proxima_captura:
             return None
 
+        self.buffer_medicion.extend(muestras_iq)
+        muestras_10ms = int(self.sample_rate * 0.01)
+        
+        if len(self.buffer_medicion) < muestras_10ms:
+            return None
+            
+        chunk_procesar = np.array(self.buffer_medicion[:muestras_10ms])
+        self.buffer_medicion = []
+
         self.is_processing = True
 
         threading.Thread(
             target=self._procesar_fondo,
-            args=(muestras_iq.copy(),),
+            args=(chunk_procesar,),
             daemon=True
         ).start()
 
         return None
 
-    def _procesar_fondo(self, bloque_iq: np.ndarray):
+    def _procesar_fondo(self, chunk_procesar: np.ndarray):
         try:
-            self.buffer_medicion.extend(bloque_iq)
-            muestras_10ms = int(self.sample_rate * 0.01)
-            
-            if len(self.buffer_medicion) < muestras_10ms:
-                return # Esperamos a tener 10 ms de captura
-                
-            # Procesamos exactamente 10 ms
-            chunk_procesar = np.array(self.buffer_medicion[:muestras_10ms])
-            self.buffer_medicion = self.buffer_medicion[muestras_10ms:]
-            
             fs = self.fft_size
             N_iq = len(chunk_procesar)
             
@@ -1033,6 +1032,8 @@ class DemoduladorLTE(DemoduladorBase):
                 
             else:
                 puntos_corr = getattr(self, 'ultimo_puntos_corr', np.array([]))
+                if puntos_corr is None:
+                    puntos_corr = np.array([])
                 evm_data = getattr(self, 'ultimo_evm_data', None)
                 
             self.ultimo_puntos_corr = puntos_corr

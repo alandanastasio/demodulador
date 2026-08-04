@@ -100,7 +100,9 @@ class DemoduladorWBFM(DemoduladorBase):
             if not self.is_processing:
                 bloque_iq = np.concatenate(self.buffer_medicion)[:muestras_500ms]
                 self.is_processing = True
-                threading.Thread(target=self._procesar_fondo, args=(bloque_iq,)).start()
+                t = threading.Thread(target=self._procesar_fondo, args=(bloque_iq,))
+                t.daemon = True
+                t.start()
             
             self.buffer_medicion = []
             self.muestras_acumuladas = 0
@@ -135,6 +137,9 @@ class DemoduladorWBFM(DemoduladorBase):
             bb_resample = resample_poly(bb_filt, up=1, down=self.factor_bajada)
             
             msj = np.angle(bb_resample[1:] * np.conjugate(bb_resample[:-1])) * (self.nueva_fs / (2*np.pi))
+            # Rellenar con el último valor para evitar FFT de longitud prima (ej: 149999) que cuelgan np.fft
+            msj = np.append(msj, msj[-1] if len(msj) > 0 else 0)
+            
             demod_khz_raw = msj / 1000.0
             
             demod_khz_clean = fftconvolve(demod_khz_raw, self.mpx_lpf_kernel, mode='same')

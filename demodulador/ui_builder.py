@@ -11,6 +11,18 @@ def build_ui(self, state):
     self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
     self.toolbar.setMovable(False)
 
+    # Logo a la izquierda
+    self.logo_label = QLabel()
+    import os
+    from PyQt6.QtGui import QPixmap
+    icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.gris.png")
+    pixmap = QPixmap(icon_path)
+    # Escalarlo a la altura aproximada de los botones (ej: 32px)
+    pixmap = pixmap.scaledToHeight(32, Qt.TransformationMode.SmoothTransformation)
+    self.logo_label.setPixmap(pixmap)
+    self.logo_label.setContentsMargins(10, 0, 10, 0)
+    self.toolbar.addWidget(self.logo_label)
+
     # 1 Rec/Play
     self.rec_play_btn = QToolButton()
     self.rec_play_btn.setText("Rec/Play")

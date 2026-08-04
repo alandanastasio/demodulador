@@ -101,9 +101,6 @@ class StartupWindow(QMainWindow):
             item = QListWidgetItem("⚠️ No se encontraron dispositivos SDR")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.device_list.addItem(item)
-            
-        # Agregamos siempre el simulador al final
-        self.device_list.addItem("Reproductor de Archivo (.dat) - TM1_15RB_FDD (LTE 3MHz)")
 
     def launch_main_window(self, item):
         device_name = item.text()
@@ -125,12 +122,6 @@ class StartupWindow(QMainWindow):
             if "SN: " in device_name:
                 serial = device_name.split("SN: ")[1].strip(" )")
             radio_handler = USRPB200Handler(rx_callback=None, serial=serial)
-        elif "Reproductor de Archivo" in device_name:
-            print("Iniciando Reproductor de Archivo...")
-            from hardware.file_handler import FileHandler
-            import os
-            path = os.path.join(os.path.dirname(__file__), "research/LTE/TM1_15RB_FDD.dat")
-            radio_handler = FileHandler(rx_callback=None, file_path=path)
         else:
             return
 
