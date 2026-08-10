@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
 
     def procesar_muestras_iq(self, c_samples):
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
-        if state['is_recording']:
+        if state['is_recording'] and c_samples is not None:
             state['recorded_samples'].append(c_samples.copy())
 
         # 2. Procesamiento a través del plugin DSP activo (SpectrumAnalyzer o DemoduladorWBFM)

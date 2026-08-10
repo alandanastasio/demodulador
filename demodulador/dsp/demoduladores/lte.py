@@ -3,6 +3,7 @@ import threading
 import time
 from .base import DemoduladorBase
 from scipy import signal
+from numba import jit
 
 def generar_pss_time(fft_size: int):
     # Genera las 3 secuencias PSS en el dominio del tiempo (Zadoff-Chu)
@@ -67,14 +68,15 @@ def generar_sss(N_id_1: int, N_id_2: int, subframe: int = 0):
             d[2*n + 1] = s0[n] * c1[n] * z1_m1[n]
     return d
 
+@jit(nopython=True)
 def generar_secuencia_gold(length, c_init):
     """Genera la secuencia pseudo-aleatoria c(n) según 3GPP TS 36.211 §7.2.
     Usa dos m-sequences x1 y x2 de largo 31, con Nc=1600 de offset."""
     Nc = 1600
     total = length + Nc
     
-    x1 = np.zeros(total + 31, dtype=int)
-    x2 = np.zeros(total + 31, dtype=int)
+    x1 = np.zeros(total + 31, dtype=np.int64)
+    x2 = np.zeros(total + 31, dtype=np.int64)
     
     # x1 se inicializa con x1(0)=1
     x1[0] = 1
@@ -88,12 +90,13 @@ def generar_secuencia_gold(length, c_init):
         x1[n + 31] = (x1[n + 3] + x1[n]) % 2
         x2[n + 31] = (x2[n + 3] + x2[n + 2] + x2[n + 1] + x2[n]) % 2
     
-    c = np.zeros(length, dtype=int)
+    c = np.zeros(length, dtype=np.int64)
     for n in range(length):
         c[n] = (x1[n + Nc] + x2[n + Nc]) % 2
     
     return c
 
+@jit(nopython=True)
 def generar_crs(cell_id, ns, l, num_rb):
     """Genera los pilotos CRS para un slot ns, símbolo l, según 3GPP TS 36.211 §6.10.1.
     
@@ -113,61 +116,66 @@ def generar_crs(cell_id, ns, l, num_rb):
     
     # r(m) = (1/sqrt(2)) * (1-2*c(2m)) + j*(1/sqrt(2)) * (1-2*c(2m+1))
     m = np.arange(2 * num_rb) + N_maxRB - num_rb
-    r_l = (1/np.sqrt(2)) * (1 - 2*c[2*m].astype(float)) + \
-          1j * (1/np.sqrt(2)) * (1 - 2*c[2*m + 1].astype(float))
+    r_l = (1/np.sqrt(2)) * (1 - 2*c[2*m].astype(np.float64)) + \
+          1j * (1/np.sqrt(2)) * (1 - 2*c[2*m + 1].astype(np.float64))
     
     return r_l
 
+@jit(nopython=True)
+def smooth_complex_array(arr, window_size):
+    n = len(arr)
+    out = np.zeros_like(arr)
+    hw = window_size // 2
+    for i in range(n):
+        start = max(0, i - hw)
+        end = min(n, i + hw + 1)
+        # np.mean is not directly supported for complex arrays with axis in some numba versions,
+        # but a simple manual sum works, or separating real/imag.
+        s_real = 0.0
+        s_imag = 0.0
+        count = 0
+        for j in range(start, end):
+            s_real += arr[j].real
+            s_imag += arr[j].imag
+            count += 1
+        out[i] = (s_real / count) + 1j * (s_imag / count)
+    return out
+
+@jit(nopython=True)
 def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
-    """Estima el canal usando los pilotos CRS y ecualiza todos los símbolos del subframe.
-    
-    CRS se ubican en los símbolos 0 y 4 de cada slot (normal CP, puerto 0).
-    Dentro de cada símbolo, los pilotos van cada 6 subportadoras con offset = cell_id % 6.
-    
-    Args:
-        subframe_fft: Array (14, fft_size) con los símbolos en frecuencia (fftshift aplicado)
-        cell_id: Physical Cell ID
-        fft_size: Tamaño de la FFT
-        num_rb: Número de Resource Blocks
-        ns_base: Número del primer slot absoluto del subframe (ej: 0 para sf0, 10 para sf5)
-    
-    Returns:
-        subframe_eq: Array ecualizado (misma forma que subframe_fft)
-    """
+    """Estima el canal usando los pilotos CRS y ecualiza todos los símbolos del subframe."""
     centro = fft_size // 2
-    num_sc = num_rb * 12  # subportadoras ocupadas totales
+    num_sc = num_rb * 12
     mitad_sc = num_sc // 2
     
-    # Índices absolutos de las subportadoras ocupadas (saltando DC)
-    idx_portadoras = np.array(list(range(centro - mitad_sc, centro)) + 
-                              list(range(centro + 1, centro + mitad_sc + 1)))
+    idx1 = np.arange(centro - mitad_sc, centro)
+    idx2 = np.arange(centro + 1, centro + mitad_sc + 1)
+    idx_portadoras = np.concatenate((idx1, idx2))
     
     v_shift = cell_id % 6
     
-    # Los símbolos con CRS en normal CP, puerto 0: símbolo 0 y 4 de cada slot
-    # En un subframe (2 slots): símbolos 0, 4, 7, 11
-    # (l_in_slot, slot_absoluto)
-    crs_symbols = [(0, ns_base), (4, ns_base), (0, ns_base + 1), (4, ns_base + 1)]
-    sym_indices = [0, 4, 7, 11]  # índice global en el subframe
+    sym_indices = np.array([0, 4, 7, 11])
+    l_values = np.array([0, 4, 0, 4])
+    ns_values = np.array([ns_base, ns_base, ns_base + 1, ns_base + 1])
     
-    # Para el offset vertical (v): símbolo 0 tiene v=0, símbolo 4 tiene v=3
-    v_offsets = {0: 0, 4: 3}
+    H_est_0 = np.ones((14, fft_size), dtype=np.complex128)
+    H_est_1 = np.ones((14, fft_size), dtype=np.complex128)
     
-    # Estimación de canal: H_est_0 (Puerto 0) y H_est_1 (Puerto 1)
-    H_est_0 = np.ones((14, fft_size), dtype=complex)
-    H_est_1 = np.ones((14, fft_size), dtype=complex)
-    
-    # Para el offset vertical (v):
-    # Port 0: símbolo 0 tiene v=0, símbolo 4 tiene v=3
-    # Port 1: símbolo 0 tiene v=3, símbolo 4 tiene v=0
-    v_offsets_p0 = {0: 0, 4: 3}
-    v_offsets_p1 = {0: 3, 4: 0}
-    
-    for sym_global, (l, ns) in zip(sym_indices, crs_symbols):
+    for idx in range(4):
+        sym_global = sym_indices[idx]
+        l = l_values[idx]
+        ns = ns_values[idx]
+        
         crs_ref = generar_crs(cell_id, ns, l, num_rb)
         
-        for port, v_offsets, H_est in [(0, v_offsets_p0, H_est_0), (1, v_offsets_p1, H_est_1)]:
-            v = v_offsets[l]
+        for port in range(2):
+            if port == 0:
+                H_est = H_est_0
+                v = 0 if l == 0 else 3
+            else:
+                H_est = H_est_1
+                v = 3 if l == 0 else 0
+                
             pilot_offset = (v + v_shift) % 6
             pilot_local = np.arange(pilot_offset, num_sc, 6)
             pilot_abs = idx_portadoras[pilot_local]
@@ -178,33 +186,46 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
             
             H_pilots = rx_pilots / ref_pilots
             
+            # Suavizar la estimación del canal (Moving Average)
+            H_pilots_smooth = smooth_complex_array(H_pilots, 5)
+            
             all_positions = np.arange(num_sc)
-            H_real = np.interp(all_positions, pilot_local, H_pilots.real)
-            H_imag = np.interp(all_positions, pilot_local, H_pilots.imag)
+            H_real = np.interp(all_positions, pilot_local, H_pilots_smooth.real)
+            H_imag = np.interp(all_positions, pilot_local, H_pilots_smooth.imag)
             H_interp = H_real + 1j * H_imag
             
             H_est[sym_global, idx_portadoras] = H_interp
             
-    # Interpolación lineal en el tiempo para los símbolos intermedios
-    sym_pos = np.array(sym_indices)
-    all_sym = np.arange(14)
+    sym_pos = np.array([0.0, 4.0, 7.0, 11.0])
+    all_sym = np.arange(14.0)
     
     for sc in idx_portadoras:
-        for H_est in [H_est_0, H_est_1]:
-            h_values = H_est[sym_indices, sc]
-            h_real = np.interp(all_sym, sym_pos, h_values.real)
-            h_imag = np.interp(all_sym, sym_pos, h_values.imag)
-            H_est[:, sc] = h_real + 1j * h_imag
+        # Array assignment using slice is safer in numba for objects
+        # We manually interpolate H_est_0 and H_est_1
+        h_values_0 = np.zeros(4, dtype=np.complex128)
+        h_values_1 = np.zeros(4, dtype=np.complex128)
+        for i in range(4):
+            h_values_0[i] = H_est_0[sym_indices[i], sc]
+            h_values_1[i] = H_est_1[sym_indices[i], sc]
             
-    # Ecualización MMSE vectorizada (SISO, Puerto 0): Y_eq = Y * H0* / (|H0|^2 + sigma2)
+        h_real_0 = np.interp(all_sym, sym_pos, h_values_0.real)
+        h_imag_0 = np.interp(all_sym, sym_pos, h_values_0.imag)
+        H_est_0[:, sc] = h_real_0 + 1j * h_imag_0
+        
+        h_real_1 = np.interp(all_sym, sym_pos, h_values_1.real)
+        h_imag_1 = np.interp(all_sym, sym_pos, h_values_1.imag)
+        H_est_1[:, sc] = h_real_1 + 1j * h_imag_1
+            
     subframe_eq = subframe_fft.copy()
     
     margen_guarda = 20
-    idx_ruido = np.concatenate((np.arange(0, max(0, centro - mitad_sc - margen_guarda)), 
-                                np.arange(min(fft_size, centro + mitad_sc + 1 + margen_guarda), fft_size)))
+    ruido1 = np.arange(0, max(0, centro - mitad_sc - margen_guarda))
+    ruido2 = np.arange(min(fft_size, centro + mitad_sc + 1 + margen_guarda), fft_size)
+    idx_ruido = np.concatenate((ruido1, ruido2))
     
     if len(idx_ruido) > 0:
-        sigma2 = np.var(subframe_fft[:, idx_ruido])
+        ruido_samples = subframe_fft[:, idx_ruido].flatten()
+        sigma2 = np.var(ruido_samples)
     else:
         sigma2 = 0.05
         
@@ -216,8 +237,8 @@ def ecualizar_con_crs(subframe_fft, cell_id, fft_size, num_rb, ns_base=0):
     
     return subframe_eq, H_est_0, H_est_1, sigma2
 
+@jit(nopython=True)
 def alamouti_combine(Y, H0, H1, sigma2):
-    """Combina símbolos usando SFBC (Alamouti) para 2 antenas."""
     Y1 = Y[0::2]
     Y2 = Y[1::2]
     
@@ -238,6 +259,7 @@ def alamouti_combine(Y, H0, H1, sigma2):
     return out
 
 # --- DECODIFICADOR PBCH ---
+@jit(nopython=True)
 def decodificar_pbch(soft_bits_480):
     # 1. Rate de-matching circular (480 -> 120)
     w = np.zeros(120)
@@ -264,8 +286,8 @@ def decodificar_pbch(soft_bits_480):
     
     # 4. Decodificador Viterbi (TBCC K=7, Tasa 1/3)
     num_states = 64
-    next_state = np.zeros((num_states, 2), dtype=int)
-    outputs = np.zeros((num_states, 2, 3), dtype=int)
+    next_state = np.zeros((num_states, 2), dtype=np.int64)
+    outputs = np.zeros((num_states, 2, 3), dtype=np.int64)
     
     for state in range(num_states):
         for bit in (0, 1):
@@ -293,16 +315,16 @@ def decodificar_pbch(soft_bits_480):
             
     # Traceback
     best_state = np.argmax(path_metrics)
-    tb_states = np.zeros((40, num_states), dtype=int)
-    tb_bits = np.zeros((40, num_states), dtype=int)
+    tb_states = np.zeros((40, num_states), dtype=np.int64)
+    tb_bits = np.zeros((40, num_states), dtype=np.int64)
     
     path_metrics = np.full(num_states, -np.inf)
     path_metrics[best_state] = 0
     
     for i in range(40):
         new_metrics = np.full(num_states, -np.inf)
-        new_tb_states = np.zeros(num_states, dtype=int)
-        new_tb_bits = np.zeros(num_states, dtype=int)
+        new_tb_states = np.zeros(num_states, dtype=np.int64)
+        new_tb_bits = np.zeros(num_states, dtype=np.int64)
         for state in range(num_states):
             if path_metrics[state] == -np.inf: continue
             for bit in (0, 1):
@@ -438,6 +460,10 @@ class DemoduladorLTE(DemoduladorBase):
                 self.nuevos_datos_listos = False
                 return self.last_heavy_results
 
+        if muestras_iq is None:
+            self.buffer_medicion = []
+            return None
+
         ahora = time.time()
         
         if self.is_processing or ahora < self.proxima_captura:
@@ -490,10 +516,15 @@ class DemoduladorLTE(DemoduladorBase):
             mejor_pos = -1
             mejor_corr_abs = None
             
-            for n_id_2, pss_t in enumerate(self.pss_time):
-                # Correlación lineal rápida usando superposición-suma (overlap-add/save)
-                # Esto soluciona los bugs de "wrap-around" cíclico que daba np.fft en el código anterior.
-                # 'valid' asegura que sólo calculamos posiciones donde la secuencia pss_t entra completa.
+            # MODO TRACKING: Si antes estábamos enganchados, solo buscamos ese N_id_2
+            n_id_2_a_buscar = [0, 1, 2]
+            estaba_enganchado = self.ultimo_lte_metrics.get('trama_valida', False) and self.ultimo_lte_metrics.get('pss_found', False)
+            if estaba_enganchado:
+                n_id_2_a_buscar = [self.ultimo_lte_metrics.get('N_id_2', 0)]
+                
+            for n_id_2 in n_id_2_a_buscar:
+                pss_t = self.pss_time[n_id_2]
+                
                 corr = signal.correlate(chunk_procesar, pss_t, mode='valid', method='fft')
                 corr_abs = np.abs(corr)
                 
@@ -505,6 +536,7 @@ class DemoduladorLTE(DemoduladorBase):
                     mejor_corr_abs = corr_abs
                     
             # Validamos el pico de correlación contra el ruido de fondo (aprox 4x o 5x superior)
+            # En la señal completa, la ganancia de procesamiento es inmensa (2048). Un umbral de 4.0 es roca sólida.
             es_pico_valido = mejor_corr_abs is not None and mejor_corr > (4.0 * np.mean(mejor_corr_abs))
             
             if es_pico_valido:
@@ -861,9 +893,15 @@ class DemoduladorLTE(DemoduladorBase):
                         pt = constelacion[sym_idx, k]
                         if np.isnan(pt): continue
                         
-                        # Detectar C-RS
-                        is_crs_port0 = sym_idx in [0, 4, 7, 11] and (k % 6) == v_shift
-                        is_crs_port1 = sym_idx in [0, 4, 7, 11] and (k % 6) == (v_shift + 3) % 6
+                        # Detectar C-RS (Puerto 0 y Puerto 1)
+                        is_crs_port0 = False
+                        is_crs_port1 = False
+                        if sym_idx in [0, 7]:
+                            is_crs_port0 = (k % 6) == v_shift
+                            is_crs_port1 = (k % 6) == (v_shift + 3) % 6
+                        elif sym_idx in [4, 11]:
+                            is_crs_port0 = (k % 6) == (v_shift + 3) % 6
+                            is_crs_port1 = (k % 6) == v_shift
                         
                         if is_crs_port0 or (tx_antennas > 1 and is_crs_port1):
                             crs_pts.append(pt)
@@ -913,7 +951,7 @@ class DemoduladorLTE(DemoduladorBase):
                 self.ultimo_sss_pts = sss_pts
                 
                 def calc_evm_power(pts, ref_type='qpsk'):
-                    if len(pts) == 0: return 0.0, 0.0
+                    if len(pts) == 0: return None, None
                     rms = np.sqrt(np.mean(np.abs(pts)**2) + 1e-12)
                     power = 10 * np.log10(rms**2)
                     
@@ -945,7 +983,7 @@ class DemoduladorLTE(DemoduladorBase):
                     return evm, power
                     
                 def format_evm(evm, power):
-                    if evm == 0.0 and power == 0.0: return "---", "---"
+                    if evm is None: return "---", "---"
                     return f"{evm:.2f}", f"{power:.2f}"
                 
                 # frame_summary guardará: { "Canal": (EVM_str, Power_str, NumRB_str) }
@@ -977,51 +1015,16 @@ class DemoduladorLTE(DemoduladorBase):
                 
                 self.ultimo_lte_metrics['frame_summary'] = fs_dict
 
-                
-                # --- EVM real por símbolo y por subportadora ---
-                # Detectamos el punto ideal más cercano de la constelación QPSK
-                qpsk_ref = np.array([1+1j, 1-1j, -1+1j, -1-1j]) / np.sqrt(2)
-                
-                evm_por_sym = np.zeros(14)
-                evm_por_subc = np.zeros(num_sc)
-                
-                for s in range(14):
-                    sym_pts = constelacion[s, :]
-                    # Para cada punto, encontrar el punto QPSK más cercano
-                    distancias = np.abs(sym_pts[:, None] - qpsk_ref[None, :])  # (num_sc, 4)
-                    idx_min = np.argmin(distancias, axis=1)
-                    errores = sym_pts - qpsk_ref[idx_min]
-                    
-                    # Excluir PSS/SSS del cálculo de EVM general QPSK
-                    if s in (5, 6):
-                        errores[idx_sync] = 0
-                        valid_sc = num_sc - len(idx_sync)
-                    else:
-                        valid_sc = num_sc
-                        
-                    evm_por_sym[s] = np.sqrt(np.sum(np.abs(errores)**2) / valid_sc) if valid_sc > 0 else 0
-                    
-                    err_subc = np.abs(errores)**2
-                    evm_por_subc += err_subc
-                
-                # Símbolo 5 y 6 tienen 62 subportadoras menos, así que el promedio debe tener en cuenta que dividimos por 13 en esas subportadoras
-                cuentas = np.full(num_sc, 14.0)
-                cuentas[idx_sync] = 12.0
-                evm_por_subc = np.sqrt(evm_por_subc / cuentas)
-                
-                # Convertir a dB
-                evm_sym_db = 20 * np.log10(np.maximum(evm_por_sym, 1e-10))
-                evm_subc_db = 20 * np.log10(np.maximum(evm_por_subc, 1e-10))
-                
-                eje_x_subc = np.concatenate((np.arange(-mitad_sc, 0), np.arange(1, mitad_sc + 1)))
-                
+                # --- EVM real por símbolo y por portadora ---
+                # Borrado a pedido del usuario (cálculos heredados de Wi-Fi no aplicables directamente a LTE)
                 evm_data = {
-                    'subc_x': eje_x_subc,
-                    'subc_rms': evm_subc_db,
-                    'subc_peak': evm_subc_db + 2,
-                    'sym_rms': evm_sym_db,
-                    'sym_peak': evm_sym_db + 3
+                    'subc_x': [],
+                    'subc_rms': [],
+                    'subc_peak': [],
+                    'sym_rms': [],
+                    'sym_peak': []
                 }
+
                 
                 self.ultimo_evm_data = evm_data
                 self.ultimo_pbch_pts = pbch_pts

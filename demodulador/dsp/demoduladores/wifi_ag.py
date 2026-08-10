@@ -164,6 +164,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
             self.ultimo_M_norm = None
 
     def procesar(self, muestras_iq):
+        if muestras_iq is None:
+            self.buffer_medicion = []
+            return None
         with self._lock:
             if self.nuevos_datos_listos:
                 self.nuevos_datos_listos = False

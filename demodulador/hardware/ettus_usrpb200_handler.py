@@ -118,8 +118,13 @@ class USRPB200Handler(SDRBase):
                     
                     if metadata.error_code != uhd.types.RXMetadataErrorCode.none:
                         if metadata.error_code != uhd.types.RXMetadataErrorCode.timeout:
-                            # Si es un overflow (O), no descartamos el bloque entero de inmediato
-                            pass
+                            # Hubo un OVERFLOW (O) o error de secuencia.
+                            # La continuidad de las muestras se rompió irremediablemente.
+                            # Avisamos al callback con None para que descarte cualquier buffer a medio armar.
+                            self.rx_callback(None)
+                            samps_received = 0
+                            zero_samps_count = 0
+                            continue
                             
                     if samps == 0:
                         zero_samps_count += 1
