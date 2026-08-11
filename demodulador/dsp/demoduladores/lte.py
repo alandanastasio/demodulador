@@ -996,19 +996,51 @@ class DemoduladorLTE(DemoduladorBase):
                 fs_dict["PHICH"] = (*format_evm(*calc_evm_power(phich_pts, 'bpsk')), "3")
                 fs_dict["PDCCH"] = (*format_evm(*calc_evm_power(pdcch_pts, 'qpsk')), str(len(pdcch_pts)//12))
                 
-                # Detección Ciega de Modulación para PDSCH
-                modulaciones = ['qpsk', '16qam', '64qam', '256qam']
-                mejor_mod = 'qpsk'
-                mejor_evm = 999.0
-                mejor_pow = 0.0
+                # Detección Ciega de Modulación para PDSCH con persistencia
+                # En LTE, la modulación real se indica en el DCI (PDCCH), no se detecta a ciegas.
+                # Pero como no decodificamos DCI, usamos detección ciega con un sistema de
+                # votación/persistencia para evitar el parpadeo causado por subframes que
+                # llevan SIBs en QPSK o subframes sin datos PDSCH.
+                modulaciones_jerarquicas = [
+                    ('256qam', 18.0),
+                    ('64qam',  25.0),
+                    ('16qam',  30.0),
+                ]
+                mod_actual = 'qpsk'
+                evm_actual = 999.0
+                pow_actual = 0.0
                 
                 if len(pdsch_pts) > 0:
-                    for mod in modulaciones:
+                    for mod, umbral in modulaciones_jerarquicas:
                         evm_val, pow_val = calc_evm_power(pdsch_pts, mod)
-                        if evm_val < mejor_evm:
-                            mejor_evm = evm_val
-                            mejor_pow = pow_val
-                            mejor_mod = mod
+                        if evm_val < umbral:
+                            mod_actual = mod
+                            evm_actual = evm_val
+                            pow_actual = pow_val
+                            break
+                    else:
+                        evm_actual, pow_actual = calc_evm_power(pdsch_pts, 'qpsk')
+                
+                # Sistema de votación: guardamos las últimas detecciones y usamos la moda
+                if not hasattr(self, '_mod_vote_buffer'):
+                    self._mod_vote_buffer = []
+                
+                self._mod_vote_buffer.append(mod_actual)
+                # Mantener solo las últimas 5 detecciones
+                if len(self._mod_vote_buffer) > 5:
+                    self._mod_vote_buffer.pop(0)
+                
+                # La modulación ganadora es la que más aparece en el buffer
+                from collections import Counter
+                conteo = Counter(self._mod_vote_buffer)
+                mejor_mod = conteo.most_common(1)[0][0]
+                
+                # Recalcular EVM con la modulación estabilizada
+                if mejor_mod != mod_actual and len(pdsch_pts) > 0:
+                    mejor_evm, mejor_pow = calc_evm_power(pdsch_pts, mejor_mod)
+                else:
+                    mejor_evm = evm_actual
+                    mejor_pow = pow_actual
                 
                 fs_dict[f"PDSCH_{mejor_mod.upper()}"] = (*format_evm(mejor_evm, mejor_pow), str(len(pdsch_pts)//12//11))
                 self.ultimo_lte_metrics['pdsch_modulation'] = mejor_mod

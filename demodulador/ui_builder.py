@@ -32,7 +32,7 @@ def build_ui(self, state):
             return
             
         self.logo_clicks += 1
-        if self.logo_clicks == 7:
+        if self.logo_clicks == 3:
             if hasattr(self, 'easter_egg_label'):
                 self.easter_egg_active = True
                 from PyQt6.QtCore import QPropertyAnimation, QSequentialAnimationGroup, QPauseAnimation, QPoint, QEasingCurve
