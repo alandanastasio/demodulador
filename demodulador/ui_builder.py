@@ -14,7 +14,7 @@ def build_ui(self, state):
     # Logo a la izquierda
     self.logo_label = QLabel()
     import os
-    from PyQt6.QtGui import QPixmap
+    from PyQt6.QtGui import QPixmap, QMovie
     icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.gris.png")
     pixmap = QPixmap(icon_path)
     # Escalarlo a la altura aproximada de los botones (ej: 32px)
@@ -22,6 +22,78 @@ def build_ui(self, state):
     self.logo_label.setPixmap(pixmap)
     self.logo_label.setContentsMargins(10, 0, 10, 0)
     self.toolbar.addWidget(self.logo_label)
+
+    # Easter egg logic
+    self.logo_clicks = 0
+    self.easter_egg_active = False
+    
+    def on_logo_clicked(event):
+        if getattr(self, 'easter_egg_active', False):
+            return
+            
+        self.logo_clicks += 1
+        if self.logo_clicks == 7:
+            if hasattr(self, 'easter_egg_label'):
+                self.easter_egg_active = True
+                from PyQt6.QtCore import QPropertyAnimation, QSequentialAnimationGroup, QPauseAnimation, QPoint, QEasingCurve
+                
+                # Force the label size to match the movie frames if possible, or give a fixed reasonable size
+                w = 200 # Approx width, adjust if needed
+                h = 200
+                if self.easter_egg_movie.currentImage():
+                    w = self.easter_egg_movie.currentImage().width()
+                    h = self.easter_egg_movie.currentImage().height()
+                
+                self.easter_egg_label.resize(w, h)
+                
+                start_pos = QPoint(self.width() - w - 20, self.height())
+                # Le quitamos el margen negativo y le sumamos un poco para que los pies queden sobre el borde
+                end_pos = QPoint(self.width() - w - 20, self.height() - h + 30)
+                
+                self.easter_egg_label.move(start_pos)
+                self.easter_egg_label.raise_()
+                self.easter_egg_label.show()
+                self.easter_egg_movie.start()
+                
+                self.egg_anim_group = QSequentialAnimationGroup(self)
+                
+                # Delay inicial (0.5 segundos)
+                anim_initial_delay = QPauseAnimation(500)
+                
+                # Subir
+                anim_up = QPropertyAnimation(self.easter_egg_label, b"pos")
+                anim_up.setDuration(500) # 0.5 seg
+                anim_up.setStartValue(start_pos)
+                anim_up.setEndValue(end_pos)
+                anim_up.setEasingCurve(QEasingCurve.Type.OutQuad)
+                
+                # Esperar
+                anim_pause = QPauseAnimation(1500) # 1.5 seg
+                
+                # Bajar
+                anim_down = QPropertyAnimation(self.easter_egg_label, b"pos")
+                anim_down.setDuration(500) # 0.5 seg
+                anim_down.setStartValue(end_pos)
+                anim_down.setEndValue(start_pos)
+                anim_down.setEasingCurve(QEasingCurve.Type.InQuad)
+                
+                self.egg_anim_group.addAnimation(anim_initial_delay)
+                self.egg_anim_group.addAnimation(anim_up)
+                self.egg_anim_group.addAnimation(anim_pause)
+                self.egg_anim_group.addAnimation(anim_down)
+                
+                # Al terminar, ocultar y liberar flag
+                def on_anim_finished():
+                    self.easter_egg_label.hide()
+                    self.easter_egg_movie.stop()
+                    self.easter_egg_active = False
+                    
+                self.egg_anim_group.finished.connect(on_anim_finished)
+                self.egg_anim_group.start()
+                
+            self.logo_clicks = 0
+            
+    self.logo_label.mousePressEvent = on_logo_clicked
 
     # 1 Rec/Play
     self.rec_play_btn = QToolButton()
@@ -798,6 +870,16 @@ def build_ui(self, state):
 
     # ---  BOTÓN ZERO SPAN ---
     self.zero_span_btn = QPushButton("Spam Cero")
+
+    # --- EASTER EGG LABEL (Floating over everything) ---
+    self.easter_egg_label = QLabel(self)
+    self.easter_egg_movie = QMovie(os.path.join(os.path.dirname(__file__), "easteregg.gif"))
+    self.easter_egg_label.setMovie(self.easter_egg_movie)
+    self.easter_egg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    self.easter_egg_label.setStyleSheet("background-color: transparent;")
+    self.easter_egg_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    self.easter_egg_label.hide()
+    self.easter_egg_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # Click-through
     self.zero_span_btn.setCheckable(True)
     self.zero_span_btn.setCursor(Qt.CursorShape.PointingHandCursor)
     self.zero_span_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555;")
