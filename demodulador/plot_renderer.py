@@ -381,37 +381,25 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     n_id_1 = lte.get('N_id_1', '?')
                     cell_id = lte.get('cell_id', '?')
                     
-                    pbch_ok = lte.get('pbch_ok', False)
-                    pbch_mib = lte.get('pbch_mib', '')
-                    pbch_antenas = lte.get('pbch_antenas', '?')
+                    sr_text = getattr(self, 'sr_combo', None)
+                    sr_val = sr_text.currentText() if sr_text else '?'
                     
-                    mib_bw = lte.get('mib_bw', '?')
-                    mib_phich_dur = lte.get('mib_phich_dur', '?')
-                    mib_phich_res = lte.get('mib_phich_res', '?')
-                    mib_sfn = lte.get('mib_sfn', '?')
-                    
-                    pcfich_ok = lte.get('pcfich_ok', False)
-                    pcfich_cfi = lte.get('pcfich_cfi', '?')
-                    
-                    color_pss = "#00FF00" if pss_found else "#FF0000"
-                    color_trama = "#00FF00" if trama_valida else "#FF0000"
-                    color_pbch = "#00FF00" if pbch_ok else "#FF5555"
-                    color_pcfich = "#00FF00" if pcfich_ok else "#FF5555"
-                    
+                    bw_map = {
+                        "1.024 MHz": "1.4 MHz", "1.92 MHz": "1.4 MHz", "2 MHz": "1.4 MHz", "2.048 MHz": "1.4 MHz", "2.4 MHz": "1.4 MHz", "2.88 MHz": "1.4 MHz",
+                        "3.84 MHz": "3 MHz", "4 MHz": "3 MHz", "5 MHz": "5 MHz",
+                        "7.68 MHz": "5 MHz", "8 MHz": "5 MHz",
+                        "10 MHz": "10 MHz", "12.5 MHz": "10 MHz",
+                        "15.36 MHz": "10 MHz", "16 MHz": "10 MHz",
+                        "20 MHz": "20 MHz", "23.04 MHz": "15 MHz",
+                        "28 MHz": "20 MHz", "30.72 MHz": "20 MHz", "32 MHz": "20 MHz", "40 MHz": "20 MHz"
+                    }
+                    bw_text = bw_map.get(sr_val, sr_val)
+
                     html_lte = (
                         f"<div style='line-height: 1.5;'>"
-                        f"<span style='color: #FFFFFF'><b>PSS Encontrado:</b></span> <span style='color: {color_pss}; font-weight: bold;'>{'SI' if pss_found else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>N_ID_2 (Sector):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_2}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>N_ID_1 (Grupo):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{n_id_1}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Ancho de Banda:</b></span> <span style='color: #00FF00; font-weight: bold;'>{bw_text}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{cell_id}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Trama Válida:</b></span> <span style='color: {color_trama}; font-weight: bold;'>{'SI' if trama_valida else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PBCH Decodificado:</b></span> <span style='color: {color_pbch}; font-weight: bold;'>{'OK' if pbch_ok else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Antenas Rx:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pbch_antenas}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Ancho de Banda:</b></span> <span style='color: #00FF00; font-weight: bold;'>{mib_bw}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PHICH (Dur/Res):</b></span> <span style='color: #00FFFF; font-weight: bold;'>{mib_phich_dur} / {mib_phich_res}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>System Frame Num:</b></span> <span style='color: #FFD500; font-weight: bold;'>{mib_sfn}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PCFICH Decodificado:</b></span> <span style='color: {color_pcfich}; font-weight: bold;'>{'OK' if pcfich_ok else 'NO'}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>PCFICH CFI:</b></span> <span style='color: #00FFFF; font-weight: bold;'>{pcfich_cfi}</span>"
+                        f"<span style='color: #FFFFFF'><b>Error de Frecuencia:</b></span> <span style='color: #FF5555; font-weight: bold;'>--- Hz</span>"
                         f"</div>"
                     )
                     if hasattr(self, 'lte_metrics_label'):

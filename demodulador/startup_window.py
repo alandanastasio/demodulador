@@ -11,7 +11,7 @@ from hardware.ettus_usrpb200_handler import USRPB200Handler
 from main import MainWindow
 
 class DeviceScannerThread(QThread):
-    devices_found_signal = pyqtSignal(list)
+    devices_found_signal = pyqtSignal(list)  # type: ignore
 
     def run(self):
         import subprocess
