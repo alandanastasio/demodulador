@@ -380,7 +380,8 @@ class MainWindow(QMainWindow):
             self.waterfall_widget.hide()
             self.layout_normal.setRowStretch(1, 0)
         self.modes_stack.setCurrentIndex(0) # PÁGINA NORMAL
-        self.radio.set_muestras_por_bloque(32768)
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            self.radio.set_muestras_por_bloque(32768)
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.show()
             self.waterfall_label.show()
