@@ -5,12 +5,15 @@ echo "📻 Iniciando setup del Demodulador SDR..."
 # 1. Instalar dependencias del sistema
 echo "📦 Instalando drivers y librerías base..."
 sudo apt update
-sudo apt install -y bladerf libbladerf-dev rtl-sdr librtlsdr-dev hackrf libhackrf-dev libportaudio2
+sudo apt install -y bladerf libbladerf-dev rtl-sdr librtlsdr-dev hackrf libhackrf-dev libportaudio2 uhd-host libuhd-dev python3-uhd
 
-# 2. Configurar el bitstream de la FPGA (Específico para bladeRF x40)
+# 2. Configurar el bitstream de la FPGA para BladeRF y UHD para Ettus USRP
 echo "🧠 Descargando bitstream (FPGA) de la bladeRF x40..."
 sudo mkdir -p /usr/share/Nuand/bladeRF/
 sudo wget -q https://www.nuand.com/fpga/hostedx40-latest.rbf -O /usr/share/Nuand/bladeRF/hostedx40.rbf
+
+echo "🧠 Descargando imágenes firmware/FPGA para Ettus USRP..."
+sudo uhd_images_downloader
 
 # 3. Reglas udev (Para no tener que usar sudo al abrir el puerto USB)
 echo "🔑 Configurando permisos USB (udev rules)..."
@@ -36,4 +39,10 @@ else
 fi
 
 echo ""
-echo "🚀 ¡Setup terminado! Ejecutá 'uv sync' si todavía no lo hiciste, y luego 'uv run python demodulador/demodulador_V0.3.py'."
+echo "🚀 ¡Setup terminado!"
+echo "Para inicializar el entorno virtual por primera vez (¡Importante para que detecte UHD del sistema!):"
+echo "    uv venv --system-site-packages"
+echo "    uv sync"
+echo ""
+echo "Para arrancar la aplicación:"
+echo "    uv run python demodulador/main.py"
