@@ -86,7 +86,7 @@ class DeviceInitializerThread(QThread):
                 probe_args = ["uhd_usrp_probe", "--args", f"type=b200" + (f",serial={serial}" if serial else "")]
                 try:
                     print("Ejecutando uhd_usrp_probe para cargar FPGA de forma segura...")
-                    subprocess.run(probe_args, capture_output=True, text=True, timeout=90)
+                    subprocess.run(probe_args, capture_output=True, text=True, timeout=120)
                 except Exception as e:
                     print("Error al ejecutar uhd_usrp_probe:", e)
 

@@ -55,7 +55,7 @@ uv sync
 ### 4. Arrancar el programa
 Con los drivers en orden y el hardware conectado (se recomienda encarecidamente utilizar un puerto y cable **USB 3.0** para anchos de banda mayores a 5 MHz), simplemente iniciá la aplicación gráfica:
 ```bash
-uv run python demodulador/main.py
+uv run python demodulador/startup_window.py
 ```
 
 ## Solución de Problemas
