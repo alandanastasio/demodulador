@@ -417,6 +417,7 @@ class DemoduladorLTE(DemoduladorBase):
         self.cp_len_2 = 144 # CP del resto de los símbolos del slot
         
         self.buffer_medicion = []
+        self.muestras_acumuladas = 0
         self.is_processing = False
         
         self.last_heavy_results = {}
@@ -449,8 +450,8 @@ class DemoduladorLTE(DemoduladorBase):
         # Pre-generar PSS desplazados en frecuencia para corrección de CFO entero
         # Cada copia es pss_t * exp(j*2*pi*icfo*n/fft_size), lo que equivale a
         # desplazar la secuencia Z-C por 'icfo' subportadoras en frecuencia.
-        # Rango ±3 subportadoras = ±45 kHz, cubre cualquier oscilador práctico.
-        self.icfo_range = 3
+        # Rango ±10 subportadoras = ±150 kHz, permite offsets de más de 100 kHz.
+        self.icfo_range = 10
         self.pss_time_shifted = {}  # {(n_id_2, icfo): pss_shifted}
         nn = np.arange(self.fft_size)
         for n_id_2 in range(3):
@@ -476,6 +477,7 @@ class DemoduladorLTE(DemoduladorBase):
 
         if muestras_iq is None:
             self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
 
         ahora = time.time()
@@ -483,14 +485,20 @@ class DemoduladorLTE(DemoduladorBase):
         if self.is_processing or ahora < self.proxima_captura:
             return None
 
-        self.buffer_medicion.extend(muestras_iq)
+        self.buffer_medicion.append(muestras_iq)
+        self.muestras_acumuladas += len(muestras_iq)
+        
         muestras_10ms = int(self.sample_rate * 0.01)
         
-        if len(self.buffer_medicion) < muestras_10ms:
+        if self.muestras_acumuladas < muestras_10ms:
             return None
             
-        chunk_procesar = np.array(self.buffer_medicion[:muestras_10ms])
-        self.buffer_medicion = []
+        buffer_unido = np.concatenate(self.buffer_medicion)
+        chunk_procesar = buffer_unido[:muestras_10ms]
+        
+        sobrante = buffer_unido[muestras_10ms:]
+        self.buffer_medicion = [sobrante] if len(sobrante) > 0 else []
+        self.muestras_acumuladas = len(sobrante)
 
         self.is_processing = True
 
@@ -519,7 +527,8 @@ class DemoduladorLTE(DemoduladorBase):
             pico_fase = np.angle(correlacion_sc[inicio_simbolo])
             
             ts = 1.0 / self.sample_rate
-            cfo_estimado_hz = pico_fase / (2 * np.pi * fs * ts)
+            cfo_fraccional_hz = pico_fase / (2 * np.pi * fs * ts)
+            cfo_estimado_hz = cfo_fraccional_hz
             
             t_vector = np.arange(N_iq) * ts
             chunk_procesar = chunk_procesar * np.exp(-1j * 2 * np.pi * cfo_estimado_hz * t_vector)
@@ -535,12 +544,13 @@ class DemoduladorLTE(DemoduladorBase):
             mejor_corr_abs = None
             mejor_icfo = 0
             
-            # MODO TRACKING: Si estábamos enganchados, solo buscamos ese N_id_2 con icfo=0
+            # MODO TRACKING: Si estábamos enganchados, usamos el mismo N_id_2 y el icfo anterior
             estaba_enganchado = self.ultimo_lte_metrics.get('trama_valida', False) and self.ultimo_lte_metrics.get('pss_found', False)
             
             if estaba_enganchado:
                 n_id_2 = self.ultimo_lte_metrics.get('N_id_2', 0)
-                pss_t = self.pss_time[n_id_2]
+                mejor_icfo = self.ultimo_lte_metrics.get('ultimo_icfo', 0)
+                pss_t = self.pss_time_shifted[(n_id_2, mejor_icfo)]
                 corr = signal.correlate(chunk_procesar, pss_t, mode='valid', method='fft')
                 corr_abs = np.abs(corr)
                 mejor_corr = np.max(corr_abs)
@@ -567,15 +577,19 @@ class DemoduladorLTE(DemoduladorBase):
             
             if es_pico_valido:
                 # Aplicar corrección de CFO entero si se detectó
+                cfo_entero_hz = 0
                 if mejor_icfo != 0:
-                    icfo_hz = mejor_icfo * 15000.0
-                    chunk_procesar = chunk_procesar * np.exp(-1j * 2 * np.pi * icfo_hz * t_vector)
-                    cfo_estimado_hz += icfo_hz
+                    cfo_entero_hz = mejor_icfo * 15000.0
+                    chunk_procesar = chunk_procesar * np.exp(-1j * 2 * np.pi * cfo_entero_hz * t_vector)
+                    cfo_estimado_hz += cfo_entero_hz
 
                 self.ultimo_lte_metrics['pss_found'] = True
                 self.ultimo_lte_metrics['N_id_2'] = mejor_N_id_2
                 self.ultimo_lte_metrics['pss_pos'] = mejor_pos
                 self.ultimo_lte_metrics['cfo_hz'] = cfo_estimado_hz
+                self.ultimo_lte_metrics['cfo_fraccional_hz'] = cfo_fraccional_hz
+                self.ultimo_lte_metrics['cfo_entero_hz'] = cfo_entero_hz
+                self.ultimo_lte_metrics['ultimo_icfo'] = mejor_icfo
 
                         
             else:

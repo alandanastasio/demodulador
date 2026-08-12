@@ -396,13 +396,17 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     bw_text = bw_map.get(sr_val, sr_val)
 
                     cfo_hz = lte.get('cfo_hz', 0)
+                    cfo_frac = lte.get('cfo_fraccional_hz', 0)
+                    cfo_ent = lte.get('cfo_entero_hz', 0)
                     cfo_color = "#00FF00" if abs(cfo_hz) < 15000 else "#FF5555"
 
                     html_lte = (
                         f"<div style='line-height: 1.5;'>"
                         f"<span style='color: #FFFFFF'><b>Ancho de Banda:</b></span> <span style='color: #00FF00; font-weight: bold;'>{bw_text}</span><br>"
                         f"<span style='color: #FFFFFF'><b>Cell ID:</b></span> <span style='color: #00FF00; font-weight: bold;'>{cell_id}</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Error de Frecuencia:</b></span> <span style='color: {cfo_color}; font-weight: bold;'>{cfo_hz:.0f} Hz</span>"
+                        f"<span style='color: #FFFFFF'><b>Error de Frecuencia:</b></span> <span style='color: {cfo_color}; font-weight: bold;'>{cfo_hz:.0f} Hz</span><br>"
+                        f"<span style='color: #AAAAAA; font-size: 11px;'>&nbsp;&nbsp;├─ S&C Fraccional: {cfo_frac:+.0f} Hz</span><br>"
+                        f"<span style='color: #AAAAAA; font-size: 11px;'>&nbsp;&nbsp;└─ PSS Entero: {cfo_ent:+.0f} Hz</span>"
                         f"</div>"
                     )
                     if hasattr(self, 'lte_metrics_label'):
