@@ -92,6 +92,7 @@ class DemoduladorWBFM(DemoduladorBase):
     def procesar(self, muestras_iq: np.ndarray) -> dict:
         if muestras_iq is None:
             self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
         """ Recepcionista ultrarrápida. Cero matemáticas. """
         self.buffer_medicion.append(muestras_iq)

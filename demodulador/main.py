@@ -329,8 +329,8 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(sample_rate, fft_size)
         self.radio.set_sample_rate(sample_rate)
         
-        self.unit_combo.setCurrentText("GHz")
-        self.freq_input.setValue(2.63)
+        self.unit_combo.setCurrentText("MHz")
+        self.freq_input.setValue(2132.5)
 
         # Fijar y deshabilitar los combos de SR y FFT
         sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")

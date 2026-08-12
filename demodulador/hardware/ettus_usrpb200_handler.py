@@ -65,22 +65,22 @@ class USRPB200Handler(SDRBase):
         if was_running:
             self.stop_rx()
             
-        # Para evitar el warning temporal de decimation en UHD
-        try:
-            self.usrp.set_rx_rate(sr_hz, 0)
-        except Exception:
-            pass
-            
+        # Ajustar el Master Clock Rate según la familia de sample rates
+        # Esto asegura que la decimación (MCR / SR) sea siempre un número par,
+        # lo que habilita los filtros Half-Band de la USRP y evita warnings de "odd decimation".
         try:
             if sr_hz in [30.72e6, 15.36e6, 7.68e6, 3.84e6, 1.92e6]:
-                self.usrp.set_master_clock_rate(30.72e6)
+                # 61.44 MHz es el reloj ideal para LTE (múltiplo exacto)
+                # 61.44 / 15.36 = 4 (par, sin warning)
+                self.usrp.set_master_clock_rate(61.44e6)
             elif sr_hz == 23.04e6:
                 self.usrp.set_master_clock_rate(46.08e6)
             else:
                 self.usrp.set_master_clock_rate(60e6)
-        except Exception as e:
+        except Exception:
             pass
             
+        # Ahora sí, ajustamos el sample rate y el filtro pasabajo
         self.usrp.set_rx_rate(sr_hz, 0)
         self.usrp.set_rx_bandwidth(sr_hz, 0)
         
@@ -97,8 +97,6 @@ class USRPB200Handler(SDRBase):
         self.streamer.issue_stream_cmd(stream_cmd)
         
         metadata = uhd.types.RXMetadata()
-        
-        # ✅ RESERVAMOS MEMORIA UNA SOLA VEZ AFUERA DEL BUCLE
         chunk_size = self.muestras_por_bloque
         recv_buffer = np.zeros(chunk_size, dtype=np.complex64)
         
@@ -119,12 +117,10 @@ class USRPB200Handler(SDRBase):
                     if metadata.error_code != uhd.types.RXMetadataErrorCode.none:
                         if metadata.error_code != uhd.types.RXMetadataErrorCode.timeout:
                             # Hubo un OVERFLOW (O) o error de secuencia.
-                            # La continuidad de las muestras se rompió irremediablemente.
-                            # Avisamos al callback con None para que descarte cualquier buffer a medio armar.
                             self.rx_callback(None)
                             samps_received = 0
                             zero_samps_count = 0
-                            continue
+                            break # Romper el bucle interno para descartar este bloque y reiniciar
                             
                     if samps == 0:
                         zero_samps_count += 1
@@ -138,7 +134,6 @@ class USRPB200Handler(SDRBase):
                     samps_received += samps
                 
                 if samps_received == chunk_size and self.is_running:
-                    # Mandamos una copia casteada al callback
                     self.rx_callback(recv_buffer.astype(np.complex128))
                     
             except Exception as e:
