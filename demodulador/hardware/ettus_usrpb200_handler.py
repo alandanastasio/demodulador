@@ -1,11 +1,35 @@
 import threading
 import time
 import numpy as np
-import uhd
+import os
+import glob
+
+if "UHD_IMAGES_DIR" not in os.environ:
+    common_paths = [
+        "/usr/share/uhd/images",
+        "/usr/local/share/uhd/images",
+        "/opt/uhd/share/uhd/images",
+        "/home/*/uhd-local/share/uhd/images",
+        "/usr/lib/uhd/share/uhd/images"
+    ]
+    for pattern in common_paths:
+        for path in glob.glob(pattern):
+            if os.path.exists(os.path.join(path, "usrp_b200_fw.hex")):
+                os.environ["UHD_IMAGES_DIR"] = path
+                break
+
+try:
+    import uhd
+    UHD_AVAILABLE = True
+except ImportError:
+    UHD_AVAILABLE = False
+    
 from .sdr_base import SDRBase
 
 class USRPB200Handler(SDRBase):
     def __init__(self, rx_callback, serial=None):
+        if not UHD_AVAILABLE:
+            raise RuntimeError("El driver 'uhd' no está instalado. Instalá python3-uhd o compila UHD con la API de Python para usar la USRP.")
         super().__init__(rx_callback)
         self.serial = serial
         
