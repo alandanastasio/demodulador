@@ -37,23 +37,13 @@ cd demodulador
 
 ### 2. Ejecutar el Script de Configuración del Sistema
 Este script instalará todos los drivers a nivel de sistema operativo (UHD, bladeRF, RTL, HackRF, dependencias de audio de PortAudio) y descargará las imágenes de FPGA correspondientes para tu hardware SDR.
+Tambien se encargará de instalar [uv](https://github.com/astral-sh/uv) para generar el entorno virtual y gestionar dependencias.
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
-
-### 3. Crear el entorno virtual con UV
-El proyecto utiliza [uv](https://github.com/astral-sh/uv) como gestor rápido de dependencias. 
-> ⚠️ **IMPORTANTE:** Dado que el driver oficial de Ettus (UHD) se instaló a nivel de sistema operativo con `apt`, es de vital importancia crear el entorno virtual de Python permitiéndole leer los paquetes del sistema, de lo contrario fallará al importar `uhd`.
-
 ### 3. Arrancar el programa
 Con los drivers en orden, el entorno virtual creado automáticamente y el hardware conectado (se recomienda encarecidamente utilizar un puerto y cable **USB 3.0** para anchos de banda mayores a 5 MHz), simplemente iniciá la aplicación gráfica:
 ```bash
 uv run python demodulador/startup_window.py
 ```
-
-## Solución de Problemas
-
-*   **Console spam con letras "O" u "Overflow":** Esto significa que la tasa de muestreo (Sample Rate) configurada excede la capacidad de transferencia de tu puerto USB (muy común si usas USB 2.0) o de procesamiento de tu CPU. Baja el ancho de banda o el sample rate en el panel superior, o asegurate de usar un puerto SuperSpeed azul.
-*   **ModuleNotFoundError: No module named 'uhd':** Olvidaste crear el entorno de `uv` con la bandera `--system-site-packages`. Borrá la carpeta `.venv` oculta del proyecto y volvé al Paso 3.
-*   **La bladeRF tira error al iniciar:** Asegurate de que descargaste el firmware e instalaste las reglas `udev` (que están empaquetadas en el Paso 2 del `setup.sh`). Luego, desenchufa y vuelve a enchufar el SDR.
