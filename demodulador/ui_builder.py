@@ -10,6 +10,17 @@ def build_ui(self, state):
     self.toolbar = QToolBar("Barra Principal")
     self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
     self.toolbar.setMovable(False)
+    self.toolbar.setStyleSheet("""
+        QToolBar {
+            border-bottom: 1px solid #555;
+            background-color: #2b2b2b;
+        }
+        QToolBar::separator {
+            background-color: #555;
+            width: 1px;
+            margin: 0px 10px;
+        }
+    """)
 
     # Logo a la izquierda
     self.logo_label = QLabel()
@@ -21,7 +32,9 @@ def build_ui(self, state):
     pixmap = pixmap.scaledToHeight(32, Qt.TransformationMode.SmoothTransformation)
     self.logo_label.setPixmap(pixmap)
     self.logo_label.setContentsMargins(10, 0, 10, 0)
+    self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     self.toolbar.addWidget(self.logo_label)
+    self.toolbar.addSeparator()
 
     # Easter egg logic
     self.logo_clicks = 0
@@ -149,8 +162,7 @@ def build_ui(self, state):
 
     self.rec_play_btn.setMenu(self.rec_play_menu)
     self.toolbar.addWidget(self.rec_play_btn)
-
-    self.toolbar.addSeparator() # Una barrita vertical para separar
+    self.toolbar.addSeparator()
 
     main_layout = QHBoxLayout()
 
@@ -724,6 +736,7 @@ def build_ui(self, state):
     # Asignar menú al botón y agregar a la barra principal
     self.demod_btn.setMenu(self.demod_menu)
     self.toolbar.addWidget(self.demod_btn)
+    self.toolbar.addSeparator()
 
     # --- SUBMENÚ: DIGITAL ---
     self.digital_menu = QMenu("Digitales", self)
