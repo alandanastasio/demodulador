@@ -738,6 +738,14 @@ def build_ui(self, state):
     self.toolbar.addWidget(self.demod_btn)
     self.toolbar.addSeparator()
 
+    # Botón Cambiar SDR
+    self.change_sdr_btn = QToolButton()
+    self.change_sdr_btn.setText("Cambiar SDR")
+    self.change_sdr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.change_sdr_btn.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px 15px; border-radius: 4px; margin: 4px;")
+    self.change_sdr_btn.clicked.connect(self.restart_app)
+    self.toolbar.addWidget(self.change_sdr_btn)
+
     # --- SUBMENÚ: DIGITAL ---
     self.digital_menu = QMenu("Digitales", self)
     self.digital_menu.setStyleSheet("""

@@ -735,3 +735,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Éxito", f"Espectrograma guardado correctamente en:\n{filepath}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen:\n{str(e)}")
+
+    def restart_app(self):
+        import sys
+        from PyQt6.QtCore import QProcess
+        
+        if hasattr(self, 'radio') and self.radio:
+            try:
+                self.radio.stop_rx()
+                if hasattr(self.radio, 'close'):
+                    self.radio.close()
+            except Exception:
+                pass
+                
+        QProcess.startDetached(sys.executable, sys.argv)
+        QApplication.quit()
