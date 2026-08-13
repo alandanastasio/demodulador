@@ -59,11 +59,13 @@ else
     echo "⏭️  Flasheo omitido."
 fi
 
+# 3. Crear entorno virtual automáticamente (Hardcodeado al Python del sistema operativo)
+echo "📦 Creando entorno virtual e instalando librerías de Python..."
+rm -rf .venv
+uv venv --python /usr/bin/python3 --system-site-packages
+uv sync
+
 echo ""
 echo "🚀 ¡Setup terminado!"
-echo "Para inicializar el entorno virtual por primera vez (¡Importante para que detecte UHD del sistema!):"
-echo "    uv venv --python /usr/bin/python3 --system-site-packages"
-echo "    uv sync"
-echo ""
 echo "Para arrancar la aplicación:"
 echo "    uv run python demodulador/startup_window.py"

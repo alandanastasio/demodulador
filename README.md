@@ -46,14 +46,8 @@ chmod +x setup.sh
 El proyecto utiliza [uv](https://github.com/astral-sh/uv) como gestor rápido de dependencias. 
 > ⚠️ **IMPORTANTE:** Dado que el driver oficial de Ettus (UHD) se instaló a nivel de sistema operativo con `apt`, es de vital importancia crear el entorno virtual de Python permitiéndole leer los paquetes del sistema, de lo contrario fallará al importar `uhd`.
 
-Ejecutá los siguientes comandos para crear y sincronizar el entorno virtual:
-```bash
-uv venv --python /usr/bin/python3 --system-site-packages
-uv sync
-```
-
-### 4. Arrancar el programa
-Con los drivers en orden y el hardware conectado (se recomienda encarecidamente utilizar un puerto y cable **USB 3.0** para anchos de banda mayores a 5 MHz), simplemente iniciá la aplicación gráfica:
+### 3. Arrancar el programa
+Con los drivers en orden, el entorno virtual creado automáticamente y el hardware conectado (se recomienda encarecidamente utilizar un puerto y cable **USB 3.0** para anchos de banda mayores a 5 MHz), simplemente iniciá la aplicación gráfica:
 ```bash
 uv run python demodulador/startup_window.py
 ```
