@@ -61,6 +61,7 @@ fi
 
 # 3. Crear entorno virtual automáticamente (Hardcodeado al Python del sistema operativo)
 echo "📦 Creando entorno virtual e instalando librerías de Python..."
+rm -f .python-version
 rm -rf .venv
 uv venv --python /usr/bin/python3 --system-site-packages
 uv sync
