@@ -36,12 +36,13 @@ sudo wget -q https://www.nuand.com/fpga/hostedx40-latest.rbf -O /usr/share/Nuand
 echo "🧠 Descargando imágenes firmware/FPGA para Ettus USRP..."
 if command -v uhd_images_downloader &> /dev/null; then
     sudo uhd_images_downloader
-elif [ -f /lib/x86_64-linux-gnu/uhd/utils/uhd_images_downloader.py ]; then
-    sudo python3 /lib/x86_64-linux-gnu/uhd/utils/uhd_images_downloader.py
-elif [ -f /usr/lib/uhd/utils/uhd_images_downloader.py ]; then
-    sudo python3 /usr/lib/uhd/utils/uhd_images_downloader.py
 else
-    echo "⚠️  No se encontró el descargador de imágenes de UHD en tu sistema. Es posible que debas descargarlas manualmente."
+    DOWNLOADER=$(find /usr /lib /opt -type f -name "uhd_images_downloader.py" 2>/dev/null | head -n 1)
+    if [ -n "$DOWNLOADER" ]; then
+        sudo python3 "$DOWNLOADER"
+    else
+        echo "⚠️  No se encontró el descargador de imágenes de UHD en tu sistema. Es posible que debas descargarlas manualmente."
+    fi
 fi
 
 # 3. Reglas udev (Para no tener que usar sudo al abrir el puerto USB)
