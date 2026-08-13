@@ -79,6 +79,10 @@ class MainWindow(QMainWindow):
 
         # Construimos la interfaz gráfica delegada
         build_ui(self, state)
+        
+        # Conectar el auto-escalado para que se dispare al cambiar de modo
+        self.modes_stack.currentChanged.connect(self._schedule_auto_scale)
+        
         self.set_normal_mode()
 
         # Conectamos el actualizador de gráficos delegando a render_plot
@@ -123,6 +127,42 @@ class MainWindow(QMainWindow):
                 )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
+    
+    def _schedule_auto_scale(self):
+        # Dispara el auto-escalado 1 segundo después del cambio
+        QTimer.singleShot(1000, self._trigger_auto_scale_on)
+        
+    def _trigger_auto_scale_on(self):
+        plot_names = [
+            'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
+            'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+        ]
+        for name in plot_names:
+            plot = getattr(self, name, None)
+            if plot is not None and plot.isVisible():
+                try:
+                    plot.getViewBox().enableAutoRange(axis=pg.ViewBox.XYAxes, enable=True)
+                except Exception:
+                    pass
+        # Desactiva el auto-escalado continuo 100ms después para liberar la vista
+        QTimer.singleShot(100, self._trigger_auto_scale_off)
+
+    def _trigger_auto_scale_off(self):
+        plot_names = [
+            'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
+            'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+        ]
+        for name in plot_names:
+            plot = getattr(self, name, None)
+            if plot is not None and plot.isVisible():
+                try:
+                    plot.getViewBox().enableAutoRange(axis=pg.ViewBox.XYAxes, enable=False)
+                except Exception:
+                    pass
+
+    # ==========================================
 
     def set_wbfm_mode(self):
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
