@@ -5,7 +5,7 @@ echo "📻 Iniciando setup del Demodulador SDR..."
 # 1. Instalar dependencias del sistema
 echo "📦 Instalando drivers y librerías base..."
 sudo apt update
-sudo apt install -y curl bladerf libbladerf-dev rtl-sdr librtlsdr-dev hackrf libhackrf-dev libportaudio2 uhd-host libuhd-dev python3-uhd
+sudo apt install -y build-essential python3-dev curl cmake libusb-1.0-0-dev pkg-config bladerf libbladerf-dev rtl-sdr librtlsdr-dev libportaudio2 uhd-host libuhd-dev python3-uhd
 
 # 1.5. Instalar 'uv' si no existe
 if ! command -v uv &> /dev/null; then
@@ -13,6 +13,20 @@ if ! command -v uv &> /dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
+
+# 1.6. Compilar libhackrf desde el código fuente (requerido para python-hackrf >= 1.5.0.1)
+echo "🛠️  Compilando libhackrf oficial desde código fuente..."
+sudo apt remove -y hackrf libhackrf-dev &>/dev/null || true
+cd /tmp
+rm -rf hackrf
+git clone https://github.com/greatscottgadgets/hackrf.git
+cd hackrf/host
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+cd ~/demodulador || cd -
 
 # 2. Configurar el bitstream de la FPGA para BladeRF y UHD para Ettus USRP
 echo "🧠 Descargando bitstream (FPGA) de la bladeRF x40..."
