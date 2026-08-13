@@ -48,7 +48,7 @@ El proyecto utiliza [uv](https://github.com/astral-sh/uv) como gestor rápido de
 
 Ejecutá los siguientes comandos para crear y sincronizar el entorno virtual:
 ```bash
-uv venv --system-site-packages
+uv venv --python /usr/bin/python3 --system-site-packages
 uv sync
 ```
 

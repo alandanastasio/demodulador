@@ -62,7 +62,7 @@ fi
 echo ""
 echo "🚀 ¡Setup terminado!"
 echo "Para inicializar el entorno virtual por primera vez (¡Importante para que detecte UHD del sistema!):"
-echo "    uv venv --system-site-packages"
+echo "    uv venv --python /usr/bin/python3 --system-site-packages"
 echo "    uv sync"
 echo ""
 echo "Para arrancar la aplicación:"
