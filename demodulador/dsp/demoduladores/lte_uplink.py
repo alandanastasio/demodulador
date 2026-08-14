@@ -50,47 +50,72 @@ class DemoduladorLTEUplink(DemoduladorBase):
         start_idx = (self.Tu - num_subcarriers) // 2
         self.occupied_subcarriers = np.arange(start_idx, start_idx + num_subcarriers)
         
-    def procesar_bloque(self, iq_data: np.ndarray) -> np.ndarray:
-        if iq_data is None or len(iq_data) == 0:
-            return iq_data
+    def procesar(self, muestras_iq: np.ndarray) -> dict:
+        with self._lock:
+            if self.nuevos_datos_listos:
+                self.nuevos_datos_listos = False
+                return self.last_heavy_results
+
+        if muestras_iq is None or len(muestras_iq) == 0:
+            return None
             
         with self._lock:
-            self.buffer_medicion.append(iq_data)
-            self.muestras_acumuladas += len(iq_data)
+            self.buffer_medicion.append(muestras_iq)
+            self.muestras_acumuladas += len(muestras_iq)
             
-        if not self.is_processing and time.time() >= self.proxima_captura:
-            with self._lock:
-                min_muestras = int(0.02 * self.sample_rate)
-                if self.muestras_acumuladas >= min_muestras:
+        ahora = time.time()
+        if not self.is_processing and ahora >= self.proxima_captura:
+            min_muestras = int(0.02 * self.sample_rate)
+            if self.muestras_acumuladas >= min_muestras:
+                with self._lock:
                     chunk = np.concatenate(self.buffer_medicion)
-                    self.buffer_medicion = []
-                    self.muestras_acumuladas = 0
+                    chunk_procesar = chunk[:min_muestras]
+                    sobrante = chunk[min_muestras:]
+                    self.buffer_medicion = [sobrante] if len(sobrante) > 0 else []
+                    self.muestras_acumuladas = len(sobrante)
                     
                     self.is_processing = True
-                    threading.Thread(target=self._procesar_heavy_thread, args=(chunk,), daemon=True).start()
+                    threading.Thread(target=self._procesar_heavy_thread, args=(chunk_procesar,), daemon=True).start()
                     
-        return iq_data
+        return None
 
     def _procesar_heavy_thread(self, chunk):
         try:
             self.ultimo_chunk_norm = chunk / np.max(np.abs(chunk))
             
-            # Sincronización Schmidl & Cox para Uplink
-            Tu = self.Tu
-            cp_len = self.cp_len_2
+            # TODO: Implementar sincronización Schmidl & Cox, SC-FDMA, etc.
             
-            # TODO: Completar el resto de la implementación de Schmidl & Cox y DFT-S-OFDM
+            # --- Cálculo básico de espectro para UI ---
+            ui_fs = self.fft_size
+            rf_chunk_ui = chunk[:ui_fs] if len(chunk) >= ui_fs else np.pad(chunk, (0, ui_fs - len(chunk)))
             
-            # DMRS (3er símbolo del slot)
-            # mia0 = self.cp_len_1 + Tu + 2*(self.cp_len_2 + Tu) + self.cp_len_2
+            chunk_psd = chunk.copy()[:ui_fs]
+            if len(chunk_psd) < ui_fs:
+                chunk_psd = np.pad(chunk_psd, (0, ui_fs - len(chunk_psd)))
+                
+            chunk_psd = chunk_psd - np.mean(chunk_psd)
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_psd, n=ui_fs)))**2 / ui_fs
+            PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
             
-            # PUSCH (otros símbolos)
+            centro_psd = ui_fs // 2
+            PSD[centro_psd] = (PSD[centro_psd - 1] + PSD[centro_psd + 1]) / 2.0
             
-            with self._lock:
-                self.last_heavy_results = {
-                    'chunk_norm': self.ultimo_chunk_norm,
+            resultados = {
+                'psd_rf': PSD,
+                'rf_chunk': rf_chunk_ui, 
+                'mpx_time': np.array([]),  
+                'audio_time_L': np.array([]),
+                'audio_time_R': np.array([]),
+                'psd_mpx': np.array([]),
+                'f_axis_mpx': np.array([]),
+                'metricas': {
                     'lte_metrics': self.ultimo_lte_metrics,
-                }
+                },
+                'evm_data': None
+            }
+
+            with self._lock:
+                self.last_heavy_results = resultados
                 self.nuevos_datos_listos = True
                 
         except Exception as e:
@@ -98,11 +123,3 @@ class DemoduladorLTEUplink(DemoduladorBase):
         finally:
             self.is_processing = False
             self.proxima_captura = time.time() + self.pausa_entre_snapshots
-
-    def get_resultados(self):
-        with self._lock:
-            if self.nuevos_datos_listos:
-                res = self.last_heavy_results
-                self.nuevos_datos_listos = False
-                return res
-            return None

@@ -284,7 +284,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     self.wifi_hw_metrics_label.setText(html_hw)
 
         # --- RENDERIZADO ESPECÍFICO DE LTE ---
-        if state.get('demod_mode') == 'lte':
+        if state.get('demod_mode') in ['lte', 'lte_uplink']:
             if raw_samples is not None:
                 # Calculamos la magnitud de las muestras IQ
                 mag = np.abs(raw_samples)
