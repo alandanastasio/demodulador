@@ -406,7 +406,7 @@ def decodificar_pcfich(simbolos_16, cell_id, n_s=0):
     
     return cfi, scores[max_idx], es_valido
 
-class DemoduladorLTE(DemoduladorBase):
+class DemoduladorLTEDownlink(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 30.72e6 
         self.fft_size = 2048
@@ -431,7 +431,7 @@ class DemoduladorLTE(DemoduladorBase):
         self.ultimo_puntos_corr = np.array([])
 
     @property
-    def id(self): return "lte"
+    def id(self): return "lte_downlink"
 
     @property
     def nombre_mostrar(self): return "LTE (OFDM/SC-FDMA)"

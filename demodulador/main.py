@@ -22,7 +22,8 @@ from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
-from dsp.demoduladores.lte import DemoduladorLTE
+from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
+from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -79,6 +80,10 @@ class MainWindow(QMainWindow):
 
         # Construimos la interfaz gráfica delegada
         build_ui(self, state)
+        
+        # Conectar el auto-escalado para que se dispare al cambiar de modo
+        self.modes_stack.currentChanged.connect(self._schedule_auto_scale)
+        
         self.set_normal_mode()
 
         # Conectamos el actualizador de gráficos delegando a render_plot
@@ -123,6 +128,42 @@ class MainWindow(QMainWindow):
                 )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
+    
+    def _schedule_auto_scale(self):
+        # Dispara el auto-escalado 1 segundo después del cambio
+        QTimer.singleShot(1000, self._trigger_auto_scale_on)
+        
+    def _trigger_auto_scale_on(self):
+        plot_names = [
+            'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
+            'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+        ]
+        for name in plot_names:
+            plot = getattr(self, name, None)
+            if plot is not None and plot.isVisible():
+                try:
+                    plot.getViewBox().enableAutoRange(axis=pg.ViewBox.XYAxes, enable=True)
+                except Exception:
+                    pass
+        # Desactiva el auto-escalado continuo 100ms después para liberar la vista
+        QTimer.singleShot(100, self._trigger_auto_scale_off)
+
+    def _trigger_auto_scale_off(self):
+        plot_names = [
+            'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
+            'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+        ]
+        for name in plot_names:
+            plot = getattr(self, name, None)
+            if plot is not None and plot.isVisible():
+                try:
+                    plot.getViewBox().enableAutoRange(axis=pg.ViewBox.XYAxes, enable=False)
+                except Exception:
+                    pass
+
+    # ==========================================
 
     def set_wbfm_mode(self):
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -325,7 +366,7 @@ class MainWindow(QMainWindow):
             while pot2 < muestras: pot2 *= 2
             self.radio.set_muestras_por_bloque(pot2)
 
-        self.demodulador_actual = DemoduladorLTE()
+        self.demodulador_actual = DemoduladorLTEDownlink()
         self.demodulador_actual.configurar(sample_rate, fft_size)
         self.radio.set_sample_rate(sample_rate)
         
@@ -336,6 +377,90 @@ class MainWindow(QMainWindow):
         sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")
         self.sr_combo.blockSignals(True)
         # Agregar el valor exacto si no existe en la lista
+        if self.sr_combo.findText(sr_text) == -1:
+            self.sr_combo.addItem(sr_text)
+        self.sr_combo.setCurrentText(sr_text)
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        fft_text = str(fft_size)
+        if self.fft_combo.findText(fft_text) == -1:
+            self.fft_combo.addItem(fft_text)
+        self.fft_combo.setCurrentText(fft_text)
+        self.fft_combo.setEnabled(False)
+        self.fft_combo.blockSignals(False)
+        
+        self.update_x_axis()
+        self._restore_panels()
+
+    def set_lte_uplink_mode(self, bw_mhz=5):
+        bw_to_config = {
+            1.4: (1.92e6, 128, 6),
+            3:   (3.84e6, 256, 15),
+            5:   (7.68e6, 512, 25),
+            10:  (15.36e6, 1024, 50),
+            15:  (23.04e6, 1536, 75),
+            20:  (30.72e6, 2048, 100),
+        }
+        sample_rate, fft_size, rb_count = bw_to_config.get(bw_mhz, (7.68e6, 512, 25))
+        
+        current_w = self.lte_q1_stack.widget(0)
+        if current_w != self.freq_plot:
+            self.lte_q1_stack.removeWidget(current_w)
+            self.lte_q1_stack.insertWidget(0, self.freq_plot)
+        
+        self.lte_q1_stack.setCurrentIndex(0 if self.action_q1_espectro.isChecked() else 1)
+        
+        self.layout_lte.setRowStretch(0, 1)
+        self.layout_lte.setRowStretch(1, 1)
+        self.layout_lte.setRowStretch(2, 1)
+        self.layout_lte.setColumnStretch(0, 1)
+        self.layout_lte.setColumnStretch(1, 1)
+        if hasattr(self, 'waterfall_checkbox'): self.waterfall_checkbox.hide()
+        if hasattr(self, 'waterfall_label'): self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'): self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'): self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'): self.waterfall_line2.hide()
+        if hasattr(self, 'zero_span_btn'): 
+            self.zero_span_btn.setChecked(False)
+            state['zero_span'] = False
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        
+        self.trace_manager.reset()
+        
+        self.modes_stack.setCurrentIndex(3) # PÁGINA LTE
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
+        self.lte_metrics_label.show()
+
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            self.sa_fft_size_text = self.fft_combo.currentText()
+
+        state['demod_mode'] = 'lte_uplink'
+        state['sample_rate'] = sample_rate
+        state['fft_size'] = fft_size
+        
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            muestras = int(sample_rate * 0.002)
+            pot2 = 1
+            while pot2 < muestras: pot2 *= 2
+            self.radio.set_muestras_por_bloque(pot2)
+
+        self.demodulador_actual = DemoduladorLTEUplink()
+        self.demodulador_actual.configurar(sample_rate, fft_size, rb_count)
+        self.radio.set_sample_rate(sample_rate)
+        
+        self.unit_combo.setCurrentText("MHz")
+        self.freq_input.setValue(2132.5)
+
+        sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")
+        self.sr_combo.blockSignals(True)
         if self.sr_combo.findText(sr_text) == -1:
             self.sr_combo.addItem(sr_text)
         self.sr_combo.setCurrentText(sr_text)
@@ -695,3 +820,18 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Éxito", f"Espectrograma guardado correctamente en:\n{filepath}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen:\n{str(e)}")
+
+    def restart_app(self):
+        import sys
+        from PyQt6.QtCore import QProcess
+        
+        if hasattr(self, 'radio') and self.radio:
+            try:
+                self.radio.stop_rx()
+                if hasattr(self.radio, 'close'):
+                    self.radio.close()
+            except Exception:
+                pass
+                
+        QProcess.startDetached(sys.executable, sys.argv)
+        QApplication.quit()
