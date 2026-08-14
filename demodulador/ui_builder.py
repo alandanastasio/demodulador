@@ -765,18 +765,35 @@ def build_ui(self, state):
         QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
         QMenu::item:selected { background-color: #555555; }
     """)
+
+    self.lte_downlink_menu = QMenu("Downlink", self)
+    self.lte_downlink_menu.setStyleSheet(self.lte_menu.styleSheet())
+    
+    self.lte_uplink_menu = QMenu("Uplink", self)
+    self.lte_uplink_menu.setStyleSheet(self.lte_menu.styleSheet())
     
     lte_bws = [("1.4 MHz (6 RB)", 1.4), ("3 MHz (15 RB)", 3), ("5 MHz (25 RB)", 5),
                ("10 MHz (50 RB)", 10), ("15 MHz (75 RB)", 15), ("20 MHz (100 RB)", 20)]
     
     self.lte_bw_actions = []
     for label, bw in lte_bws:
-        action = QAction(label, self)
-        action.setCheckable(True)
-        action.triggered.connect(lambda checked, b=bw: self.set_lte_mode(b))
-        self.demod_group.addAction(action)
-        self.lte_menu.addAction(action)
-        self.lte_bw_actions.append(action)
+        # Downlink actions
+        action_dl = QAction(label, self)
+        action_dl.setCheckable(True)
+        action_dl.triggered.connect(lambda checked, b=bw: self.set_lte_mode(b))
+        self.demod_group.addAction(action_dl)
+        self.lte_downlink_menu.addAction(action_dl)
+        self.lte_bw_actions.append(action_dl)
+        
+        # Uplink actions
+        action_ul = QAction(label, self)
+        action_ul.setCheckable(True)
+        action_ul.triggered.connect(lambda checked, b=bw: self.set_lte_uplink_mode(b))
+        self.demod_group.addAction(action_ul)
+        self.lte_uplink_menu.addAction(action_ul)
+        
+    self.lte_menu.addMenu(self.lte_downlink_menu)
+    self.lte_menu.addMenu(self.lte_uplink_menu)
     
     self.digital_menu.addMenu(self.lte_menu)
 
