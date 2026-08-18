@@ -350,6 +350,18 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        
+        if hasattr(self, 'action_show_data'):
+            self.action_show_data.setText("Datos PDSCH")
+            self.action_show_pss.setText("PSS Zadoff-Chu")
+            
+            # Restaurar visibilidad de todo
+            for a in self.menu_lte_layers.actions():
+                a.setVisible(True)
+                if a.defaultWidget():
+                    a.defaultWidget().setVisible(True)
+                    
+        self._actualizar_tabla_lte('lte')
 
         # Guardamos el state del SA antes de pisar todo
         if state.get('demod_mode', 'none') == 'none':
@@ -394,6 +406,52 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
         self._restore_panels()
 
+    def _actualizar_tabla_lte(self, modo):
+        from PyQt6.QtWidgets import QTableWidgetItem
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtCore import Qt
+        
+        self.lte_frame_summary.clearContents()
+        self.lte_frame_summary.setRowCount(0)
+        
+        if modo == 'lte':
+            canales = [
+                ("P-SS", "#FF6600", "Z-Chu", "Primary Synchronization Signal"),
+                ("S-SS", "#4477FF", "BPSK", "Secondary Synchronization Signal"),
+                ("PBCH", "#00FF00", "QPSK", "Physical Broadcast Channel"),
+                ("PCFICH", "#AA00FF", "QPSK", "Physical Control Format Indicator Channel"),
+                ("PHICH", "#FF3333", "BPSK (CDM)", "Physical Hybrid ARQ Indicator Channel"),
+                ("PDCCH", "#FFFF00", "QPSK", "Physical Downlink Control Channel"),
+                ("C-RS", "#00AADD", "QPSK", "Cell-specific Reference Signal"),
+                ("PDSCH_QPSK", "#00FFFF", "QPSK", "Physical Downlink Shared Channel (QPSK)"),
+                ("PDSCH_16QAM", "#FFD500", "16QAM", "Physical Downlink Shared Channel (16QAM)"),
+                ("PDSCH_64QAM", "#AAFF00", "64QAM", "Physical Downlink Shared Channel (64QAM)"),
+                ("Non-alloc", "#AAAAAA", "---", "Unallocated Resource Elements")
+            ]
+        else:
+            canales = [
+                ("DMRS", "#FF6600", "Z-Chu", "Demodulation Reference Signal"),
+                ("PUSCH", "#00FFFF", "QPSK/QAM", "Physical Uplink Shared Channel"),
+                ("PUCCH", "#FFFF00", "QPSK", "Physical Uplink Control Channel"),
+                ("PRACH", "#FF3333", "Z-Chu", "Physical Random Access Channel"),
+                ("SRS", "#4477FF", "Z-Chu", "Sounding Reference Signal"),
+                ("Non-alloc", "#AAAAAA", "---", "Unallocated Resource Elements")
+            ]
+            
+        self.lte_frame_summary.setRowCount(len(canales))
+        for row, (nombre, color, mod_fmt, desc) in enumerate(canales):
+            item_ch = QTableWidgetItem(nombre)
+            item_ch.setForeground(QColor(color))
+            item_ch.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            item_ch.setToolTip(desc)
+            self.lte_frame_summary.setItem(row, 0, item_ch)
+            
+            for col, default_val in enumerate(["---", "---", mod_fmt, "---"]):
+                item = QTableWidgetItem(default_val)
+                item.setForeground(QColor(color))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.lte_frame_summary.setItem(row, col + 1, item)
+
     def set_lte_uplink_mode(self, bw_mhz=5):
         bw_to_config = {
             1.4: (1.92e6, 128, 6),
@@ -437,6 +495,22 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        
+        if hasattr(self, 'action_show_data'):
+            self.action_show_data.setText("Datos PUSCH")
+            self.action_show_pss.setText("DMRS")
+            
+            # Asegurar visibilidad de las acciones y de los widgets
+            for a in self.menu_lte_layers.actions():
+                w = a.defaultWidget()
+                if w in [self.action_show_data, self.action_show_pss]:
+                    a.setVisible(True)
+                    w.setVisible(True)
+                elif w in [self.action_show_pdcch, self.action_show_sss, self.action_show_pbch, self.action_show_crs, self.action_show_pcfich, self.action_show_phich]:
+                    a.setVisible(False)
+                    w.setVisible(False)
+                    
+        self._actualizar_tabla_lte('lte_uplink')
 
         if state.get('demod_mode', 'none') == 'none':
             self.sa_sample_rate_text = self.sr_combo.currentText()

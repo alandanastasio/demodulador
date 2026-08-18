@@ -763,6 +763,7 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                                 
                                 self.ultimo_lte_metrics['pbch_mib'] = mib_bits
                                 self.ultimo_lte_metrics['pbch_antenas'] = antenas_detectadas
+                                self.ultimo_lte_metrics['tx_antennas'] = antenas_detectadas
                                 self.ultimo_lte_metrics['pbch_ok'] = True
                                 self.ultimo_lte_metrics['mib_bw'] = dl_bw
                                 self.ultimo_lte_metrics['mib_phich_dur'] = phich_dur
@@ -822,6 +823,7 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                             phich_syms = subframe_fft[0, phich_k_flat]
                     else:
                         phich_syms = np.array([])
+                        phich_k_flat = np.array([], dtype=int)
                         self.ultimo_phich_k_indices = set()
                     
                     # n_s es el número de slot (0 para subframe 0, 10 para subframe 5)
@@ -834,6 +836,9 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                     self.ultimo_lte_metrics['trama_valida'] = False
                     
             if self.ultimo_lte_metrics.get('tx_antennas', 1) == 2 and subframe_fft is not None and self.ultimo_lte_metrics.get('trama_valida', True):
+                # v_shift necesario para identificar posiciones CRS en todo el bloque SFBC
+                v_shift = cell_id % 6
+                
                 # Arreglar la constelación de PBCH (que ya fue decodificada) reinyectándola para la UI
                 if not pss_en_segunda_mitad and 'pbch_qpsk' in locals():
                     k_local_idx = 0
@@ -875,6 +880,42 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                             sigma2
                         )
                         subframe_fft[sym_idx, pdcch_k_abs] = pdcch_syms
+                
+                # APLICACIÓN DE SFBC AL PDSCH
+                # Los datos PDSCH con 2 antenas Tx usan diversidad de transmisión (TM2/SFBC)
+                # que requiere combinación Alamouti para demodular correctamente.
+                # Esto aplica a SIBs, paging, y datos de usuario en TM2.
+                idx_sync_abs = set(range(centro - 31, centro)) | set(range(centro + 1, centro + 32))
+                idx_pbch_abs = set(range(centro - 36, centro)) | set(range(centro + 1, centro + 37))
+                
+                for sym_idx in range(cfi_val, 14):
+                    pdsch_k_abs = []
+                    for k_local, k_abs in enumerate(idx_portadoras):
+                        # Excluir CRS (puertos 0 y 1)
+                        is_crs = False
+                        if sym_idx in [0, 7]:
+                            is_crs = (k_local % 6) == v_shift or (k_local % 6) == (v_shift + 3) % 6
+                        elif sym_idx in [4, 11]:
+                            is_crs = (k_local % 6) == (v_shift + 3) % 6 or (k_local % 6) == v_shift
+                        
+                        # Excluir PSS (sym 6) y SSS (sym 5) en subportadoras centrales
+                        is_sync = (sym_idx in [5, 6]) and (k_abs in idx_sync_abs)
+                        
+                        # Excluir PBCH (syms 7-10 centrales, solo subframe 0)
+                        is_pbch = (not pss_en_segunda_mitad) and (sym_idx in [7, 8, 9, 10]) and (k_abs in idx_pbch_abs)
+                        
+                        if not (is_crs or is_sync or is_pbch):
+                            pdsch_k_abs.append(k_abs)
+                    
+                    pdsch_k_abs_arr = np.array(pdsch_k_abs)
+                    if len(pdsch_k_abs_arr) > 0 and len(pdsch_k_abs_arr) % 2 == 0:
+                        pdsch_syms = alamouti_combine(
+                            subframe_fft_raw[sym_idx, pdsch_k_abs_arr],
+                            H_est_0[sym_idx, pdsch_k_abs_arr],
+                            H_est_1[sym_idx, pdsch_k_abs_arr],
+                            sigma2
+                        )
+                        subframe_fft[sym_idx, pdsch_k_abs_arr] = pdsch_syms
             
             # --- FASE 4: Constelación y Métricas para UI ---
             evm_data = None
