@@ -3,309 +3,554 @@ import threading
 import time
 from .base import DemoduladorBase
 from scipy import signal
-from .lte_downlink import generar_secuencia_gold # Importamos funciones útiles del downlink si es necesario
+from .lte_downlink import generar_pss_time, generar_sss
+from numba import jit
+
+@jit(nopython=True)
+def generar_dmrs_lte_jit(u, v, alpha_idx, M_sc):
+    N_zc = M_sc
+    while N_zc > 3:
+        is_prime = True
+        for i in range(2, int(N_zc**0.5) + 1):
+            if N_zc % i == 0:
+                is_prime = False
+                break
+        if is_prime: break
+        N_zc -= 1
+
+    q_bar = N_zc * (u + 1) / 31.0
+    q0 = int(np.floor(q_bar + 0.5))
+    
+    # Numba doesn't support ** for float base and negative exponent easily in some versions,
+    # but (-1)**int is safe. Let's do it manually just in case.
+    if int(np.floor(2 * q_bar)) % 2 == 0:
+        sign = 1
+    else:
+        sign = -1
+        
+    q1 = q0 + sign
+    
+    q_cands = np.zeros(2, dtype=np.int32)
+    q_cands[0] = q0
+    num_cands = 1
+    if q1 != q0 and q1 > 0:
+        q_cands[1] = q1
+        num_cands = 2
+        
+    q = q_cands[v % num_cands]
+
+    k_vec = np.arange(M_sc)
+    n_zc = k_vec % N_zc
+    r_bar = np.exp(-1j * np.pi * q * n_zc * (n_zc + 1) / N_zc)
+    alpha = 2 * np.pi * alpha_idx / 12
+    return r_bar * np.exp(1j * alpha * k_vec)
+
+@jit(nopython=True)
+def fit_phase_slope_jit(phases):
+    M = len(phases)
+    sum_x = (M - 1) * M / 2.0
+    sum_x2 = (M - 1) * M * (2 * M - 1) / 6.0
+    sum_y = np.sum(phases)
+    sum_xy = 0.0
+    for i in range(M):
+        sum_xy += i * phases[i]
+    
+    denominator = M * sum_x2 - sum_x**2
+    if denominator == 0:
+        return 0.0
+    return (M * sum_xy - sum_x * sum_y) / denominator
+
+@jit(nopython=True)
+def resolver_ambiguedad_qpsk_jit(s_time_c):
+    rots = np.array([1, 1j, -1, -1j], dtype=np.complex128)
+    mejor_rot = 1.0 + 0j
+    max_qpsk = -1
+    for i in range(len(rots)):
+        r = rots[i]
+        test = s_time_c * r
+        score = 0
+        for j in range(len(test)):
+            if np.abs(test[j].real) > 0.5 and np.abs(test[j].imag) > 0.5:
+                score += 1
+        if score > max_qpsk:
+            max_qpsk = score
+            mejor_rot = r
+    return mejor_rot
 
 class DemoduladorLTEUplink(DemoduladorBase):
     def __init__(self):
-        self.sample_rate = 30.72e6 
+        self.sample_rate = 30.72e6
         self.fft_size = 2048
-        
+
         self.Tu = 2048
-        self.cp_len_1 = 160
-        self.cp_len_2 = 144
-        
+        self.cp_len_1 = 160   # CP del símbolo 0 (más largo)
+        self.cp_len_2 = 144   # CP de los símbolos 1-6
+
         self.buffer_medicion = []
         self.muestras_acumuladas = 0
         self.is_processing = False
-        
+
         self.last_heavy_results = {}
         self.nuevos_datos_listos = False
         self._lock = threading.Lock()
         self.pausa_entre_snapshots = 0.05
         self.proxima_captura = 0.0
-        
+
         self.ultimo_chunk_norm = None
         self.ultimo_lte_metrics = {}
-        self.ultimo_puntos_corr = np.array([])
         
+        self._ultimo_dmrs_bueno = np.array([])
+        self._ultimo_pusch_bueno = np.array([])
+
         self.occupied_subcarriers = np.array([])
         self.rb_count = 100
+        self.half_shift = None
+        self.CP_pattern = None
+
+        # --- Máquina de Estados ---
+        self.estado = 'WAITING_DL'
+        self.cell_id_guardada = None
+        self.n_id_1 = None
+        self.n_id_2 = None
 
     @property
-    def id(self): return "lte_uplink"
+    def id(self):
+        return "lte_uplink"
 
     @property
-    def nombre_mostrar(self): return "LTE Uplink (SC-FDMA)"
+    def nombre_mostrar(self):
+        return "LTE Uplink (SC-FDMA)"
 
     def configurar(self, sample_rate: float, fft_size: int, rb_count: int = 100):
         self.sample_rate = sample_rate
         self.fft_size = fft_size
         self.rb_count = rb_count
-            
+
         self.Tu = self.fft_size
         self.cp_len_1 = int(np.round(5.2e-6 * sample_rate))
         self.cp_len_2 = int(np.round(4.69e-6 * sample_rate))
-        
+
         num_subcarriers = rb_count * 12
         start_idx = (self.Tu - num_subcarriers) // 2
         self.occupied_subcarriers = np.arange(start_idx, start_idx + num_subcarriers)
         
-    def procesar(self, muestras_iq: np.ndarray) -> dict:
-        with self._lock:
-            if self.nuevos_datos_listos:
-                self.nuevos_datos_listos = False
-                return self.last_heavy_results
+        self.half_shift = np.exp(-1j * np.pi * np.arange(self.Tu) / self.Tu)
+        self.CP_pattern = [self.cp_len_1] + [self.cp_len_2]*6 + [self.cp_len_1] + [self.cp_len_2]*6
+        
+        self.estado = 'WAITING_DL'
+        self.cell_id_guardada = None
 
-        if muestras_iq is None or len(muestras_iq) == 0:
-            return None
-            
-        with self._lock:
-            self.buffer_medicion.append(muestras_iq)
-            self.muestras_acumuladas += len(muestras_iq)
-            
-        ahora = time.time()
-        if not self.is_processing and ahora >= self.proxima_captura:
-            min_muestras = int(0.02 * self.sample_rate)
-            if self.muestras_acumuladas >= min_muestras:
-                with self._lock:
-                    chunk = np.concatenate(self.buffer_medicion)
-                    chunk_procesar = chunk[:min_muestras]
-                    sobrante = chunk[min_muestras:]
-                    self.buffer_medicion = [sobrante] if len(sobrante) > 0 else []
-                    self.muestras_acumuladas = len(sobrante)
-                    
-                    self.is_processing = True
-                    threading.Thread(target=self._procesar_heavy_thread, args=(chunk_procesar,), daemon=True).start()
-                    
-        return None
+    def _generar_dmrs_lte(self, u, v, alpha_idx, M_sc):
+        N_zc = M_sc
+        while N_zc > 3:
+            if all(N_zc % i for i in range(2, int(N_zc**0.5) + 1)): break
+            N_zc -= 1
 
+        q_bar = N_zc * (u + 1) / 31.0
+        q0 = int(np.floor(q_bar + 0.5))
+        sign = (-1) ** int(np.floor(2 * q_bar))
+        q1 = q0 + sign
+        
+        # Secuencias base permitidas para este grupo
+        q_cands = [q0]
+        if q1 != q0 and q1 > 0:
+            q_cands.append(q1)
+            
+        q = q_cands[v % len(q_cands)]
+
+        k_vec = np.arange(M_sc)
+        n_zc = k_vec % N_zc
+        r_bar = np.exp(-1j * np.pi * q * n_zc * (n_zc + 1) / N_zc)
+        alpha = 2 * np.pi * alpha_idx / 12
+        return r_bar * np.exp(1j * alpha * k_vec)
+
+    # ------------------------------------------------------------------
+    #  PROCESAMIENTO PESADO (corre en un hilo separado)
+    # ------------------------------------------------------------------
     def _procesar_heavy_thread(self, chunk):
         try:
-            self.ultimo_chunk_norm = chunk / np.max(np.abs(chunk))
-            
-            # --- Paso 1: Sincronización Schmidl & Cox y CFO ---
-            # --- Paso 1: Sincronización Schmidl & Cox y CFO ---
             Tu = self.Tu
-            cp_len_default = self.cp_len_2
-            
-            # Correlación de prefijo cíclico
-            prod = chunk[:-Tu] * np.conjugate(chunk[Tu:])
-            window = np.ones(cp_len_default)
-            from scipy import signal
-            corr = signal.correlate(prod, window, mode='valid')
-            
-            power = np.abs(chunk[Tu:])**2
-            power_smooth = signal.correlate(power, window, mode='valid')
-            metric = np.abs(corr) / np.maximum(power_smooth, 1e-12)
-            
-            # Buscamos el pico en el primer ms
-            limite_busqueda = int(self.sample_rate * 0.001)
-            if limite_busqueda < len(metric):
-                mejor_pos = np.argmax(metric[:limite_busqueda])
-            else:
-                mejor_pos = np.argmax(metric)
-                
-            # Estimación y corrección de CFO fraccional
-            angulo = np.angle(corr[mejor_pos])
-            cfo_fraccional_hz = angulo / (2 * np.pi * Tu / self.sample_rate)
-            t_vec = np.arange(len(chunk))
-            chunk_corregido = chunk * np.exp(-1j * 2 * np.pi * cfo_fraccional_hz * t_vec / self.sample_rate)
-            
-            self.ultimo_lte_metrics['cfo_hz'] = cfo_fraccional_hz
-            self.ultimo_lte_metrics['cfo_fraccional_hz'] = cfo_fraccional_hz
+            cp1 = self.cp_len_1
+            cp2 = self.cp_len_2
+            slot_len = cp1 + Tu + 6 * (cp2 + Tu)
 
-            # --- Paso 2: Construcción Inicial (Pass 1) para hallar DMRS ---
-            grid_freq = []
-            idx = mejor_pos
-            half_shift = np.exp(-1j * np.pi * np.arange(Tu) / Tu)
-            
-            for i in range(14):
-                if idx + self.cp_len_1 + Tu > len(chunk_corregido):
-                    break
-                simbolo_t = chunk_corregido[idx + cp_len_default : idx + cp_len_default + Tu]
-                simbolo_t_shift = simbolo_t * half_shift
-                simbolo_f = np.fft.fftshift(np.fft.fft(simbolo_t_shift))
-                simbolo_f_activo = simbolo_f[self.occupied_subcarriers]
-                grid_freq.append(simbolo_f_activo)
-                idx += cp_len_default + Tu
-                
-            grid_freq = np.array(grid_freq)
-            
-            # --- Paso 3: Identificación Ciega de DMRS ---
-            dmrs_f = np.array([])
-            const_L = np.array([])
-            const_R = np.array([])
-            
-            if len(grid_freq) == 14:
-                # Filtrar RBs inactivos (evitar procesar ruido)
-                num_rbs = grid_freq.shape[1] // 12
-                rb_power = np.array([np.mean(np.abs(grid_freq[:, r*12:(r+1)*12])**2) for r in range(num_rbs)])
-                
-                if len(rb_power) > 0:
-                    max_pwr = np.max(rb_power)
-                    peak_rb = np.argmax(rb_power)
-                    
-                    start_rb = peak_rb
-                    while start_rb > 0 and rb_power[start_rb - 1] > 0.05 * max_pwr:
-                        start_rb -= 1
-                        
-                    end_rb = peak_rb
-                    while end_rb < num_rbs - 1 and rb_power[end_rb + 1] > 0.05 * max_pwr:
-                        end_rb += 1
-                        
-                    active_subcarriers = np.arange(start_rb*12, (end_rb+1)*12)
-                else:
-                    active_subcarriers = np.arange(grid_freq.shape[1])
-                    
-                grid_freq_active = grid_freq[:, active_subcarriers]
-
-                # DMRS tiene magnitud constante en frecuencia
-                var_mags = []
-                for i in range(14):
-                    mag = np.abs(grid_freq_active[i])
-                    mag_norm = mag / (np.mean(mag) + 1e-9)
-                    var_mags.append(np.var(mag_norm))
-                
-                # Buscar par separado por 7
-                mejor_par = 0
-                min_var = float('inf')
-                for i in range(7):
-                    var_par = var_mags[i] + var_mags[i+7]
-                    if var_par < min_var:
-                        min_var = var_par
-                        mejor_par = i
-                        
-                # PASS 2: Re-extracción con CP lengths correctos
-                # Si mejor_par es el primer DMRS en nuestra ventana, sabemos que en la trama
-                # de LTE el primer DMRS está en el símbolo 3 del slot. 
-                # Por lo tanto, los símbolos 0 y 7 del slot (que tienen CP largo) están a
-                # una distancia de -3 y +4 respecto al DMRS.
-                grid_freq_exact = []
-                idx = mejor_pos
-                for k in range(14):
-                    if idx + self.cp_len_1 + Tu > len(chunk_corregido):
-                        break
-                    es_sym0 = ((k - mejor_par) % 7 == 4)
-                    cp = self.cp_len_1 if es_sym0 else self.cp_len_2
-                    
-                    simbolo_t = chunk_corregido[idx + cp : idx + cp + Tu]
-                    simbolo_t_shift = simbolo_t * half_shift
-                    simbolo_f = np.fft.fftshift(np.fft.fft(simbolo_t_shift))
-                    simbolo_f_activo = simbolo_f[self.occupied_subcarriers[active_subcarriers]]
-                    grid_freq_exact.append(simbolo_f_activo)
-                    idx += cp + Tu
-                    
-                if len(grid_freq_exact) == 14:
-                    grid_freq_exact = np.array(grid_freq_exact)
-                    
-                    dmrs_indices = [mejor_par, mejor_par + 7]
-                    pusch_indices = [i for i in range(14) if i not in dmrs_indices]
-                    
-                    dmrs_f = grid_freq_exact[dmrs_indices].flatten()
-                    pusch_f = grid_freq_exact[pusch_indices]
-                    
-                    # Ecualización de canal en frecuencia (solo amplitud, DMRS = Zadoff-Chu)
-                    dmrs_matrix = grid_freq_exact[dmrs_indices]
-                    dmrs_mag_avg = np.mean(np.abs(dmrs_matrix), axis=0)
-                    
-                    kernel_size = min(13, max(3, pusch_f.shape[1] // 20))
-                    if kernel_size % 2 == 0: kernel_size += 1
-                    kernel = np.ones(kernel_size) / kernel_size
-                    dmrs_mag_smooth = np.convolve(dmrs_mag_avg, kernel, mode='same')
-                    
-                    target_amp = np.mean(dmrs_mag_smooth)
-                    W_amp = target_amp / np.maximum(dmrs_mag_smooth, 1e-10)
-                    pusch_f = pusch_f * W_amp[np.newaxis, :]
-                    
-                    # Ecualización Ciega (Fine Timing) con SC-FDMA
-                    M = pusch_f.shape[1]
-                    centro = self.fft_size // 2
-                    # Índices físicos exactos para corrección de fase (importante si no está centrado)
-                    k_phys = self.occupied_subcarriers[active_subcarriers] - centro
-                    
-                    best_dt = 0
-                    min_cm_cost = float('inf')
-                    pusch_t_best = None
-                    
-                    for dt in np.linspace(-5, 5, 21):
-                        phase_ramp = np.exp(-1j * 2 * np.pi * k_phys * dt / Tu)
-                        pusch_f_comp = pusch_f * phase_ramp
-                        pusch_t_test = np.fft.ifft(pusch_f_comp, axis=1) * np.sqrt(M)
-                        
-                        cost = np.var(np.abs(pusch_t_test))
-                        if cost < min_cm_cost:
-                            min_cm_cost = cost
-                            best_dt = dt
-                            pusch_t_best = pusch_t_test
-                    
-                    # Seguimiento de Fase y CFO Residual Robusto (para QPSK y 16/64QAM)
-                    # El CFO residual produce una rotación de fase lineal símbolo a símbolo.
-                    # Extraemos la fase elevando a la 4ta potencia, la desenvolvemos y ajustamos una recta
-                    # para filtrar drásticamente el ruido de patrón, permitiendo recuperar 16QAM.
-                    phases_4 = []
-                    for sym in pusch_t_best:
-                        m4 = np.mean(sym**4)
-                        phases_4.append(np.angle(m4))
-                        
-                    phases_4 = np.unwrap(phases_4)
-                    
-                    x = np.arange(len(pusch_t_best))
-                    slope, intercept = np.polyfit(x, phases_4, 1)
-                    
-                    # Dividimos por 4 la fase reconstruida (slope y intercept de la 4ta potencia)
-                    phase_corr = (slope * x + intercept) / 4.0
-                    
-                    pusch_t_eq = []
-                    for i, sym in enumerate(pusch_t_best):
-                        pusch_t_eq.append(sym * np.exp(-1j * phase_corr[i]))
-                        
-                    # Rotar 45 grados para alinear a los cuadrantes estándar (la 4ta potencia tiene un offset de pi)
-                    pusch_t_eq = np.array(pusch_t_eq).flatten() * np.exp(1j * np.pi/4)
-                        
-                    const_L = pusch_t_eq.real
-                    const_R = pusch_t_eq.imag
-                    self.ultimo_lte_metrics['pss_found'] = True
-                else:
-                    self.ultimo_lte_metrics['pss_found'] = False
-            else:
-                self.ultimo_lte_metrics['pss_found'] = False
-
-            # --- Cálculo básico de espectro para UI ---
+            # ---- PSD para UI ----
             ui_fs = self.fft_size
-            rf_chunk_ui = chunk[:ui_fs] if len(chunk) >= ui_fs else np.pad(chunk, (0, ui_fs - len(chunk)))
-            
-            chunk_psd = chunk.copy()[:ui_fs]
-            if len(chunk_psd) < ui_fs:
-                chunk_psd = np.pad(chunk_psd, (0, ui_fs - len(chunk_psd)))
-                
-            chunk_psd = chunk_psd - np.mean(chunk_psd)
-            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_psd, n=ui_fs)))**2 / ui_fs
+            chunk_psd = chunk[:ui_fs].copy() if len(chunk) >= ui_fs else np.pad(chunk, (0, ui_fs - len(chunk)))
+            chunk_psd -= np.mean(chunk_psd)
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_psd, n=ui_fs))) ** 2 / ui_fs
             PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
-            
             centro_psd = ui_fs // 2
             PSD[centro_psd] = (PSD[centro_psd - 1] + PSD[centro_psd + 1]) / 2.0
-            
+            rf_chunk_ui = chunk[:ui_fs] if len(chunk) >= ui_fs else np.pad(chunk, (0, ui_fs - len(chunk)))
+
+            # ---- Variables por defecto para resultados ----
+            dmrs_plot = self._ultimo_dmrs_bueno
+            pusch_plot = self._ultimo_pusch_bueno
+            cfo_hz = 0
+            cfo_fraccional_hz = 0
+            evm_dmrs_str = "--"
+            evm_pusch_str = "--"
+            pwr_dmrs_str = "--"
+            pwr_pusch_str = "--"
+
+            # =========================================================
+            # ESTADO 1: Escuchar Downlink
+            # =========================================================
+            if self.estado == 'WAITING_DL':
+                pss_time, _ = generar_pss_time(self.fft_size)
+                max_val = 0
+                mejor_N_id_2 = -1
+                mejor_pico = -1
+                l_limit = min(len(chunk), int(self.sample_rate * 0.02))
+                
+                if l_limit > self.fft_size:
+                    for i in range(3):
+                        corr = signal.correlate(chunk[:l_limit], pss_time[i], mode="valid", method="fft")
+                        corr_abs = np.abs(corr)
+                        pico_local = np.argmax(corr_abs)
+                        val = corr_abs[pico_local]
+                        if val > max_val:
+                            max_val = val
+                            mejor_N_id_2 = i
+                            mejor_pico = pico_local
+
+                    mean_corr = np.mean(np.abs(corr))
+                    umbral_pss = 4.0 * mean_corr
+                    
+                    if max_val > umbral_pss:
+                        inicio_sss = mejor_pico - Tu - cp2
+                        if inicio_sss >= 0:
+                            sss_f = np.fft.fftshift(np.fft.fft(chunk[inicio_sss: inicio_sss + Tu]))
+                            centro = self.fft_size // 2
+                            idx_sss = list(range(centro - 31, centro)) + list(range(centro + 1, centro + 32))
+                            sss_rx = sss_f[idx_sss]
+
+                            mejor_corr_sss = 0
+                            mejor_N_id_1 = -1
+                            for subf in (0, 5):
+                                for n_id_1 in range(168):
+                                    d_ref = generar_sss(n_id_1, mejor_N_id_2, subf)
+                                    c = np.abs(np.vdot(d_ref, sss_rx))
+                                    if c > mejor_corr_sss:
+                                        mejor_corr_sss = c
+                                        mejor_N_id_1 = n_id_1
+
+                            if mejor_N_id_1 != -1:
+                                self.cell_id_guardada = 3 * mejor_N_id_1 + mejor_N_id_2
+                                self.n_id_1 = mejor_N_id_1
+                                self.n_id_2 = mejor_N_id_2
+                                self.estado = 'WAITING_UL'
+                                print(f"[UPLINK SNIFFER] DL Cell ID = {self.cell_id_guardada}. Cambie a freq UL.")
+
+            # =========================================================
+            # ESTADO 2: Escuchar Uplink - Demodular PUSCH completo
+            # =========================================================
+            elif self.estado in ('WAITING_UL', 'DMRS_CHECKPOINT'):
+                if self.cell_id_guardada is None:
+                    # Fallback si por algun motivo forzamos el estado sin Cell ID
+                    self.cell_id_guardada = 5 
+                
+                # 1. S&C y CFO
+                # Aplicamos shift de +7.5kHz para CFO estimation
+                t_arr = np.arange(len(chunk))
+                chunk_shifted = chunk * np.exp(1j * 2 * np.pi * 7500 * t_arr / self.sample_rate)
+                
+                prod = chunk_shifted[:-Tu] * np.conjugate(chunk_shifted[Tu:])
+                # Usar cp_largo para mas robustez como vimos en notebook (usamos cp1=20 en vez de cp2=18 en el convolver)
+                cp_corr = signal.fftconvolve(prod, np.ones(cp1), mode='valid')
+                
+                num_slots = len(cp_corr) // slot_len
+                if num_slots >= 1:
+                    folded = np.zeros(slot_len, dtype=complex)
+                    for s in range(num_slots):
+                        folded += cp_corr[s * slot_len: (s + 1) * slot_len]
+
+                    template = np.zeros(slot_len)
+                    sym_starts = [0]
+                    offset = cp1 + Tu
+                    for _ in range(6):
+                        sym_starts.append(offset)
+                        offset += cp2 + Tu
+                    for off in sym_starts:
+                        template[off] = 1.0
+
+                    sync = np.fft.ifft(np.fft.fft(np.abs(folded)) * np.conj(np.fft.fft(template)))
+                    a0_basto = int(np.argmax(np.abs(sync)))
+                    
+                    # CFO: S&C fase
+                    fase_cfo = np.angle(folded[a0_basto])
+                    cfo_estimado = -fase_cfo * self.sample_rate / (2 * np.pi * Tu)
+                    
+                    # Como el S&C se hizo sobre chunk_shifted (+7.5kHz), cfo_estimado ya absorbió el offset.
+                    # Corregimos solo el error de hardware para que half_shift (-7.5kHz) en la FFT deje todo en DC.
+                    # NOTA: multiplicamos por -1j para compensar el error positivo.
+                    cfo_fraccional_hz = cfo_estimado
+                    cfo_hz = cfo_estimado
+                    chunk_corregido = chunk * np.exp(-1j * 2 * np.pi * cfo_estimado * t_arr / self.sample_rate)
+
+                    # 2. Timing Fino
+                    mejor_a0 = a0_basto
+                    mejor_metric = float('inf')
+                    for d in range(-15, 16):
+                        a_test = a0_basto + d
+                        if a_test < 0 or a_test + Tu > len(chunk_corregido): continue
+                        sym = chunk_corregido[a_test : a_test+Tu]
+                        sf = np.fft.fftshift(np.fft.fft(sym * self.half_shift))
+                        s_pow = np.abs(sf)**2
+                        # Metric: power outside occupied subcarriers
+                        out_pow = np.sum(s_pow) - np.sum(s_pow[self.occupied_subcarriers])
+                        if out_pow < mejor_metric:
+                            mejor_metric = out_pow
+                            mejor_a0 = a_test
+
+                    # 3. Macro/Micro Sync y Extraer 14 símbolos
+                    # Primero extraemos con CP asumiendo que arranca en simbolo 0
+                    syms_rx = []
+                    for i in range(14):
+                        delta = (cp1 - cp2) * (i // 7)
+                        start = mejor_a0 + i * (Tu + cp2) + delta
+                        if start >= 0 and start + Tu <= len(chunk_corregido):
+                            s_t = chunk_corregido[start:start+Tu]
+                            s_f = np.fft.fftshift(np.fft.fft(s_t * self.half_shift))
+                            syms_rx.append(s_f[self.occupied_subcarriers])
+                            
+                    if len(syms_rx) == 14:
+                        syms_rx = np.array(syms_rx)
+                        # Detección ciega RBs
+                        mag_f = np.abs(syms_rx[3])
+                        umbral_rb = 0.2 * np.max(mag_f)
+                        activas = np.where(mag_f > umbral_rb)[0]
+                        if len(activas) > 12:
+                            min_a, max_a = activas[0], activas[-1] + 1
+                            syms_rx = syms_rx[:, min_a:max_a]
+                            M_sc = max_a - min_a
+                            
+                            # 4. Encontrar DMRS (por Coef. de Variacion minimo)
+                            cv = np.std(np.abs(syms_rx), axis=1) / (np.mean(np.abs(syms_rx), axis=1) + 1e-9)
+                            # Buscamos los 2 minimos que tengan separacion de al menos 4 simbolos
+                            idx_sort = np.argsort(cv)
+                            p1, p2 = 3, 10 # Default fallback
+                            for i in range(len(idx_sort)):
+                                for j in range(i+1, len(idx_sort)):
+                                    if abs(idx_sort[i] - idx_sort[j]) >= 4:
+                                        p1, p2 = min(idx_sort[i], idx_sort[j]), max(idx_sort[i], idx_sort[j])
+                                        break
+                                else:
+                                    continue
+                                break
+
+                            # Deducir simbolo_arranque (p1 deberia ser el DMRS 1 que esta en index 3 de la subtrama)
+                            simbolo_arranque = (3 - p1) % 14
+                            CP_alineado = self.CP_pattern[simbolo_arranque:] + self.CP_pattern[:simbolo_arranque]
+
+                            # ZC Search
+                            u = self.cell_id_guardada % 30
+                            mejor_H1, mejor_alpha1, mejor_v1, mejor_slope1 = None, 0, 0, 0
+                            min_slope1 = float('inf')
+                            for v in (0, 1):
+                                for alpha in range(12):
+                                    ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                    H_est = syms_rx[p1] * np.conjugate(ref)
+                                    slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
+                                    if slope < min_slope1:
+                                        min_slope1 = slope
+                                        mejor_H1 = H_est
+                                        mejor_alpha1 = alpha
+                                        mejor_v1 = v
+
+                            mejor_H2, mejor_alpha2, mejor_v2, mejor_slope2 = None, 0, 0, 0
+                            min_slope2 = float('inf')
+                            for v in (0, 1):
+                                for alpha in range(12):
+                                    ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                    H_est = syms_rx[p2] * np.conjugate(ref)
+                                    slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
+                                    if slope < min_slope2:
+                                        min_slope2 = slope
+                                        mejor_H2 = H_est
+                                        mejor_alpha2 = alpha
+                                        mejor_v2 = v
+
+                            # STO (Micro sync)
+                            slope_rad_sc = fit_phase_slope_jit(np.unwrap(np.angle(mejor_H1)))
+                            error_muestras = -slope_rad_sc * Tu / (2 * np.pi)
+                            
+                            # Traducir el error de timing al inicio de la trama (a0_perfecto)
+                            start_p1_loop1 = mejor_a0 + p1 * (Tu + cp2) + (cp1 - cp2) * (p1 // 7)
+                            start_p1_true = start_p1_loop1 + error_muestras
+                            delta_cp_p1_loop2 = sum(CP_alineado[1:p1+1]) if p1 > 0 else 0
+                            a0_perfecto = int(np.round(start_p1_true - p1 * Tu - delta_cp_p1_loop2))
+                            if a0_perfecto < 0:
+                                print(f"⚠️ a0_perfecto = {a0_perfecto} (negativo). La señal arranca demasiado cerca del inicio del buffer.")
+                                a0_perfecto = 0
+
+                            # 8. Re-extraer
+                            syms_rx_p = []
+                            for i in range(14):
+                                delta_cp = sum(CP_alineado[1:i+1]) if i > 0 else 0
+                                start = a0_perfecto + i * Tu + delta_cp
+                                if start >= 0 and start + Tu <= len(chunk_corregido):
+                                    s_t = chunk_corregido[start:start+Tu]
+                                    s_f = np.fft.fftshift(np.fft.fft(s_t * self.half_shift))
+                                    syms_rx_p.append(s_f[self.occupied_subcarriers][min_a:max_a])
+                            
+                            if len(syms_rx_p) == 14:
+                                syms_rx_p = np.array(syms_rx_p)
+                                ref1 = generar_dmrs_lte_jit(u, mejor_v1, mejor_alpha1, M_sc)
+                                ref2 = generar_dmrs_lte_jit(u, mejor_v2, mejor_alpha2, M_sc)
+                                H1_p = syms_rx_p[p1] * np.conjugate(ref1)
+                                H2_p = syms_rx_p[p2] * np.conjugate(ref2)
+                                
+                                # 9. Hibrido
+                                x = np.arange(M_sc)
+                                p_mag_1_p = np.polyfit(x, np.abs(H1_p), 3)
+                                p_mag_2_p = np.polyfit(x, np.abs(H2_p), 3)
+                                slope_1_p = fit_phase_slope_jit(np.unwrap(np.angle(H1_p)))
+                                slope_2_p = fit_phase_slope_jit(np.unwrap(np.angle(H2_p)))
+                                
+                                if abs(slope_1_p) > 0.05:
+                                    print(f"⚠️ Pendiente residual alta ({slope_1_p:.4f}). Considerar iterar la corrección.")
+
+                                mag_1_smooth_p = np.polyval(p_mag_1_p, x)
+                                mag_2_smooth_p = np.polyval(p_mag_2_p, x)
+
+                                const_pts = []
+                                dmrs_pts = []
+                                
+                                # Process symbols
+                                for i in range(14):
+                                    # Interpolate channel
+                                    t = np.clip((i - p1) / (p2 - p1), -0.5, 1.5)
+                                    mag = mag_1_smooth_p * (1 - t) + mag_2_smooth_p * t
+                                    slope = slope_1_p * (1 - t) + slope_2_p * t
+                                    H_i = mag * np.exp(1j * slope * x)
+                                    
+                                    # Equalize
+                                    s_eq = syms_rx_p[i] / (H_i + 1e-9)
+                                    
+                                    if i == p1:
+                                        # Derotate the absolute phase to keep the cluster exactly at 1+0j across snapshots
+                                        mean_phase = np.angle(np.mean(H1_p))
+                                        dmrs_norm = (H1_p / (np.mean(np.abs(H1_p)) + 1e-9)) * np.exp(-1j * mean_phase)
+                                        dmrs_pts.extend(dmrs_norm)
+                                    elif i == p2:
+                                        mean_phase = np.angle(np.mean(H2_p))
+                                        dmrs_norm = (H2_p / (np.mean(np.abs(H2_p)) + 1e-9)) * np.exp(-1j * mean_phase)
+                                        dmrs_pts.extend(dmrs_norm)
+                                    else:
+                                        # SC-FDMA IDFT
+                                        s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
+                                        # VV
+                                        ph_eq = np.angle(np.mean(s_time**4)) / 4
+                                        s_time_c = s_time * np.exp(-1j * (ph_eq - np.pi/4))
+                                        
+                                        # Ambigüedad 90 (Fuerza bruta heuristica acelerada)
+                                        mejor_rot = resolver_ambiguedad_qpsk_jit(s_time_c)
+                                        const_pts.extend(s_time_c * mejor_rot)
+                                        
+                                if len(const_pts) > 0:
+                                    const_pts = np.array(const_pts)
+                                    dmrs_pts = np.array(dmrs_pts)
+                                    
+                                    self._ultimo_pusch_bueno = const_pts
+                                    self._ultimo_dmrs_bueno = dmrs_pts
+                                    
+                                    pusch_plot = const_pts
+                                    dmrs_plot = dmrs_pts
+                                    
+                                    # Calc EVM
+                                    # PUSCH (Normalizado a 1)
+                                    pusch_norm = pusch_plot / (np.sqrt(np.mean(np.abs(pusch_plot)**2)) + 1e-9)
+                                    ideal_pusch = np.sign(pusch_norm.real) + 1j*np.sign(pusch_norm.imag)
+                                    ideal_pusch /= np.sqrt(2)
+                                    evm_pusch = np.sqrt(np.mean(np.abs(pusch_norm - ideal_pusch)**2)) * 100
+                                    evm_pusch_str = f"{evm_pusch:.1f}%"
+                                    
+                                    # DMRS (Normalizado a 1)
+                                    dmrs_norm = dmrs_plot / (np.mean(np.abs(dmrs_plot)) + 1e-9)
+                                    evm_dmrs = np.sqrt(np.mean(np.abs(dmrs_norm - 1.0)**2)) * 100
+                                    evm_dmrs_str = f"{evm_dmrs:.1f}%"
+                                    
+                                    pwr_pusch_str = f"{10*np.log10(np.mean(np.abs(pusch_plot)**2) + 1e-9):.1f} dB"
+                                    pwr_dmrs_str = f"{10*np.log10(np.mean(np.abs(dmrs_plot)**2) + 1e-9):.1f} dB"
+                                    
+                                    self.estado = 'DMRS_CHECKPOINT'
+
+            # ---- Empaquetar resultados ----
+            self.ultimo_lte_metrics = {
+                'pss_found': self.cell_id_guardada is not None,
+                'cfo_hz': cfo_hz,
+                'cfo_fraccional_hz': cfo_fraccional_hz,
+                'cell_id': self.cell_id_guardada,
+                'estado': self.estado,
+                'frame_summary': {
+                    'DMRS': (evm_dmrs_str, pwr_dmrs_str, f"{self.rb_count} RB"),
+                    'PUSCH': (evm_pusch_str, pwr_pusch_str, f"{self.rb_count} RB"),
+                }
+            }
+
             resultados = {
                 'psd_rf': PSD,
-                'rf_chunk': rf_chunk_ui, 
-                'mpx_time': np.array([]),  
-                'audio_time_L': const_L,
-                'audio_time_R': const_R,
+                'rf_chunk': rf_chunk_ui,
+                'mpx_time': np.array([]),
+                'audio_time_L': pusch_plot.real if len(pusch_plot) > 0 else np.array([]),
+                'audio_time_R': pusch_plot.imag if len(pusch_plot) > 0 else np.array([]),
                 'psd_mpx': np.array([]),
                 'f_axis_mpx': np.array([]),
                 'metricas': {
                     'lte_metrics': self.ultimo_lte_metrics,
-                    'pss_pts': dmrs_f  # Guardamos DMRS aquí para que se pinte en naranja si se activa PSS
+                    'pss_pts': dmrs_plot,
                 },
-                'evm_data': None
+                'evm_data': None,
             }
 
             with self._lock:
                 self.last_heavy_results = resultados
                 self.nuevos_datos_listos = True
-                
+
         except Exception as e:
-            print(f"Error en _procesar_heavy_thread Uplink: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"[UPLINK] Error: {e}")
         finally:
             self.is_processing = False
             self.proxima_captura = time.time() + self.pausa_entre_snapshots
+
+    def procesar(self, muestras_iq: np.ndarray) -> dict:
+        if muestras_iq is None or len(muestras_iq) == 0:
+            return None
+
+        if self.is_processing:
+            if self.nuevos_datos_listos:
+                with self._lock:
+                    self.nuevos_datos_listos = False
+                    return self.last_heavy_results
+            return None
+
+        ahora = time.time()
+        if ahora < self.proxima_captura:
+            return None
+
+        self.buffer_medicion.append(muestras_iq)
+        self.muestras_acumuladas += len(muestras_iq)
+
+        muestras_necesarias = int(self.sample_rate * 0.02)
+        if self.muestras_acumuladas >= muestras_necesarias:
+            chunk = np.concatenate(self.buffer_medicion)
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
+
+            self.is_processing = True
+            threading.Thread(
+                target=self._procesar_heavy_thread,
+                args=(chunk,),
+                daemon=True,
+            ).start()
+
+        if self.nuevos_datos_listos:
+            with self._lock:
+                self.nuevos_datos_listos = False
+                return self.last_heavy_results
+
+        return None
