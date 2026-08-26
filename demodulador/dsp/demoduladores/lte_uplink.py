@@ -317,14 +317,8 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             
                     if len(syms_rx) == 14:
                         syms_rx = np.array(syms_rx)
-                        # Detección ciega RBs
-                        mag_f = np.abs(syms_rx[3])
-                        umbral_rb = 0.2 * np.max(mag_f)
-                        activas = np.where(mag_f > umbral_rb)[0]
-                        if len(activas) > 12:
-                            min_a, max_a = activas[0], activas[-1] + 1
-                            syms_rx = syms_rx[:, min_a:max_a]
-                            M_sc = max_a - min_a
+                        M_sc = self.rb_count * 12
+                        if M_sc >= 12:
                             
                             # 4. Encontrar DMRS (por Coef. de Variacion minimo)
                             cv = np.std(np.abs(syms_rx), axis=1) / (np.mean(np.abs(syms_rx), axis=1) + 1e-9)
@@ -393,7 +387,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 if start >= 0 and start + Tu <= len(chunk_corregido):
                                     s_t = chunk_corregido[start:start+Tu]
                                     s_f = np.fft.fftshift(np.fft.fft(s_t * self.half_shift))
-                                    syms_rx_p.append(s_f[self.occupied_subcarriers][min_a:max_a])
+                                    syms_rx_p.append(s_f[self.occupied_subcarriers])
                             
                             if len(syms_rx_p) == 14:
                                 syms_rx_p = np.array(syms_rx_p)
