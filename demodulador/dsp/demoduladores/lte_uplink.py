@@ -61,6 +61,28 @@ def fit_phase_slope_jit(phases):
     return (M * sum_xy - sum_x * sum_y) / denominator
 
 @jit(nopython=True)
+def fit_phase_residual_jit(phases):
+    M = len(phases)
+    sum_x = (M - 1) * M / 2.0
+    sum_x2 = (M - 1) * M * (2 * M - 1) / 6.0
+    sum_y = np.sum(phases)
+    sum_xy = 0.0
+    for i in range(M):
+        sum_xy += i * phases[i]
+    
+    denominator = M * sum_x2 - sum_x**2
+    if denominator == 0:
+        return 0.0
+    slope = (M * sum_xy - sum_x * sum_y) / denominator
+    intercept = (sum_y - slope * sum_x) / M
+    
+    residual = 0.0
+    for i in range(M):
+        fit = slope * i + intercept
+        residual += (phases[i] - fit)**2
+    return np.sqrt(residual / M)
+
+@jit(nopython=True)
 def resolver_ambiguedad_qpsk_jit(s_time_c):
     rots = np.array([1, 1j, -1, -1j], dtype=np.complex128)
     mejor_rot = 1.0 + 0j
@@ -340,31 +362,41 @@ class DemoduladorLTEUplink(DemoduladorBase):
 
                             # ZC Search
                             u = self.cell_id_guardada % 30
-                            mejor_H1, mejor_alpha1, mejor_v1, mejor_slope1 = None, 0, 0, 0
+                            
+                            # Buscar v minimizando el residuo (con alpha=0)
+                            mejor_v = 0
+                            min_res = float('inf')
+                            for v in (0, 1):
+                                ref = generar_dmrs_lte_jit(u, v, 0, M_sc)
+                                H_est = syms_rx[p1] * np.conjugate(ref)
+                                res = fit_phase_residual_jit(np.unwrap(np.angle(H_est)))
+                                if res < min_res:
+                                    min_res = res
+                                    mejor_v = v
+                                    
+                            mejor_H1, mejor_alpha1, mejor_slope1 = None, 0, 0
+                            mejor_v1 = mejor_v
                             min_slope1 = float('inf')
-                            for v in (0, 1):
-                                for alpha in range(12):
-                                    ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
-                                    H_est = syms_rx[p1] * np.conjugate(ref)
-                                    slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
-                                    if slope < min_slope1:
-                                        min_slope1 = slope
-                                        mejor_H1 = H_est
-                                        mejor_alpha1 = alpha
-                                        mejor_v1 = v
+                            for alpha in range(12):
+                                ref = generar_dmrs_lte_jit(u, mejor_v1, alpha, M_sc)
+                                H_est = syms_rx[p1] * np.conjugate(ref)
+                                slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
+                                if slope < min_slope1:
+                                    min_slope1 = slope
+                                    mejor_H1 = H_est
+                                    mejor_alpha1 = alpha
 
-                            mejor_H2, mejor_alpha2, mejor_v2, mejor_slope2 = None, 0, 0, 0
+                            mejor_H2, mejor_alpha2, mejor_slope2 = None, 0, 0
+                            mejor_v2 = mejor_v
                             min_slope2 = float('inf')
-                            for v in (0, 1):
-                                for alpha in range(12):
-                                    ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
-                                    H_est = syms_rx[p2] * np.conjugate(ref)
-                                    slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
-                                    if slope < min_slope2:
-                                        min_slope2 = slope
-                                        mejor_H2 = H_est
-                                        mejor_alpha2 = alpha
-                                        mejor_v2 = v
+                            for alpha in range(12):
+                                ref = generar_dmrs_lte_jit(u, mejor_v2, alpha, M_sc)
+                                H_est = syms_rx[p2] * np.conjugate(ref)
+                                slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
+                                if slope < min_slope2:
+                                    min_slope2 = slope
+                                    mejor_H2 = H_est
+                                    mejor_alpha2 = alpha
 
                             # STO (Micro sync)
                             slope_rad_sc = fit_phase_slope_jit(np.unwrap(np.angle(mejor_H1)))
@@ -403,9 +435,6 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 slope_1_p = fit_phase_slope_jit(np.unwrap(np.angle(H1_p)))
                                 slope_2_p = fit_phase_slope_jit(np.unwrap(np.angle(H2_p)))
                                 
-                                if abs(slope_1_p) > 0.05:
-                                    print(f"⚠️ Pendiente residual alta ({slope_1_p:.4f}). Considerar iterar la corrección.")
-
                                 mag_1_smooth_p = np.polyval(p_mag_1_p, x)
                                 mag_2_smooth_p = np.polyval(p_mag_2_p, x)
 
@@ -418,26 +447,27 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                     t = np.clip((i - p1) / (p2 - p1), -0.5, 1.5)
                                     mag = mag_1_smooth_p * (1 - t) + mag_2_smooth_p * t
                                     slope = slope_1_p * (1 - t) + slope_2_p * t
-                                    H_i = mag * np.exp(1j * slope * x)
+                                    H_i = mag * np.exp(1j * slope * (x - M_sc / 2.0))
                                     
                                     # Equalize
                                     s_eq = syms_rx_p[i] / (H_i + 1e-9)
                                     
-                                    if i == p1:
-                                        # Derotate the absolute phase to keep the cluster exactly at 1+0j across snapshots
-                                        mean_phase = np.angle(np.mean(H1_p))
-                                        dmrs_norm = (H1_p / (np.mean(np.abs(H1_p)) + 1e-9)) * np.exp(-1j * mean_phase)
-                                        dmrs_pts.extend(dmrs_norm)
-                                    elif i == p2:
-                                        mean_phase = np.angle(np.mean(H2_p))
-                                        dmrs_norm = (H2_p / (np.mean(np.abs(H2_p)) + 1e-9)) * np.exp(-1j * mean_phase)
+                                    if i == p1 or i == p2:
+                                        # El usuario desea ver la "rueda" (secuencia ZC ecualizada) en lugar del clúster derotado.
+                                        # Simplemente normalizamos la potencia del símbolo ecualizado (s_eq) y lo graficamos.
+                                        dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
                                         dmrs_pts.extend(dmrs_norm)
                                     else:
                                         # SC-FDMA IDFT
                                         s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
+                                        
+                                        # Normalize power for Viterbi-Viterbi and QPSK ambiguity resolution
+                                        rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
+                                        s_time_n = s_time * (np.sqrt(2.0) / rms)
+                                        
                                         # VV
-                                        ph_eq = np.angle(np.mean(s_time**4)) / 4
-                                        s_time_c = s_time * np.exp(-1j * (ph_eq - np.pi/4))
+                                        ph_eq = np.angle(np.mean(s_time_n**4)) / 4
+                                        s_time_c = s_time_n * np.exp(-1j * (ph_eq - np.pi/4))
                                         
                                         # Ambigüedad 90 (Fuerza bruta heuristica acelerada)
                                         mejor_rot = resolver_ambiguedad_qpsk_jit(s_time_c)
