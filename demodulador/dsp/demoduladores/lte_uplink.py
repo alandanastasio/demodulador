@@ -629,8 +629,17 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                     evm_dmrs = np.sqrt(np.mean(np.abs(dmrs_norm_aligned - ideal_dmrs_pts)**2)) * 100
                                     evm_dmrs_str = f"{evm_dmrs:.1f}%"
                                     
-                                    pwr_pusch_str = f"{10*np.log10(np.mean(np.abs(pusch_plot)**2) + 1e-9):.1f} dB"
-                                    pwr_dmrs_str = f"{10*np.log10(np.mean(np.abs(dmrs_plot)**2) + 1e-9):.1f} dB"
+                                    # Calc true received power BEFORE equalization and normalization
+                                    # syms_rx_p has shape (14, M_sc). DMRS are at p1 and p2. PUSCH is the rest.
+                                    dmrs_raw = np.concatenate((syms_rx_p[p1], syms_rx_p[p2]))
+                                    # PUSCH symbols
+                                    pusch_raw = np.concatenate([syms_rx_p[i] for i in range(14) if i != p1 and i != p2])
+                                    
+                                    # Convert to dB (relative to some reference, raw FFT bins)
+                                    # Multiplying by a small scaling factor to make it visually roughly match dBFS if needed,
+                                    # but raw power is usually sufficient for relative comparisons.
+                                    pwr_pusch_str = f"{10*np.log10(np.mean(np.abs(pusch_raw)**2) + 1e-12):.1f} dB"
+                                    pwr_dmrs_str = f"{10*np.log10(np.mean(np.abs(dmrs_raw)**2) + 1e-12):.1f} dB"
                                     
                                     self.estado = 'DMRS_CHECKPOINT'
 
