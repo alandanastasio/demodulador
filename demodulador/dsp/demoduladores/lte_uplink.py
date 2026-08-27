@@ -5,6 +5,7 @@ from .base import DemoduladorBase
 from scipy import signal
 from .lte_downlink import generar_pss_time, generar_sss
 from numba import jit
+from functools import lru_cache
 
 PHI_1X12 = np.array([
     [-1, 1, 3, -3, 3, 3, 1, 1, 3, 1, -3, 3],
@@ -117,6 +118,10 @@ def generar_dmrs_lte_jit(u, v, alpha_idx, M_sc):
     k_vec = np.arange(M_sc)
     alpha = 2 * np.pi * alpha_idx / 12
     return r_bar * np.exp(1j * alpha * k_vec)
+@lru_cache(maxsize=128)
+def generar_dmrs_lte_cached(u, v, alpha_idx, M_sc):
+    return generar_dmrs_lte_jit(u, v, alpha_idx, M_sc)
+
 
 @jit(nopython=True)
 def fit_phase_slope_jit(phases):
@@ -451,7 +456,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             mejor_v = 0
                             min_res = float('inf')
                             for v in (0, 1):
-                                ref = generar_dmrs_lte_jit(u, v, 0, M_sc)
+                                ref = generar_dmrs_lte_cached(u, v, 0, M_sc)
                                 H_est = syms_rx[p1] * np.conjugate(ref)
                                 res = fit_phase_residual_jit(np.unwrap(np.angle(H_est)))
                                 if res < min_res:
@@ -462,7 +467,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             mejor_v1 = mejor_v
                             min_slope1 = float('inf')
                             for alpha in range(12):
-                                ref = generar_dmrs_lte_jit(u, mejor_v1, alpha, M_sc)
+                                ref = generar_dmrs_lte_cached(u, mejor_v1, alpha, M_sc)
                                 H_est = syms_rx[p1] * np.conjugate(ref)
                                 slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
                                 if slope < min_slope1:
@@ -474,7 +479,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             mejor_v2 = mejor_v
                             min_slope2 = float('inf')
                             for alpha in range(12):
-                                ref = generar_dmrs_lte_jit(u, mejor_v2, alpha, M_sc)
+                                ref = generar_dmrs_lte_cached(u, mejor_v2, alpha, M_sc)
                                 H_est = syms_rx[p2] * np.conjugate(ref)
                                 slope = np.abs(fit_phase_slope_jit(np.unwrap(np.angle(H_est))))
                                 if slope < min_slope2:
@@ -488,7 +493,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 mejor_v1, mejor_alpha1, max_mag1, mejor_H1 = 0, 0, -1, None
                                 for v in (0, 1):
                                     for alpha in range(12):
-                                        ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                        ref = generar_dmrs_lte_cached(u, v, alpha, M_sc)
                                         H_est = syms_rx[p1] * np.conjugate(ref)
                                         mag = np.abs(np.mean(H_est))
                                         if mag > max_mag1:
@@ -496,7 +501,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 mejor_v2, mejor_alpha2, max_mag2 = 0, 0, -1
                                 for v in (0, 1):
                                     for alpha in range(12):
-                                        ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                        ref = generar_dmrs_lte_cached(u, v, alpha, M_sc)
                                         H_est = syms_rx[p2] * np.conjugate(ref)
                                         mag = np.abs(np.mean(H_est))
                                         if mag > max_mag2:
@@ -529,8 +534,8 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             
                             if len(syms_rx_p) == 14:
                                 syms_rx_p = np.array(syms_rx_p)
-                                ref1 = generar_dmrs_lte_jit(u, mejor_v1, mejor_alpha1, M_sc)
-                                ref2 = generar_dmrs_lte_jit(u, mejor_v2, mejor_alpha2, M_sc)
+                                ref1 = generar_dmrs_lte_cached(u, mejor_v1, mejor_alpha1, M_sc)
+                                ref2 = generar_dmrs_lte_cached(u, mejor_v2, mejor_alpha2, M_sc)
                                 H1_p = syms_rx_p[p1] * np.conjugate(ref1)
                                 H2_p = syms_rx_p[p2] * np.conjugate(ref2)
                                 
