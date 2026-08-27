@@ -6,42 +6,115 @@ from scipy import signal
 from .lte_downlink import generar_pss_time, generar_sss
 from numba import jit
 
+PHI_1X12 = np.array([
+    [-1, 1, 3, -3, 3, 3, 1, 1, 3, 1, -3, 3],
+    [1, 1, 3, 3, 3, -1, 1, -3, -3, 1, -3, 3],
+    [1, 1, -3, -3, -3, -1, -3, -3, 1, -3, 1, -1],
+    [-1, 1, 1, 1, 1, -1, -3, -3, 1, -3, 3, -1],
+    [-1, 3, 1, -1, 1, -1, -3, -1, 1, -1, 1, 3],
+    [1, -3, 3, -1, -1, 1, -1, -1, 1, -3, -1, -3],
+    [-1, 3, -3, -3, -3, 3, 1, -1, 3, 3, -3, 1],
+    [-1, -3, -3, 1, -1, 3, 3, -3, 1, -1, -3, 3],
+    [1, -3, 3, 1, -1, -1, -1, 1, 1, 3, -1, 1],
+    [1, -3, -1, 3, 3, -1, -3, 1, 1, 1, 1, 1],
+    [-1, 3, -1, 1, 1, -3, -3, -1, -3, -3, 3, -1],
+    [3, 1, -1, -1, 3, 3, -3, 1, 3, 1, 3, 3],
+    [1, -3, 1, 1, -3, 1, 1, 1, -3, -3, -1, 1],
+    [3, 3, -3, 3, -3, 1, 1, 3, -1, -3, 3, 3],
+    [-1, 1, -3, -3, 3, 1, 3, 1, 1, 3, 3, 1],
+    [3, -1, 1, -3, -1, -1, 1, 1, 3, 1, -1, -3],
+    [1, 3, 1, -1, 1, 3, 3, 3, -1, -1, 3, -1],
+    [-3, 1, 1, 3, -3, 3, -3, -3, 3, 1, 3, -1],
+    [-3, 3, 1, 1, -3, 1, -3, -3, -1, -1, 1, -3],
+    [-1, 3, 1, 3, 1, -1, -1, 3, -3, -1, -3, -1],
+    [-1, -3, 1, 1, 1, 1, 3, 1, -1, 1, -3, -1],
+    [-1, 3, -1, 1, -3, -3, -3, -3, -3, 1, -1, -3],
+    [1, 1, -3, -3, -3, -3, -1, 3, -3, 1, -3, 3],
+    [1, -1, -3, -1, -3, 1, 1, 1, 1, -3, -1, 3],
+    [1, -1, 3, -1, 3, 1, 1, 3, 3, 3, 1, -1],
+    [1, 3, 3, 3, 3, 1, -1, 3, -1, 1, 1, 3],
+    [1, -3, -3, -3, -3, 3, -3, 1, -1, -1, 3, -3],
+    [-3, -1, -3, -1, -3, 3, 1, -1, 1, 3, -3, -3],
+    [-1, 3, -3, 3, -1, 3, 3, -3, 3, 3, -1, -1],
+    [3, -3, -3, -1, -1, -3, -1, 3, -3, 3, 1, -1]
+], dtype=np.float64)
+
+PHI_2X12 = np.array([
+    [-1, 3, 1, -3, 3, -1, 1, 3, -3, 3, 1, 3, -3, 3, 1, 1, -1, 1, 3, -3, 3, -3, -1, -3],
+    [-3, 3, -3, -3, -3, 1, -3, -3, 3, -1, 1, 1, 1, 3, 1, -1, 3, -3, -3, 1, 3, 1, 1, -3],
+    [3, -1, 3, 3, 1, 1, -3, 3, 3, 3, 3, 1, -1, 3, -1, 1, 1, -1, -3, -1, -1, 1, 3, 3],
+    [-1, -3, 1, 1, 3, -3, 1, 1, -3, -1, -1, 1, 3, 1, 3, 1, -1, 3, 1, 1, -3, -1, -3, -1],
+    [-1, -1, -1, -3, -3, -1, 1, 1, 3, 3, -1, 3, -1, 1, -1, -3, 1, -1, -3, -3, 1, -3, -1, -1],
+    [-3, 1, 1, 3, -1, 1, 3, 1, -3, 1, -3, 1, 1, -1, -1, 3, -1, -3, 3, -3, -3, -3, 1, 1],
+    [1, 1, -1, -1, 3, -3, -3, 3, -3, 1, -1, -1, 1, -1, 1, 1, -1, -3, -1, 1, -1, 3, -1, -3],
+    [-3, 3, 3, -1, -1, -3, -1, 3, 1, 3, 1, 3, 1, 1, -1, 3, 1, -1, 1, 3, -3, -1, -1, 1],
+    [-3, 1, 3, -3, 1, -1, -3, 3, -3, 3, -1, -1, -1, -1, 1, -3, -3, -3, 1, -3, -3, -3, 1, -3],
+    [1, 1, -3, 3, 3, -1, -3, -1, 3, -3, 3, 3, 3, -1, 1, 1, -3, 1, -1, 1, 1, -3, 1, 1],
+    [-1, 1, -3, -3, 3, -1, 3, -1, -1, -3, -3, -3, -1, -3, -3, 1, -1, 1, 3, 3, -1, 1, -1, 3],
+    [1, 3, 3, -3, -3, 1, 3, 1, -1, -3, -3, -3, 3, 3, -3, 3, 3, -1, -3, 3, -1, 1, -3, 1],
+    [1, 3, 3, 1, 1, 1, -1, -1, 1, -3, 3, -1, 1, 1, -3, 3, 3, -1, -3, 3, -3, -1, -3, -1],
+    [3, -1, -1, -1, -1, -3, -1, 3, 3, 1, -1, 1, 3, 3, 3, -1, 1, 1, -3, 1, 3, -1, -3, 3],
+    [-3, -3, 3, 1, 3, 1, -3, 3, 1, 3, 1, 1, 3, 3, -1, -1, -3, 1, -3, -1, 3, 1, 1, 3],
+    [-1, -1, 1, -3, 1, 3, -3, 1, -1, -3, -1, 3, 1, 3, 1, -1, -3, -3, -1, -1, -3, -3, -3, -1],
+    [-1, -3, 3, -1, -1, -1, -1, 1, 1, -3, 3, 1, 3, 3, 1, -1, 1, -3, 1, -3, 1, 1, -3, -1],
+    [1, 3, -1, 3, 3, -1, -3, 1, -1, -3, 3, 3, 3, -1, 1, 1, 3, -1, -3, -1, 3, -1, -1, -1],
+    [1, 1, 1, 1, 1, -1, 3, -1, -3, 1, 1, 3, -3, 1, -3, -1, 1, 1, -3, -3, 3, 1, 1, -3],
+    [1, 3, 3, 1, -1, -3, 3, -1, 3, 3, 3, -3, 1, -1, 1, -1, -3, -1, 1, 3, -1, 3, -3, -3],
+    [-1, -3, 3, -3, -3, -3, -1, -1, -3, -1, -3, 3, 1, 3, -3, -1, 3, -1, 1, -1, 3, -3, 1, -1],
+    [-3, -3, 1, 1, -1, 1, -1, 1, -1, 3, 1, -3, -1, 1, -1, 1, -1, -1, 3, 3, -3, -1, 1, -3],
+    [-3, -1, -3, 3, 1, -1, -3, -1, -3, -3, 3, -3, 3, -3, -1, 1, 3, 1, -3, 1, 3, 3, -1, -3],
+    [-1, -1, -1, -1, 3, 3, 3, 1, 3, 3, -3, 1, 3, -1, 3, -1, 3, 3, -3, 3, 1, -1, 3, 3],
+    [1, -1, 3, 3, -1, -3, 3, -3, -1, -1, 3, -1, 3, -1, -1, 1, 1, 1, 1, -1, -1, -3, -1, 3],
+    [1, -1, 1, -1, 3, -1, 3, 1, 1, -1, -1, -3, 1, 1, -3, 1, 3, -3, 1, 1, -3, -3, -1, -1],
+    [-3, -1, 1, 3, 1, 1, -3, -1, -1, -3, 3, -3, 3, 1, -3, 3, -3, 1, -1, 1, -3, 1, 1, 1],
+    [-1, -3, 3, 3, 1, 1, 3, -1, -3, -1, -1, -1, 3, 1, -3, -3, -1, 3, -3, -1, -3, -1, -3, -1],
+    [-1, -3, -1, -1, 1, -3, -1, -1, 1, -1, -3, 1, 1, -3, 1, -3, -3, 3, 1, 1, -1, 3, -1, -1],
+    [1, 1, -1, -1, -3, -1, 3, -1, 3, -1, 1, 3, 1, -1, 3, 1, 3, -3, -3, 1, -1, -1, 1, 3]
+], dtype=np.float64)
+
 @jit(nopython=True)
 def generar_dmrs_lte_jit(u, v, alpha_idx, M_sc):
-    N_zc = M_sc
-    while N_zc > 3:
-        is_prime = True
-        for i in range(2, int(N_zc**0.5) + 1):
-            if N_zc % i == 0:
-                is_prime = False
-                break
-        if is_prime: break
-        N_zc -= 1
-
-    q_bar = N_zc * (u + 1) / 31.0
-    q0 = int(np.floor(q_bar + 0.5))
-    
-    # Numba doesn't support ** for float base and negative exponent easily in some versions,
-    # but (-1)**int is safe. Let's do it manually just in case.
-    if int(np.floor(2 * q_bar)) % 2 == 0:
-        sign = 1
+    if M_sc == 12:
+        phi = PHI_1X12[u % 30]
+        r_bar = np.exp(1j * phi * np.pi / 4.0)
+    elif M_sc == 24:
+        phi = PHI_2X12[u % 30]
+        r_bar = np.exp(1j * phi * np.pi / 4.0)
     else:
-        sign = -1
-        
-    q1 = q0 + sign
-    
-    q_cands = np.zeros(2, dtype=np.int32)
-    q_cands[0] = q0
-    num_cands = 1
-    if q1 != q0 and q1 > 0:
-        q_cands[1] = q1
-        num_cands = 2
-        
-    q = q_cands[v % num_cands]
+        N_zc = M_sc
+        while N_zc > 3:
+            is_prime = True
+            for i in range(2, int(N_zc**0.5) + 1):
+                if N_zc % i == 0:
+                    is_prime = False
+                    break
+            if is_prime: break
+            N_zc -= 1
 
+        q_bar = N_zc * (u + 1) / 31.0
+        q0 = int(np.floor(q_bar + 0.5))
+        
+        if int(np.floor(2 * q_bar)) % 2 == 0:
+            sign = 1
+        else:
+            sign = -1
+            
+        q1 = q0 + sign
+        
+        q_cands = np.zeros(2, dtype=np.int32)
+        q_cands[0] = q0
+        num_cands = 1
+        if q1 != q0 and q1 > 0:
+            q_cands[1] = q1
+            num_cands = 2
+            
+        q = q_cands[v % num_cands]
+
+        k_vec = np.arange(M_sc)
+        n_zc = k_vec % N_zc
+        r_bar = np.exp(-1j * np.pi * q * n_zc * (n_zc + 1) / N_zc)
+        
     k_vec = np.arange(M_sc)
-    n_zc = k_vec % N_zc
-    r_bar = np.exp(-1j * np.pi * q * n_zc * (n_zc + 1) / N_zc)
     alpha = 2 * np.pi * alpha_idx / 12
     return r_bar * np.exp(1j * alpha * k_vec)
 
@@ -409,9 +482,31 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                     mejor_H2 = H_est
                                     mejor_alpha2 = alpha
 
+                            # Override para BW pequeños: la búsqueda por pendiente es inestable con 12-24 muestras.
+                            # Usamos filtro adaptado (maximizar |mean(H)|) que no depende de unwrap de fase.
+                            if M_sc <= 24:
+                                mejor_v1, mejor_alpha1, max_mag1, mejor_H1 = 0, 0, -1, None
+                                for v in (0, 1):
+                                    for alpha in range(12):
+                                        ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                        H_est = syms_rx[p1] * np.conjugate(ref)
+                                        mag = np.abs(np.mean(H_est))
+                                        if mag > max_mag1:
+                                            max_mag1, mejor_v1, mejor_alpha1, mejor_H1 = mag, v, alpha, H_est
+                                mejor_v2, mejor_alpha2, max_mag2 = 0, 0, -1
+                                for v in (0, 1):
+                                    for alpha in range(12):
+                                        ref = generar_dmrs_lte_jit(u, v, alpha, M_sc)
+                                        H_est = syms_rx[p2] * np.conjugate(ref)
+                                        mag = np.abs(np.mean(H_est))
+                                        if mag > max_mag2:
+                                            max_mag2, mejor_v2, mejor_alpha2 = mag, v, alpha
+
                             # STO (Micro sync)
                             slope_rad_sc = fit_phase_slope_jit(np.unwrap(np.angle(mejor_H1)))
                             error_muestras = -slope_rad_sc * Tu / (2 * np.pi)
+                            if M_sc <= 24:
+                                error_muestras = 0.0
                             
                             # Traducir el error de timing al inicio de la trama (a0_perfecto)
                             start_p1_loop1 = mejor_a0 + p1 * (Tu + cp2) + (cp1 - cp2) * (p1 // 7)
@@ -439,50 +534,65 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 H1_p = syms_rx_p[p1] * np.conjugate(ref1)
                                 H2_p = syms_rx_p[p2] * np.conjugate(ref2)
                                 
-                                # 9. Hibrido
+                                # 9. Ecualización y demodulación
                                 x = np.arange(M_sc)
-                                p_mag_1_p = np.polyfit(x, np.abs(H1_p), 3)
-                                p_mag_2_p = np.polyfit(x, np.abs(H2_p), 3)
-                                slope_1_p = fit_phase_slope_jit(np.unwrap(np.angle(H1_p)))
-                                slope_2_p = fit_phase_slope_jit(np.unwrap(np.angle(H2_p)))
                                 
-                                mag_1_smooth_p = np.polyval(p_mag_1_p, x)
-                                mag_2_smooth_p = np.polyval(p_mag_2_p, x)
-
                                 const_pts = []
                                 dmrs_pts = []
                                 
-                                # Process symbols
-                                for i in range(14):
-                                    # Interpolate channel
-                                    t = np.clip((i - p1) / (p2 - p1), -0.5, 1.5)
-                                    mag = mag_1_smooth_p * (1 - t) + mag_2_smooth_p * t
-                                    slope = slope_1_p * (1 - t) + slope_2_p * t
-                                    H_i = mag * np.exp(1j * slope * (x - M_sc / 2.0))
+                                if M_sc > 48:
+                                    # --- Path original: parametric mag+slope (funciona bien con muchas subportadoras) ---
+                                    p_mag_1_p = np.polyfit(x, np.abs(H1_p), 3)
+                                    p_mag_2_p = np.polyfit(x, np.abs(H2_p), 3)
+                                    slope_1_p = fit_phase_slope_jit(np.unwrap(np.angle(H1_p)))
+                                    slope_2_p = fit_phase_slope_jit(np.unwrap(np.angle(H2_p)))
+                                    mag_1_smooth_p = np.polyval(p_mag_1_p, x)
+                                    mag_2_smooth_p = np.polyval(p_mag_2_p, x)
                                     
-                                    # Equalize
-                                    s_eq = syms_rx_p[i] / (H_i + 1e-9)
+                                    for i in range(14):
+                                        t = np.clip((i - p1) / (p2 - p1), -0.5, 1.5)
+                                        mag = mag_1_smooth_p * (1 - t) + mag_2_smooth_p * t
+                                        slope = slope_1_p * (1 - t) + slope_2_p * t
+                                        H_i = mag * np.exp(1j * slope * (x - M_sc / 2.0))
+                                        s_eq = syms_rx_p[i] / (H_i + 1e-9)
+                                        
+                                        if i == p1 or i == p2:
+                                            dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
+                                            dmrs_pts.extend(dmrs_norm)
+                                        else:
+                                            s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
+                                            rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
+                                            s_time_n = s_time * (np.sqrt(2.0) / rms)
+                                            ph_eq = np.angle(np.mean(s_time_n**4)) / 4
+                                            s_time_c = s_time_n * np.exp(-1j * (ph_eq - np.pi/4))
+                                            mejor_rot = resolver_ambiguedad_qpsk_jit(s_time_c)
+                                            const_pts.extend(s_time_c * mejor_rot)
+                                else:
+                                    # --- Path para BW pequeño: interpolación compleja directa del canal ---
+                                    # No descomponemos en mag+slope porque con pocas muestras la estimación
+                                    # de pendiente falla. Interpolamos H1_p y H2_p directamente.
+                                    s_time_all = []
+                                    for i in range(14):
+                                        t = (i - p1) / (p2 - p1)
+                                        H_i = H1_p * (1 - t) + H2_p * t
+                                        s_eq = syms_rx_p[i] / (H_i + 1e-9)
+                                        
+                                        if i == p1 or i == p2:
+                                            dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
+                                            dmrs_pts.extend(dmrs_norm)
+                                        else:
+                                            s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
+                                            rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
+                                            s_time_n = s_time * (np.sqrt(2.0) / rms)
+                                            s_time_all.extend(s_time_n)
                                     
-                                    if i == p1 or i == p2:
-                                        # El usuario desea ver la "rueda" (secuencia ZC ecualizada) en lugar del clúster derotado.
-                                        # Simplemente normalizamos la potencia del símbolo ecualizado (s_eq) y lo graficamos.
-                                        dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
-                                        dmrs_pts.extend(dmrs_norm)
-                                    else:
-                                        # SC-FDMA IDFT
-                                        s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
-                                        
-                                        # Normalize power for Viterbi-Viterbi and QPSK ambiguity resolution
-                                        rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
-                                        s_time_n = s_time * (np.sqrt(2.0) / rms)
-                                        
-                                        # VV
-                                        ph_eq = np.angle(np.mean(s_time_n**4)) / 4
-                                        s_time_c = s_time_n * np.exp(-1j * (ph_eq - np.pi/4))
-                                        
-                                        # Ambigüedad 90 (Fuerza bruta heuristica acelerada)
-                                        mejor_rot = resolver_ambiguedad_qpsk_jit(s_time_c)
-                                        const_pts.extend(s_time_c * mejor_rot)
+                                    # VV y ambigüedad global (usando TODOS los símbolos juntos para máxima robustez)
+                                    if len(s_time_all) > 0:
+                                        s_all = np.array(s_time_all)
+                                        ph_eq = np.angle(np.mean(s_all**4)) / 4
+                                        s_all_c = s_all * np.exp(-1j * (ph_eq - np.pi/4))
+                                        mejor_rot = resolver_ambiguedad_qpsk_jit(s_all_c)
+                                        const_pts.extend(s_all_c * mejor_rot)
                                         
                                 if len(const_pts) > 0:
                                     const_pts = np.array(const_pts)
