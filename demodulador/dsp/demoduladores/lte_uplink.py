@@ -539,6 +539,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 
                                 const_pts = []
                                 dmrs_pts = []
+                                ideal_dmrs_pts = []
                                 
                                 if M_sc > 48:
                                     # --- Path original: parametric mag+slope (funciona bien con muchas subportadoras) ---
@@ -559,6 +560,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                         if i == p1 or i == p2:
                                             dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
                                             dmrs_pts.extend(dmrs_norm)
+                                            ideal_dmrs_pts.extend(ref1 if i == p1 else ref2)
                                         else:
                                             s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
                                             rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
@@ -580,6 +582,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                         if i == p1 or i == p2:
                                             dmrs_norm = s_eq / (np.sqrt(np.mean(np.abs(s_eq)**2)) + 1e-9)
                                             dmrs_pts.extend(dmrs_norm)
+                                            ideal_dmrs_pts.extend(ref1 if i == p1 else ref2)
                                         else:
                                             s_time = np.fft.ifft(s_eq) * np.sqrt(M_sc)
                                             rms = np.sqrt(np.mean(np.abs(s_time)**2)) + 1e-9
@@ -597,6 +600,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                 if len(const_pts) > 0:
                                     const_pts = np.array(const_pts)
                                     dmrs_pts = np.array(dmrs_pts)
+                                    ideal_dmrs_pts = np.array(ideal_dmrs_pts)
                                     
                                     self._ultimo_pusch_bueno = const_pts
                                     self._ultimo_dmrs_bueno = dmrs_pts
@@ -614,7 +618,15 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                     
                                     # DMRS (Normalizado a 1)
                                     dmrs_norm = dmrs_plot / (np.mean(np.abs(dmrs_plot)) + 1e-9)
-                                    evm_dmrs = np.sqrt(np.mean(np.abs(dmrs_norm - 1.0)**2)) * 100
+                                    
+                                    # El ecualizador paramétrico (M_sc > 48) no corrige la fase absoluta, solo la pendiente.
+                                    # Por lo tanto, los puntos DMRS pueden tener una rotación global constante aleatoria.
+                                    # Para calcular el EVM correcto contra la secuencia ideal, primero debemos alinear la fase global.
+                                    dmrs_phase_offset = np.angle(np.mean(dmrs_norm * np.conjugate(ideal_dmrs_pts)))
+                                    dmrs_norm_aligned = dmrs_norm * np.exp(-1j * dmrs_phase_offset)
+                                    
+                                    # Comparar contra las secuencias ZC / QPSK ideales generadas y alineadas
+                                    evm_dmrs = np.sqrt(np.mean(np.abs(dmrs_norm_aligned - ideal_dmrs_pts)**2)) * 100
                                     evm_dmrs_str = f"{evm_dmrs:.1f}%"
                                     
                                     pwr_pusch_str = f"{10*np.log10(np.mean(np.abs(pusch_plot)**2) + 1e-9):.1f} dB"
@@ -623,6 +635,12 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                     self.estado = 'DMRS_CHECKPOINT'
 
             # ---- Empaquetar resultados ----
+            # Usa el número real de RBs que procesó el demodulador
+            try:
+                actual_rb_count = M_sc // 12 if M_sc >= 12 else self.rb_count
+            except UnboundLocalError:
+                actual_rb_count = self.rb_count
+                
             self.ultimo_lte_metrics = {
                 'pss_found': self.cell_id_guardada is not None,
                 'cfo_hz': cfo_hz,
@@ -630,8 +648,8 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 'cell_id': self.cell_id_guardada,
                 'estado': self.estado,
                 'frame_summary': {
-                    'DMRS': (evm_dmrs_str, pwr_dmrs_str, f"{self.rb_count} RB"),
-                    'PUSCH': (evm_pusch_str, pwr_pusch_str, f"{self.rb_count} RB"),
+                    'DMRS': (evm_dmrs_str, pwr_dmrs_str, f"{actual_rb_count} RB"),
+                    'PUSCH': (evm_pusch_str, pwr_pusch_str, f"{actual_rb_count} RB"),
                 }
             }
 
