@@ -108,14 +108,23 @@ class MainWindow(QMainWindow):
             total_time = dt * getattr(self, 'waterfall_lines', 200)
             expected_samples = int(total_time * state.get('sample_rate', 2e6))
             
+            # Límite estricto de seguridad: 250 millones de muestras = ~2 GB de RAM.
+            # Evita un Out-of-Memory (OOM) si ocurre un cálculo de tiempo anormal.
+            max_safe_samples = 250_000_000
+            if expected_samples > max_safe_samples:
+                print(f"⚠️ PELIGRO OOM EVITADO: Intento de asignar {expected_samples} muestras. Limitando a {max_safe_samples}.")
+                expected_samples = max_safe_samples
+            
             if expected_samples > 0:
-                if not hasattr(self, 'retro_buffer') or self.retro_buffer is None:
+                retro_buf = getattr(self, 'retro_buffer', None)
+                if retro_buf is None:
                     from iq_ring_buffer import IQRingBuffer
-                    self.retro_buffer = IQRingBuffer(expected_samples)
-                elif self.retro_buffer.max_samples != expected_samples:
-                    self.retro_buffer.resize(expected_samples)
+                    retro_buf = IQRingBuffer(expected_samples)
+                    self.retro_buffer = retro_buf
+                elif retro_buf.max_samples != expected_samples:
+                    retro_buf.resize(expected_samples)
                     
-                self.retro_buffer.append(c_samples)
+                retro_buf.append(c_samples)
 
 
         # 2. Procesamiento a través del plugin DSP activo (SpectrumAnalyzer o DemoduladorWBFM)
@@ -990,7 +999,7 @@ class MainWindow(QMainWindow):
             
             # Liberar la RAM del buffer retroactivo
             if hasattr(self, 'retro_buffer'):
-                del self.retro_buffer
+                self.retro_buffer = None
 
     def change_waterfall_lines(self, delta):
         new_val = getattr(self, 'waterfall_lines', 200) + delta

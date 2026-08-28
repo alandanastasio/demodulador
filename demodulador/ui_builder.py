@@ -189,7 +189,7 @@ def build_ui(self, state):
     self.waterfall_widget.getViewBox().invertY(True)
     self.waterfall_widget.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     self.waterfall_widget.setXLink(self.freq_plot)
-    self.waterfall_image = pg.ImageItem()
+    self.waterfall_image = pg.ImageItem(axisOrder='row-major')
     
     # Aplicamos la paleta de color Viridis Turbo
     self.waterfall_colormap = pg.colormap.get('turbo')
