@@ -542,9 +542,11 @@ def build_ui(self, state):
     
     # Configuramos el tamaño de las columnas
     header = self.lte_frame_summary.horizontalHeader()
-    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    for i in range(1, 5):
-        header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+    # Usar Stretch para todas las columnas evita que la tabla recalcule
+    # sus dimensiones 50 veces por segundo al actualizar los números,
+    # lo cual causaba un stuttering masivo que rompía el zoom de los gráficos.
+    for i in range(5):
+        header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         
     # Ajustamos la altura de las filas
     v_header = self.lte_frame_summary.verticalHeader()

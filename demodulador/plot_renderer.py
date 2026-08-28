@@ -123,7 +123,9 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     sym_x = np.arange(n_syms)
                     self.q3_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
                     self.q3_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
-                    self.wifi_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                    if not hasattr(self, '_last_wifi_n_syms') or self._last_wifi_n_syms != n_syms:
+                        self.wifi_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                        self._last_wifi_n_syms = n_syms
                 else:
                     self.q3_evm_rms_sym.setData([], [])
                     self.q3_evm_peak_sym.setData([], [])
@@ -307,7 +309,9 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     sym_x = np.arange(n_syms)
                     self.lte_evm_rms_sym.setData(sym_x, evm_data['sym_rms'])
                     self.lte_evm_peak_sym.setData(sym_x, evm_data['sym_peak'])
-                    self.lte_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                    if not hasattr(self, '_last_lte_n_syms') or self._last_lte_n_syms != n_syms:
+                        self.lte_evm_sym_widget.setXRange(0, max(n_syms - 1, 1))
+                        self._last_lte_n_syms = n_syms
                 else:
                     self.lte_evm_rms_sym.setData([], [])
                     self.lte_evm_peak_sym.setData([], [])

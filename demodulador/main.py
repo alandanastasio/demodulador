@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self.freq_input.setValue(100.0)
         self.update_x_axis()
-        self._restore_panels()
+        self._reset_maximized_state()
 
     def set_wifi_ag_mode(self):
         self.btn_change_uplink_freq.hide()
@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.setEnabled(True)
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
-        self._restore_panels()
+        self._reset_maximized_state()
 
     def set_lte_mode(self, bw_mhz=5):
         self.btn_change_uplink_freq.hide()
@@ -416,7 +416,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._restore_panels()
+        self._reset_maximized_state()
 
     def _actualizar_tabla_lte(self, modo):
         from PyQt6.QtWidgets import QTableWidgetItem
@@ -617,7 +617,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._restore_panels()
+        self._reset_maximized_state()
 
         # (El sniffer ahora notifica directamente a través del diccionario de resultados
         # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = SpectrumAnalyzer()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.on_sr_changed(self.sr_combo.currentText()) 
-        self._restore_panels()
+        self._reset_maximized_state()
         self.update_x_axis()
 
     def on_freq_changed(self, val):
@@ -909,6 +909,16 @@ class MainWindow(QMainWindow):
         self._saved_visibility = {}
         self._saved_row_stretches = {}
         self._saved_col_stretches = {}
+
+    def _reset_maximized_state(self):
+        self._maximized_widget = None
+        self._maximized_layout = None
+        self._saved_visibility = {}
+        self._saved_row_stretches = {}
+        self._saved_col_stretches = {}
+        if hasattr(self, 'all_panels'):
+            for w in self.all_panels:
+                w.show()
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
         

@@ -255,7 +255,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     ini_ext = max(0, ini - int(0.5e-6 * self.sample_rate))
                     segmento = bloque_iq[ini_ext:fin]
                     
-                    if len(segmento) < _SC_W:
+                    if len(segmento) < (_SC_N + _SC_W):
                         continue
                         
                     # 2. BÚSQUEDA FINA - Schmidl & Cox
@@ -304,9 +304,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             # CFO normalizado (en radianes por muestra)
                             cfo_rad = np.angle(np.mean(P_meseta)) / _SC_N
 
-                            # CFO en Hz
                             cfo_hz = cfo_rad * self.sample_rate / (2 * np.pi)
                             wifi_metrics['cfo'] = cfo_hz
+
+                            # Validar que tengamos al menos las muestras del STS (160)
+                            if len(frame) < 160:
+                                continue
 
                             # Correccion del CFO en el frame completo
                             t_frame = np.arange(len(frame)) / self.sample_rate
