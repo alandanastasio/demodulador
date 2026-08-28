@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         build_ui(self, state)
         
         # Conectar el auto-escalado para que se dispare al cambiar de modo
+        self.btn_change_uplink_freq.clicked.connect(lambda: self.set_lte_uplink_mode(self._current_lte_bw_mhz if hasattr(self, "_current_lte_bw_mhz") else 5))
         self.modes_stack.currentChanged.connect(self._schedule_auto_scale)
         
         self.set_normal_mode()
@@ -108,6 +109,11 @@ class MainWindow(QMainWindow):
             # El plugin devuelve None si todavía está acumulando muestras en su buffer 
             # para cumplir con el bloque de tiempo mínimo (ej: los 100ms de la FM)
             if resultados is not None:
+                if resultados.get('action') == 'switch_to_ul':
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, self._force_switch_to_ul)
+                    return
+                
                 
                 # 3. Gestión de Audio:
                 self.audio_manager.enqueue_audio(resultados.get('audio_out'))
@@ -166,6 +172,8 @@ class MainWindow(QMainWindow):
     # ==========================================
 
     def set_wbfm_mode(self):
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
             self.lte_q1_stack.removeWidget(self.freq_plot)
             from PyQt6.QtWidgets import QWidget
@@ -227,6 +235,8 @@ class MainWindow(QMainWindow):
         self._restore_panels()
 
     def set_wifi_ag_mode(self):
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
             self.lte_q1_stack.removeWidget(self.freq_plot)
             from PyQt6.QtWidgets import QWidget
@@ -301,6 +311,8 @@ class MainWindow(QMainWindow):
         self._restore_panels()
 
     def set_lte_mode(self, bw_mhz=5):
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
         # Mapeo de ancho de banda LTE a frecuencia de muestreo y FFT
         bw_to_config = {
             1.4: (1.92e6, 128),
@@ -453,6 +465,51 @@ class MainWindow(QMainWindow):
                 self.lte_frame_summary.setItem(row, col + 1, item)
 
     def set_lte_uplink_mode(self, bw_mhz=5):
+        self._current_lte_bw_mhz = bw_mhz
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Configuración LTE Uplink")
+        layout = QVBoxLayout(dialog)
+        
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel("Frecuencia Uplink (Trabajo) [MHz]:"))
+        ul_spin = QDoubleSpinBox()
+        ul_spin.setRange(0, 10000)
+        ul_spin.setDecimals(3)
+        ul_spin.setValue(self.ul_freq_target if hasattr(self, "ul_freq_target") else 1732.5)
+        h1.addWidget(ul_spin)
+        layout.addLayout(h1)
+        
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Frecuencia Downlink (Sniffing Cell ID) [MHz]:"))
+        dl_spin = QDoubleSpinBox()
+        dl_spin.setRange(0, 10000)
+        dl_spin.setDecimals(3)
+        # Por defecto +400 MHz (Banda 4)
+        dl_spin.setValue(self.dl_freq_target if hasattr(self, "dl_freq_target") else (ul_spin.value() + 400.0))
+        h2.addWidget(dl_spin)
+        layout.addLayout(h2)
+        
+        # Link para que si cambian UL, cambie DL +400 (ayuda visual)
+        def on_ul_changed(val):
+            dl_spin.setValue(val + 400.0)
+        ul_spin.valueChanged.connect(on_ul_changed)
+        
+        btn = QPushButton("Aceptar")
+        btn.clicked.connect(dialog.accept)
+        layout.addWidget(btn)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+            
+        self.btn_change_uplink_freq.show()
+        self.ul_freq_target = ul_spin.value()
+        self.dl_freq_target = dl_spin.value()
+        
+        
+        # Deshabilitar input manual temporalmente
+        self.freq_input.setEnabled(False)
+
         bw_to_config = {
             1.4: (1.92e6, 128, 6),
             3:   (3.84e6, 256, 15),
@@ -530,8 +587,18 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(sample_rate, fft_size, rb_count)
         self.radio.set_sample_rate(sample_rate)
         
+        # OJO: Sintonizar frecuencia SIEMPRE DESPUÉS de cambiar el sample rate en la USRP
+        # para evitar cuelgues del FPGA (transaction collisions)
+        state['center_freq'] = self.dl_freq_target * getattr(self, 'current_freq_multiplier', 1e6)
+        if hasattr(self, 'radio') and self.radio:
+            self.radio.set_freq(state['center_freq'])
+            
+        # Actualizar UI silenciosamente
+        self.freq_input.blockSignals(True)
+        self.freq_input.setValue(self.dl_freq_target)
+        self.freq_input.blockSignals(False)
+        
         self.unit_combo.setCurrentText("MHz")
-        self.freq_input.setValue(2132.5)
 
         sr_text = f"{sample_rate / 1e6:.2f} MHz".replace(".00 ", " ")
         self.sr_combo.blockSignals(True)
@@ -552,6 +619,31 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
         self._restore_panels()
 
+        # (El sniffer ahora notifica directamente a través del diccionario de resultados
+        # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
+        
+    def _force_switch_to_ul(self):
+        if hasattr(self, '_ul_sniff_timer'):
+            self._ul_sniff_timer.stop()
+            
+        if hasattr(self, 'demodulador_actual') and self.demodulador_actual and getattr(self.demodulador_actual, 'id', None) == "lte_uplink":
+            print(f"Cambiando a Uplink (vía evento directo): {self.ul_freq_target} MHz")
+            
+            # Forzar cambio de frecuencia en el SDR directamente
+            state['center_freq'] = self.ul_freq_target * getattr(self, 'current_freq_multiplier', 1e6)
+            if hasattr(self, 'radio') and self.radio:
+                self.radio.set_freq(state['center_freq'])
+            
+            # Actualizar el UI de forma segura
+            self.freq_input.blockSignals(True)
+            self.freq_input.setValue(self.ul_freq_target)
+            self.freq_input.blockSignals(False)
+            
+            if hasattr(self, 'trace_manager'):
+                self.trace_manager.reset()
+            if hasattr(self, 'update_x_axis'):
+                self.update_x_axis()
+
     def set_wbfm_audio_mode(self):
         self.set_wbfm_mode() 
         self.audio_container.show()
@@ -563,6 +655,8 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
             self.lte_q1_stack.removeWidget(self.freq_plot)
             from PyQt6.QtWidgets import QWidget

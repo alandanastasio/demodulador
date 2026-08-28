@@ -284,6 +284,8 @@ class DemoduladorLTEUplink(DemoduladorBase):
             PSD[centro_psd] = (PSD[centro_psd - 1] + PSD[centro_psd + 1]) / 2.0
             rf_chunk_ui = chunk[:ui_fs] if len(chunk) >= ui_fs else np.pad(chunk, (0, ui_fs - len(chunk)))
 
+            action_to_emit = None
+
             # ---- Variables por defecto para resultados ----
             dmrs_plot = self._ultimo_dmrs_bueno
             pusch_plot = self._ultimo_pusch_bueno
@@ -305,8 +307,12 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 l_limit = min(len(chunk), int(self.sample_rate * 0.02))
                 
                 if l_limit > self.fft_size:
+                    # Remover DC spike de la SDR localmente para no inflar el mean_corr
+                    chunk_psd_local = chunk[:l_limit].copy()
+                    chunk_psd_local -= np.mean(chunk_psd_local)
+                    
                     for i in range(3):
-                        corr = signal.correlate(chunk[:l_limit], pss_time[i], mode="valid", method="fft")
+                        corr = signal.correlate(chunk_psd_local, pss_time[i], mode="valid", method="fft")
                         corr_abs = np.abs(corr)
                         pico_local = np.argmax(corr_abs)
                         val = corr_abs[pico_local]
@@ -316,7 +322,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                             mejor_pico = pico_local
 
                     mean_corr = np.mean(np.abs(corr))
-                    umbral_pss = 4.0 * mean_corr
+                    umbral_pss = 3.0 * mean_corr
                     
                     if max_val > umbral_pss:
                         inicio_sss = mejor_pico - Tu - cp2
@@ -337,11 +343,26 @@ class DemoduladorLTEUplink(DemoduladorBase):
                                         mejor_N_id_1 = n_id_1
 
                             if mejor_N_id_1 != -1:
-                                self.cell_id_guardada = 3 * mejor_N_id_1 + mejor_N_id_2
-                                self.n_id_1 = mejor_N_id_1
-                                self.n_id_2 = mejor_N_id_2
-                                self.estado = 'WAITING_UL'
-                                print(f"[UPLINK SNIFFER] DL Cell ID = {self.cell_id_guardada}. Cambie a freq UL.")
+                                cid = 3 * mejor_N_id_1 + mejor_N_id_2
+                                
+                                if not hasattr(self, '_dl_sniff_history'):
+                                    self._dl_sniff_history = []
+                                self._dl_sniff_history.append(cid)
+                                
+                                if len(self._dl_sniff_history) >= 5:
+                                    from collections import Counter
+                                    mejor_cid = Counter(self._dl_sniff_history).most_common(1)[0][0]
+                                    
+                                    self.cell_id_guardada = mejor_cid
+                                    self.n_id_1 = mejor_cid // 3
+                                    self.n_id_2 = mejor_cid % 3
+                                    self.estado = 'WAITING_UL'
+                                    print(f"[UPLINK SNIFFER] DL Cell ID Consolidado = {self.cell_id_guardada}. Cambie a freq UL.")
+                                    
+                                    # Notificar a la UI
+                                    action_to_emit = 'switch_to_ul'
+                                else:
+                                    print(f"[UPLINK SNIFFER] Detectado {cid} ({len(self._dl_sniff_history)}/5)")
 
             # =========================================================
             # ESTADO 2: Escuchar Uplink - Demodular PUSCH completo
@@ -681,6 +702,8 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 },
                 'evm_data': None,
             }
+            if action_to_emit:
+                resultados['action'] = action_to_emit
 
             with self._lock:
                 self.last_heavy_results = resultados
@@ -698,11 +721,18 @@ class DemoduladorLTEUplink(DemoduladorBase):
         if muestras_iq is None or len(muestras_iq) == 0:
             return None
 
+        # SIEMPRE extraer resultados pendientes primero, sin importar si estamos
+        # procesando o si estamos en pausa. Esto evita perder eventos únicos como 'switch_to_ul'.
+        resultados_pendientes = None
+        if self.nuevos_datos_listos:
+            with self._lock:
+                self.nuevos_datos_listos = False
+                resultados_pendientes = self.last_heavy_results
+                
+        if resultados_pendientes is not None:
+            return resultados_pendientes
+
         if self.is_processing:
-            if self.nuevos_datos_listos:
-                with self._lock:
-                    self.nuevos_datos_listos = False
-                    return self.last_heavy_results
             return None
 
         ahora = time.time()
@@ -724,10 +754,5 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 args=(chunk,),
                 daemon=True,
             ).start()
-
-        if self.nuevos_datos_listos:
-            with self._lock:
-                self.nuevos_datos_listos = False
-                return self.last_heavy_results
 
         return None

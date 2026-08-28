@@ -829,6 +829,10 @@ def build_ui(self, state):
 
     # Agregamos el layout compuesto al formulario
     form_layout.addRow(QLabel("FREQ CENTRAL:"), freq_layout)
+    
+    self.btn_change_uplink_freq = QPushButton("Cambiar Frecuencia")
+    self.btn_change_uplink_freq.hide()
+    form_layout.addRow(self.btn_change_uplink_freq)
 
     # Variables de estado para las unidades
     self.current_freq_multiplier = 1e6

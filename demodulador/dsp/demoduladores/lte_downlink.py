@@ -1,3 +1,4 @@
+from functools import lru_cache
 import numpy as np
 import threading
 import time
@@ -31,6 +32,7 @@ def generar_pss_time(fft_size: int):
         
     return pss_time, pss_freq
 
+@lru_cache(maxsize=1024)
 def generar_sss(N_id_1: int, N_id_2: int, subframe: int = 0):
     q_prime = N_id_1 // 30
     q = (N_id_1 + (q_prime * (q_prime + 1)) // 2) // 30
