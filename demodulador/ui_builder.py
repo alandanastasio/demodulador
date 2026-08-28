@@ -542,9 +542,11 @@ def build_ui(self, state):
     
     # Configuramos el tamaño de las columnas
     header = self.lte_frame_summary.horizontalHeader()
-    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    for i in range(1, 5):
-        header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+    # Usar Stretch para todas las columnas evita que la tabla recalcule
+    # sus dimensiones 50 veces por segundo al actualizar los números,
+    # lo cual causaba un stuttering masivo que rompía el zoom de los gráficos.
+    for i in range(5):
+        header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
         
     # Ajustamos la altura de las filas
     v_header = self.lte_frame_summary.verticalHeader()
@@ -599,7 +601,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container]
     for w in self.all_panels:
         w.installEventFilter(self)
 

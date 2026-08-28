@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
     # ==========================================
 
     def set_wbfm_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -232,9 +233,9 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self.freq_input.setValue(100.0)
         self.update_x_axis()
-        self._restore_panels()
 
     def set_wifi_ag_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -308,9 +309,9 @@ class MainWindow(QMainWindow):
         self.fft_combo.setEnabled(True)
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
-        self._restore_panels()
 
     def set_lte_mode(self, bw_mhz=5):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         # Mapeo de ancho de banda LTE a frecuencia de muestreo y FFT
@@ -416,7 +417,6 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._restore_panels()
 
     def _actualizar_tabla_lte(self, modo):
         from PyQt6.QtWidgets import QTableWidgetItem
@@ -465,6 +465,7 @@ class MainWindow(QMainWindow):
                 self.lte_frame_summary.setItem(row, col + 1, item)
 
     def set_lte_uplink_mode(self, bw_mhz=5):
+        self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton
         dialog = QDialog(self)
@@ -617,7 +618,6 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._restore_panels()
 
         # (El sniffer ahora notifica directamente a través del diccionario de resultados
         # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
@@ -655,6 +655,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -726,7 +727,6 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = SpectrumAnalyzer()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.on_sr_changed(self.sr_combo.currentText()) 
-        self._restore_panels()
         self.update_x_axis()
 
     def on_freq_changed(self, val):
@@ -868,14 +868,20 @@ class MainWindow(QMainWindow):
         
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
-        layout = widget.parentWidget().layout() if widget.parentWidget() else None
+        # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
+        grid_widget = widget
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None)]
+        while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
+            grid_widget = grid_widget.parentWidget()
+            
+        layout = grid_widget.parentWidget().layout() if grid_widget.parentWidget() else None
         
         from PyQt6.QtWidgets import QGridLayout
         if isinstance(layout, QGridLayout):
             self._saved_row_stretches = {i: layout.rowStretch(i) for i in range(layout.rowCount())}
             self._saved_col_stretches = {i: layout.columnStretch(i) for i in range(layout.columnCount())}
             
-            idx = layout.indexOf(widget)
+            idx = layout.indexOf(grid_widget)
             if idx != -1:
                 row, col, rowSpan, colSpan = layout.getItemPosition(idx)
                 for i in range(layout.rowCount()):
@@ -884,7 +890,7 @@ class MainWindow(QMainWindow):
                     layout.setColumnStretch(i, 1 if (col <= i < col + colSpan) else 0)
                     
         for w in self.all_panels:
-            if w is not widget:
+            if w is not widget and not w.isAncestorOf(widget) and not widget.isAncestorOf(w):
                 w.hide()
                 
         widget.show()
@@ -909,6 +915,16 @@ class MainWindow(QMainWindow):
         self._saved_visibility = {}
         self._saved_row_stretches = {}
         self._saved_col_stretches = {}
+
+    def _reset_maximized_state(self):
+        self._maximized_widget = None
+        self._maximized_layout = None
+        self._saved_visibility = {}
+        self._saved_row_stretches = {}
+        self._saved_col_stretches = {}
+        if hasattr(self, 'all_panels'):
+            for w in self.all_panels:
+                w.show()
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
         
