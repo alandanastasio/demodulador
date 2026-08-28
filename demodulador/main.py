@@ -40,7 +40,8 @@ state = {
     'demod_mode': 'none',
     'is_recording': False,
     'recorded_samples': [],
-    'zero_span': False
+    'zero_span': False,
+    'fft_window': 'rectangular'
 }
 
 class SignalEmitter(QObject):
@@ -802,6 +803,23 @@ class MainWindow(QMainWindow):
             self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.update_x_axis()
             
+    def on_fft_window_changed(self, text):
+        if "Rectangular" in text:
+            state['fft_window'] = 'rectangular'
+        elif "Hanning" in text:
+            state['fft_window'] = 'hanning'
+        elif "Hamming" in text:
+            state['fft_window'] = 'hamming'
+        elif "Blackman" in text:
+            state['fft_window'] = 'blackman'
+        elif "Flat-top" in text:
+            state['fft_window'] = 'flattop'
+        elif "Bartlett" in text:
+            state['fft_window'] = 'bartlett'
+            
+        if self.demodulador_actual is not None and hasattr(self.demodulador_actual, 'set_window'):
+            self.demodulador_actual.set_window(state['fft_window'])
+        self.trace_manager.reset()
     def update_spinbox_step(self):
         # Ajusta cuánto salta el valor al apretar las flechitas según la unidad
         if self.current_freq_multiplier == 1:       # Hz

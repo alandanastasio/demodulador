@@ -912,6 +912,29 @@ def build_ui(self, state):
     self.trace_combo.currentTextChanged.connect(self.trace_manager.set_mode)
     form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
 
+    self.fft_window_combo = QComboBox()
+    self.fft_window_combo.addItems([
+        "Rectangular",
+        "Hanning",
+        "Hamming",
+        "Blackman",
+        "Flat-top",
+        "Bartlett"
+    ])
+    
+    # Tooltips para cada opción individual (aparecen al dejar el mouse)
+    self.fft_window_combo.setItemData(0, "Mejor resolución de frecuencia (picos finos), pero alto ruido de fondo (fugas).", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(1, "Balance general excelente. Limpia el ruido engrosando muy poco la señal.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(2, "Similar a Hanning pero optimizada para cancelar el primer lóbulo.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(3, "Máxima supresión de ruido y lóbulos laterales. Ideal para separar señales fuertes de débiles.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(4, "Mejor precisión de amplitud. Usar si querés medir la potencia exacta en dBm.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(5, "Ventana triangular. Compromiso moderado; poco uso frente a Hanning, pero útil en ciertos ruidos correlacionados.", Qt.ItemDataRole.ToolTipRole)
+    
+    self.fft_window_combo.setToolTip("Elige la ventana matemática a aplicar antes de la FFT.")
+    self.fft_window_combo.setCurrentIndex(0)
+    self.fft_window_combo.currentTextChanged.connect(self.on_fft_window_changed)
+    form_layout.addRow(QLabel("VENTANA FFT:"), self.fft_window_combo)
+
     # ---  BOTÓN ZERO SPAN ---
     self.zero_span_btn = QPushButton("Spam Cero")
 
