@@ -971,6 +971,10 @@ class MainWindow(QMainWindow):
                 self.waterfall_image.clear()
                 self.waterfall_widget.hide()
                 self.layout_normal.setRowStretch(1, 0)
+            
+            # Liberar la RAM del buffer retroactivo
+            if hasattr(self, 'retro_buffer'):
+                del self.retro_buffer
 
     def change_waterfall_lines(self, delta):
         new_val = getattr(self, 'waterfall_lines', 200) + delta
@@ -989,6 +993,114 @@ class MainWindow(QMainWindow):
         if not getattr(self, 'waterfall_enabled', False) or self.waterfall_buffer is None:
             return
             
+    def toggle_waterfall_crop(self):
+        if not getattr(self, 'waterfall_enabled', False):
+            return
+            
+        if not hasattr(self, 'wf_crop_region'):
+            import pyqtgraph as pg
+            self.wf_crop_region = pg.LinearRegionItem(orientation=pg.LinearRegionItem.Horizontal)
+            self.wf_crop_region.setZValue(10)
+            self.waterfall_widget.addItem(self.wf_crop_region)
+            self.wf_crop_region.hide()
+            
+        if self.wf_btn_crop.text() == "✂️ Recortar Señal":
+            self.wf_btn_crop.setText("✅ Confirmar Recorte")
+            self.wf_btn_crop.setStyleSheet("background-color: #008800; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #005500; margin-top: 5px;")
+            self.wf_btn_cancel_crop.show()
+            
+            if not self.is_paused:
+                self.pause_btn.setChecked(True)
+                self.toggle_pause()
+                
+            y_range = self.waterfall_widget.getViewBox().viewRange()[1]
+            min_y = min(y_range)
+            max_y = max(y_range)
+            mid_y = (min_y + max_y) / 2
+            span = (max_y - min_y) * 0.1
+            self.wf_crop_region.setRegion([mid_y - span, mid_y + span])
+            self.wf_crop_region.show()
+            
+        elif self.wf_btn_crop.text() == "✅ Confirmar Recorte":
+            r_min, r_max = self.wf_crop_region.getRegion()
+            self._save_retro_crop(min(r_min, r_max), max(r_min, r_max))
+            self._cancel_waterfall_crop()
+            
+    def _cancel_waterfall_crop(self):
+        self.wf_btn_crop.setText("✂️ Recortar Señal")
+        self.wf_btn_crop.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555; margin-top: 5px;")
+        self.wf_btn_cancel_crop.hide()
+        if hasattr(self, 'wf_crop_region'):
+            self.wf_crop_region.hide()
+        if self.is_paused:
+            self.pause_btn.setChecked(False)
+            self.toggle_pause()
+
+    def _save_retro_crop(self, t_start, t_end):
+        if not hasattr(self, 'retro_buffer') or not self.retro_buffer:
+            QMessageBox.warning(self, "Error", "El historial IQ no está disponible.")
+            return
+            
+        # Calculate indices
+        # Total waterfall time is self.wf_dt_avg * self.waterfall_lines
+        # y=0 is most recent (idx = total_samples), y=total_time is oldest (idx = 0)
+        # Actually in plot_renderer, self.waterfall_image.setRect(f_min, 0, width, total_time_s)
+        # and y is time. y=0 is the top of the image (most recent frame).
+        
+        # total_time_s corresponds to the number of samples in the buffer right now.
+        # Actually the ring buffer holds EXACTLY 5 * len(raw_samples) * self.waterfall_lines.
+        total_samples = self.retro_buffer.max_samples
+        total_time_s = getattr(self, 'wf_dt_avg', 0.1) * self.waterfall_lines
+        
+        if total_time_s <= 0: return
+        
+        # Clamp times
+        t_start = max(0, min(total_time_s, t_start))
+        t_end = max(0, min(total_time_s, t_end))
+        
+        # Fraction of time (0 is most recent, 1 is oldest)
+        frac_start = t_start / total_time_s
+        frac_end = t_end / total_time_s
+        
+        # Get all samples from oldest (idx 0) to newest (idx N-1)
+        samples = self.retro_buffer.get_samples()
+        N = len(samples)
+        
+        # y=0 -> most recent -> idx = N - 1
+        # y=total_time_s -> oldest -> idx = 0
+        idx_end = int(N * (1.0 - frac_start))
+        idx_start = int(N * (1.0 - frac_end))
+        
+        idx_start = max(0, min(N, idx_start))
+        idx_end = max(0, min(N, idx_end))
+        
+        if idx_start >= idx_end:
+            QMessageBox.warning(self, "Error", "Recorte demasiado pequeño.")
+            return
+            
+        cropped_iq = samples[idx_start:idx_end]
+        
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Guardar Grabación Recortada", f"muestras_iq_recorte_{timestamp}.npz", "Archivos NumPy (*.npz)"
+        )
+        if not filepath:
+            return
+            
+        if not filepath.lower().endswith('.npz'):
+            filepath += '.npz'
+            
+        try:
+            np.savez(
+                filepath,
+                raw_iq=cropped_iq,
+                center_freq=state['center_freq'],
+                sample_rate=state['sample_rate']
+            )
+            QMessageBox.information(self, "Éxito", f"Señal guardada exitosamente:\n{filepath}\n\nMuestras: {len(cropped_iq)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar la grabación:\n{str(e)}")
         filepath, _ = QFileDialog.getSaveFileName(
             self, "Guardar Espectrograma", "", "Imágenes PNG (*.png)"
         )

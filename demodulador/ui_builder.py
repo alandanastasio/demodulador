@@ -992,11 +992,33 @@ def build_ui(self, state):
     self.wf_btn_save.clicked.connect(self.save_waterfall)
     self.wf_btn_save.setToolTip("Guardar Espectrograma como Imagen PNG")
     
-    wf_bottom_layout = QHBoxLayout()
+    self.wf_btn_crop = QPushButton("✂️ Recortar Señal")
+    self.wf_btn_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_crop.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555; margin-top: 5px;")
+    self.wf_btn_crop.setToolTip("Activa marcadores para recortar y guardar señal IQ del waterfall")
+    self.wf_btn_crop.clicked.connect(self.toggle_waterfall_crop)
+    
+    self.wf_btn_cancel_crop = QPushButton("❌ Cancelar")
+    self.wf_btn_cancel_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_cancel_crop.setStyleSheet("background-color: #880000; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #550000; margin-top: 5px;")
+    self.wf_btn_cancel_crop.hide()
+    self.wf_btn_cancel_crop.clicked.connect(self._cancel_waterfall_crop)
+    
+    wf_bottom_top_row = QHBoxLayout()
+    wf_bottom_top_row.setContentsMargins(0, 0, 0, 0)
+    wf_bottom_top_row.addWidget(self.wf_smooth_checkbox)
+    wf_bottom_top_row.addStretch()
+    wf_bottom_top_row.addWidget(self.wf_btn_save)
+    
+    wf_bottom_bot_row = QHBoxLayout()
+    wf_bottom_bot_row.setContentsMargins(0, 0, 0, 0)
+    wf_bottom_bot_row.addWidget(self.wf_btn_cancel_crop)
+    wf_bottom_bot_row.addWidget(self.wf_btn_crop)
+    
+    wf_bottom_layout = QVBoxLayout()
     wf_bottom_layout.setContentsMargins(0, 0, 0, 0)
-    wf_bottom_layout.addWidget(self.wf_smooth_checkbox)
-    wf_bottom_layout.addStretch()
-    wf_bottom_layout.addWidget(self.wf_btn_save)
+    wf_bottom_layout.addLayout(wf_bottom_top_row)
+    wf_bottom_layout.addLayout(wf_bottom_bot_row)
     
     self.wf_bottom_widget = QWidget()
     self.wf_bottom_widget.setLayout(wf_bottom_layout)

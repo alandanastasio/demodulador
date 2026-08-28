@@ -40,6 +40,20 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         self.waterfall_buffer = np.zeros((len(PSD), self.waterfall_lines))
                         self.waterfall_buffer.fill(-130)
                         self.waterfall_counter = 0
+                        
+                        # Inicializar o redimensionar el buffer IQ
+                        from iq_ring_buffer import IQRingBuffer
+                        # Cada línea del waterfall corresponde a 5 frames.
+                        # max_samples = 5 * len(raw_samples) * waterfall_lines
+                        max_iq_samples = 5 * len(raw_samples) * self.waterfall_lines
+                        if not hasattr(self, 'retro_buffer'):
+                            self.retro_buffer = IQRingBuffer(max_iq_samples)
+                        else:
+                            self.retro_buffer.resize(max_iq_samples)
+                            
+                    # Guardamos las muestras crudas en el historial
+                    if hasattr(self, 'retro_buffer') and raw_samples is not None:
+                        self.retro_buffer.append(raw_samples)
                     
                     self.waterfall_counter = getattr(self, 'waterfall_counter', 0) + 1
                     
