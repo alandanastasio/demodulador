@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
     # ==========================================
 
     def set_wbfm_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -232,9 +233,9 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self.freq_input.setValue(100.0)
         self.update_x_axis()
-        self._reset_maximized_state()
 
     def set_wifi_ag_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -308,9 +309,9 @@ class MainWindow(QMainWindow):
         self.fft_combo.setEnabled(True)
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
-        self._reset_maximized_state()
 
     def set_lte_mode(self, bw_mhz=5):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         # Mapeo de ancho de banda LTE a frecuencia de muestreo y FFT
@@ -416,7 +417,6 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._reset_maximized_state()
 
     def _actualizar_tabla_lte(self, modo):
         from PyQt6.QtWidgets import QTableWidgetItem
@@ -465,6 +465,7 @@ class MainWindow(QMainWindow):
                 self.lte_frame_summary.setItem(row, col + 1, item)
 
     def set_lte_uplink_mode(self, bw_mhz=5):
+        self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton
         dialog = QDialog(self)
@@ -617,7 +618,6 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         
         self.update_x_axis()
-        self._reset_maximized_state()
 
         # (El sniffer ahora notifica directamente a través del diccionario de resultados
         # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
@@ -655,6 +655,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
     def set_normal_mode(self):
+        self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -726,7 +727,6 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = SpectrumAnalyzer()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.on_sr_changed(self.sr_combo.currentText()) 
-        self._reset_maximized_state()
         self.update_x_axis()
 
     def on_freq_changed(self, val):
