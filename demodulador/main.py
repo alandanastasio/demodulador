@@ -868,14 +868,20 @@ class MainWindow(QMainWindow):
         
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
-        layout = widget.parentWidget().layout() if widget.parentWidget() else None
+        # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
+        grid_widget = widget
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None)]
+        while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
+            grid_widget = grid_widget.parentWidget()
+            
+        layout = grid_widget.parentWidget().layout() if grid_widget.parentWidget() else None
         
         from PyQt6.QtWidgets import QGridLayout
         if isinstance(layout, QGridLayout):
             self._saved_row_stretches = {i: layout.rowStretch(i) for i in range(layout.rowCount())}
             self._saved_col_stretches = {i: layout.columnStretch(i) for i in range(layout.columnCount())}
             
-            idx = layout.indexOf(widget)
+            idx = layout.indexOf(grid_widget)
             if idx != -1:
                 row, col, rowSpan, colSpan = layout.getItemPosition(idx)
                 for i in range(layout.rowCount()):
@@ -884,7 +890,7 @@ class MainWindow(QMainWindow):
                     layout.setColumnStretch(i, 1 if (col <= i < col + colSpan) else 0)
                     
         for w in self.all_panels:
-            if w is not widget:
+            if w is not widget and not w.isAncestorOf(widget) and not widget.isAncestorOf(w):
                 w.hide()
                 
         widget.show()
