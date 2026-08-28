@@ -284,7 +284,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     self.wifi_hw_metrics_label.setText(html_hw)
 
         # --- RENDERIZADO ESPECÍFICO DE LTE ---
-        if state.get('demod_mode') == 'lte':
+        if state.get('demod_mode') in ['lte', 'lte_uplink']:
             if raw_samples is not None:
                 # Calculamos la magnitud de las muestras IQ
                 mag = np.abs(raw_samples)
@@ -314,21 +314,27 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
             
             if audio_L is not None and audio_R is not None:
                 if getattr(self, 'action_show_data', None) and self.action_show_data.isChecked():
+                    if state.get('demod_mode') == 'lte_uplink':
+                        brush = pg.mkBrush(0, 255, 255, 120)
+                        size = 3.0
+                    else:
+                        brush = "#00FFFF"
+                        size = 2.5
                     self.lte_const_curve.setData(
                         audio_L, 
                         audio_R, 
                         pen=None, 
                         symbol='o', 
-                        symbolSize=2.5, 
+                        symbolSize=size, 
                         symbolPen=None, 
-                        symbolBrush="#00FFFF"
+                        symbolBrush=brush
                     )
                 else:
                     self.lte_const_curve.setData([], [])
                 
-                if fm_metrics and 'pss_pts' in fm_metrics and 'sss_pts' in fm_metrics:
-                    pss_pts = fm_metrics['pss_pts']
-                    sss_pts = fm_metrics['sss_pts']
+                if fm_metrics:
+                    pss_pts = fm_metrics.get('pss_pts', np.array([]))
+                    sss_pts = fm_metrics.get('sss_pts', np.array([]))
                     pdcch_pts = fm_metrics.get('pdcch_pts', np.array([]))
                     pbch_pts = fm_metrics.get('pbch_pts', np.array([]))
                     crs_pts = fm_metrics.get('crs_pts', np.array([]))
@@ -336,7 +342,13 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     phich_pts = fm_metrics.get('phich_pts', np.array([]))
                     
                     if len(pss_pts) > 0 and getattr(self, 'action_show_pss', None) and self.action_show_pss.isChecked():
-                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=3.5, symbolPen=None, symbolBrush="#FF6600")
+                        if state.get('demod_mode') == 'lte_uplink':
+                            brush = pg.mkBrush(255, 102, 0, 180)
+                            size = 4.5
+                        else:
+                            brush = "#FF6600"
+                            size = 3.5
+                        self.lte_pss_curve.setData(pss_pts.real, pss_pts.imag, pen=None, symbol='o', symbolSize=size, symbolPen=None, symbolBrush=brush)
                     else:
                         self.lte_pss_curve.setData([], [])
                         
