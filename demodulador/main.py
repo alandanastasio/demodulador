@@ -101,6 +101,22 @@ class MainWindow(QMainWindow):
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
         if state['is_recording'] and c_samples is not None:
             state['recorded_samples'].append(c_samples.copy())
+            
+        # 1.5. Grabación retroactiva del Waterfall (Búfer Circular de RAM)
+        if getattr(self, 'waterfall_enabled', False) and c_samples is not None and state.get('demod_mode') == 'none' and not self.is_paused:
+            dt = getattr(self, 'wf_dt_avg', 0.166)
+            total_time = dt * getattr(self, 'waterfall_lines', 200)
+            expected_samples = int(total_time * state.get('sample_rate', 2e6))
+            
+            if expected_samples > 0:
+                if not hasattr(self, 'retro_buffer') or self.retro_buffer is None:
+                    from iq_ring_buffer import IQRingBuffer
+                    self.retro_buffer = IQRingBuffer(expected_samples)
+                elif self.retro_buffer.max_samples != expected_samples:
+                    self.retro_buffer.resize(expected_samples)
+                    
+                self.retro_buffer.append(c_samples)
+
 
         # 2. Procesamiento a través del plugin DSP activo (SpectrumAnalyzer o DemoduladorWBFM)
         if self.demodulador_actual is not None:
