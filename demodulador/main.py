@@ -360,9 +360,19 @@ class MainWindow(QMainWindow):
         # Mantenemos el índice según lo que esté seleccionado en el menú
         self.lte_q1_stack.setCurrentIndex(0 if self.action_q1_espectro.isChecked() else 1)
         
+        # CONFIGURACIÓN DOWNLINK UI
+        self.page_lte.force_square = False
+        self.layout_lte.addWidget(self.lte_rb_allocation_widget, 0, 0)
+        self.layout_lte.addWidget(self.lte_const_widget, 1, 1)
+        self.layout_lte.addWidget(self.lte_q1_container, 1, 0)
+        
+        self.lte_rb_allocation_widget.show()
+        self.lte_evm_subc_widget.hide()
+        self.lte_evm_sym_widget.hide()
+        
         self.layout_lte.setRowStretch(0, 1)
-        self.layout_lte.setRowStretch(1, 1)
-        self.layout_lte.setRowStretch(2, 1)
+        self.layout_lte.setRowStretch(1, 2)
+        self.layout_lte.setRowStretch(2, 0)
         self.layout_lte.setColumnStretch(0, 1)
         self.layout_lte.setColumnStretch(1, 1)
         if hasattr(self, 'waterfall_checkbox'): 
@@ -554,9 +564,19 @@ class MainWindow(QMainWindow):
         
         self.lte_q1_stack.setCurrentIndex(0 if self.action_q1_espectro.isChecked() else 1)
         
+        # CONFIGURACIÓN UPLINK UI
+        self.page_lte.force_square = False
+        self.layout_lte.addWidget(self.lte_rb_allocation_widget, 0, 0)
+        self.layout_lte.addWidget(self.lte_const_widget, 1, 1)
+        self.layout_lte.addWidget(self.lte_q1_container, 1, 0)
+        
+        self.lte_rb_allocation_widget.show()
+        self.lte_evm_subc_widget.hide()
+        self.lte_evm_sym_widget.hide()
+        
         self.layout_lte.setRowStretch(0, 1)
-        self.layout_lte.setRowStretch(1, 1)
-        self.layout_lte.setRowStretch(2, 1)
+        self.layout_lte.setRowStretch(1, 2)
+        self.layout_lte.setRowStretch(2, 0)
         self.layout_lte.setColumnStretch(0, 1)
         self.layout_lte.setColumnStretch(1, 1)
         if hasattr(self, 'waterfall_checkbox'): self.waterfall_checkbox.hide()

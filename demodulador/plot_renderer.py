@@ -436,6 +436,13 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     if hasattr(self, 'lte_metrics_label'):
                         self.lte_metrics_label.setText(html_lte)
                         
+                    rb_grid = fm_metrics.get('rb_grid', None)
+                    if rb_grid is not None and rb_grid.size > 0 and hasattr(self, 'lte_rb_image'):
+                        self.lte_rb_image.setImage(rb_grid, autoLevels=False)
+                        if hasattr(self, 'lte_rb_allocation_widget'):
+                            self.lte_rb_allocation_widget.setXRange(0, rb_grid.shape[0], padding=0)
+                            self.lte_rb_allocation_widget.setYRange(0, rb_grid.shape[1], padding=0)
+                        
                     fs = lte.get('frame_summary', {})
                     if hasattr(self, 'lte_frame_summary') and fs:
                         for row in range(self.lte_frame_summary.rowCount()):

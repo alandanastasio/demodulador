@@ -20,6 +20,55 @@ class FlexibleDoubleSpinBox(QDoubleSpinBox):
         return super().valueFromText(text.replace(',', '.'))
 
 
+class LTEPageWidget(QWidget):
+    def __init__(self, main_window, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.main_window = main_window
+        self.force_square = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        
+        if not self.force_square:
+            if hasattr(self.main_window, 'lte_q1_container'):
+                self.main_window.lte_q1_container.setMinimumHeight(0)
+                self.main_window.lte_q1_container.setMaximumHeight(16777215)
+            if hasattr(self.main_window, 'lte_const_widget'):
+                self.main_window.lte_const_widget.setMinimumHeight(0)
+                self.main_window.lte_const_widget.setMaximumHeight(16777215)
+            return
+
+        # Avoid forcing squares if a panel is maximized
+        if getattr(self.main_window, '_maximized_widget', None) is not None:
+            if hasattr(self.main_window, 'lte_q1_container'):
+                self.main_window.lte_q1_container.setMinimumHeight(0)
+                self.main_window.lte_q1_container.setMaximumHeight(16777215)
+            if hasattr(self.main_window, 'lte_const_widget'):
+                self.main_window.lte_const_widget.setMinimumHeight(0)
+                self.main_window.lte_const_widget.setMaximumHeight(16777215)
+            return
+
+        # Not maximized: force square for the bottom widgets
+        if hasattr(self.main_window, 'lte_q1_container') and hasattr(self.main_window, 'lte_const_widget'):
+            w1 = self.main_window.lte_q1_container.width()
+            w2 = self.main_window.lte_const_widget.width()
+            
+            # The layout assigns equal column width, so w1 is approximately w2
+            target_h = max(100, min(w1, w2))
+            
+            # To prevent extreme sizes pushing the layout off screen if window is too short
+            # we can cap target_h to not exceed the available height of page_lte
+            page_h = self.height()
+            if target_h > page_h * 0.75: # Don't take more than 75% of the screen height
+                target_h = int(page_h * 0.75)
+                
+            if self.main_window.lte_q1_container.minimumHeight() != target_h:
+                self.main_window.lte_q1_container.setFixedHeight(target_h)
+                
+            if self.main_window.lte_const_widget.minimumHeight() != target_h:
+                self.main_window.lte_const_widget.setFixedHeight(target_h)
+
+
 def build_ui(self, state):
     # --- BARRA SUPERIOR  ---
     self.toolbar = QToolBar("Barra Principal")
@@ -368,7 +417,7 @@ def build_ui(self, state):
     # ==========================================
     # PÁGINA 3: MODO LTE
     # ==========================================
-    self.page_lte = QWidget()
+    self.page_lte = LTEPageWidget(self)
     self.layout_lte = QGridLayout(self.page_lte)
     self.layout_lte.setContentsMargins(0, 0, 0, 0)
     
@@ -422,7 +471,7 @@ def build_ui(self, state):
     
     self.btn_lte_q1.raise_()
     
-    self.lte_evm_subc_widget = pg.PlotWidget(title="EVM por Subportadora (LTE)")
+    self.lte_evm_subc_widget = pg.PlotWidget(parent=self.page_lte, title="EVM por Subportadora (LTE)")
     self.lte_evm_subc_widget.setLabel('bottom', 'Subportadora')
     self.lte_evm_subc_widget.setLabel('left', 'EVM [dB]')
     self.lte_evm_subc_widget.setXRange(-300, 300)
@@ -435,7 +484,7 @@ def build_ui(self, state):
     self.lte_evm_subc_widget.addItem(self.lte_evm_rms_subc)
     self.lte_evm_subc_widget.addItem(self.lte_evm_limit)
     
-    self.lte_evm_sym_widget = pg.PlotWidget(title="EVM por Símbolo (LTE)")
+    self.lte_evm_sym_widget = pg.PlotWidget(parent=self.page_lte, title="EVM por Símbolo (LTE)")
     self.lte_evm_sym_widget.setLabel('bottom', 'Símbolo')
     self.lte_evm_sym_widget.setLabel('left', 'EVM [dB]')
     self.lte_evm_sym_widget.setYRange(-40, 0)
@@ -501,7 +550,6 @@ def build_ui(self, state):
     self.action_show_phich = add_checkable_menu_item(self.menu_lte_layers, "PHICH")
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
-    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
     
     # Cuadrante (0,1) - Frame Summary Table
     self.lte_frame_summary = QTableWidget(11, 5)
@@ -596,6 +644,46 @@ def build_ui(self, state):
             item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.lte_frame_summary.setItem(row, col + 1, item)
             
+    self.lte_rb_allocation_widget = pg.PlotWidget(parent=self.page_lte, title="RB Allocation Table")
+    self.lte_rb_allocation_widget.setLabel('bottom', 'Subframe / Symbol')
+    self.lte_rb_allocation_widget.setLabel('left', 'Resource Block')
+    self.lte_rb_allocation_widget.showGrid(x=True, y=True, alpha=0.3)
+    
+    self.lte_rb_image = pg.ImageItem()
+    self.lte_rb_allocation_widget.addItem(self.lte_rb_image)
+    
+    # Mapa de colores para RB Allocation
+    rb_colors = [
+        (0, 0, 0),       # 0: Empty
+        (0, 255, 0),     # 1: PDSCH / PUSCH (Verde)
+        (0, 0, 255),     # 2: PDCCH / PUCCH (Azul)
+        (255, 255, 0),   # 3: PSS/SSS / DMRS (Amarillo)
+        (0, 255, 255),   # 4: PBCH (Celeste)
+        (255, 0, 0),     # 5: CRS (Rojo)
+        (255, 0, 255),   # 6: PCFICH (Magenta)
+        (255, 128, 0),   # 7: PHICH (Naranja)
+    ]
+    cmap = pg.ColorMap(pos=np.linspace(0.0, 1.0, len(rb_colors)), color=rb_colors)
+    self.lte_rb_image.setLookupTable(cmap.getLookupTable(nPts=256))
+    self.lte_rb_image.setLevels([0, len(rb_colors)-1])
+    
+    # Tooltip descriptivo de colores
+    tooltip_html = """
+    <b>Leyenda de Colores (RB Allocation)</b><br>
+    <span style="color: #00FF00;">■ Verde:</span> Datos (PDSCH / PUSCH)<br>
+    <span style="color: #0000FF;">■ Azul:</span> Control (PDCCH / PUCCH)<br>
+    <span style="color: #FFFF00;">■ Amarillo:</span> Sinc. y Ref. (PSS/SSS / DMRS)<br>
+    <span style="color: #00FFFF;">■ Celeste:</span> Broadcast (PBCH)<br>
+    <span style="color: #FF0000;">■ Rojo:</span> Pilotos (CRS)<br>
+    <span style="color: #FF00FF;">■ Magenta:</span> Control (PCFICH)<br>
+    <span style="color: #FF8000;">■ Naranja:</span> Control (PHICH)<br>
+    <span style="color: #AAAAAA;">■ Negro:</span> Sin asignar / Vacío
+    """
+    self.lte_rb_allocation_widget.setToolTip(tooltip_html)
+    
+    self.lte_rb_allocation_widget.hide()
+    
+    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
     self.layout_lte.addWidget(self.lte_frame_summary, 0, 1)
     
     self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)
