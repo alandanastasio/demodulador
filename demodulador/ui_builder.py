@@ -1,9 +1,24 @@
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, QLocale
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
 from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
+
+class FlexibleDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        loc = QLocale(QLocale.Language.C)
+        loc.setNumberOptions(QLocale.NumberOption.OmitGroupSeparator)
+        self.setLocale(loc)
+
+    def validate(self, input_str, pos):
+        input_str = input_str.replace(',', '.')
+        return super().validate(input_str, pos)
+
+    def valueFromText(self, text):
+        return super().valueFromText(text.replace(',', '.'))
+
 
 def build_ui(self, state):
     # --- BARRA SUPERIOR  ---
@@ -816,7 +831,7 @@ def build_ui(self, state):
    # 1. FRECUENCIA CENTRAL (Común a todos)
     freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
 
-    self.freq_input = QDoubleSpinBox()
+    self.freq_input = FlexibleDoubleSpinBox()
     self.freq_input.setKeyboardTracking(False)
     self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
     self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
