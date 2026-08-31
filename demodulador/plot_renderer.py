@@ -36,19 +36,23 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 
                 # --- LÓGICA DE WATERFALL ---
                 if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none':
-                    if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != len(PSD) or self.waterfall_buffer.shape[1] != self.waterfall_lines:
-                        self.waterfall_buffer = np.zeros((len(PSD), self.waterfall_lines))
+                    # Ahora usamos row-major: shape = (waterfall_lines, len(PSD))
+                    # Esto permite que el np.roll y el renderizado sean muchísimo más rápidos
+                    # por la localidad de caché del CPU.
+                    if self.waterfall_buffer is None or self.waterfall_buffer.shape[0] != self.waterfall_lines or self.waterfall_buffer.shape[1] != len(PSD):
+                        self.waterfall_buffer = np.zeros((self.waterfall_lines, len(PSD)), dtype=np.float32)
                         self.waterfall_buffer.fill(-130)
                         self.waterfall_counter = 0
                     
                     self.waterfall_counter = getattr(self, 'waterfall_counter', 0) + 1
                     
-                    if self.waterfall_counter >= 5:
+                    # Actualizamos todos los frames (30 FPS) en lugar de 1 de cada 5
+                    if self.waterfall_counter >= 1:
                         self.waterfall_counter = 0
                         
-                        # Desplazamos las columnas de tiempo hacia la derecha (o izquierda, según el waterfall)
-                        self.waterfall_buffer = np.roll(self.waterfall_buffer, 1, axis=1)
-                        self.waterfall_buffer[:, 0] = display_psd
+                        # Desplazamos las filas de tiempo hacia abajo (eje 0)
+                        self.waterfall_buffer = np.roll(self.waterfall_buffer, 1, axis=0)
+                        self.waterfall_buffer[0, :] = display_psd
                         
                         # Actualizamos la imagen (X: frecuencia, Y: tiempo)
                         # autoLevels=False y levels fijos evitan que pyqtgraph colapse calculando
@@ -68,9 +72,13 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         now = time.time()
                         if not hasattr(self, 'wf_last_time'):
                             self.wf_last_time = now
-                            dt = 1.0 / 30.0 * 5 # Valor por defecto razonable
+                            dt = 1.0 / 30.0 # Valor por defecto razonable para 30 FPS
                         else:
                             dt = now - self.wf_last_time
+                            # Si hubo un lag extremo o el programa estuvo pausado, ignoramos el pico 
+                            # para que no distorsione la escala de tiempo ni sature la RAM.
+                            if dt > 0.5 or dt <= 0:
+                                dt = 1.0 / 30.0
                             self.wf_last_time = now
                             
                         # Usamos un filtro pasa-bajos simple para estabilizar la escala
@@ -427,6 +435,13 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     )
                     if hasattr(self, 'lte_metrics_label'):
                         self.lte_metrics_label.setText(html_lte)
+                        
+                    rb_grid = fm_metrics.get('rb_grid', None)
+                    if rb_grid is not None and rb_grid.size > 0 and hasattr(self, 'lte_rb_image'):
+                        self.lte_rb_image.setImage(rb_grid, autoLevels=False)
+                        if hasattr(self, 'lte_rb_allocation_widget'):
+                            self.lte_rb_allocation_widget.setXRange(0, rb_grid.shape[0], padding=0)
+                            self.lte_rb_allocation_widget.setYRange(0, rb_grid.shape[1], padding=0)
                         
                     fs = lte.get('frame_summary', {})
                     if hasattr(self, 'lte_frame_summary') and fs:

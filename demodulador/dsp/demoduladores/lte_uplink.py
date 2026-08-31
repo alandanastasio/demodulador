@@ -688,6 +688,28 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 }
             }
 
+            # Generar RB Grid para Uplink
+            num_rb = self.rb_count
+            subframe_grid = np.zeros((14, num_rb), dtype=np.uint8)
+            try:
+                if 'min_a' in locals() and 'max_a' in locals():
+                    rb_start = min_a // 12
+                    rb_end = max_a // 12
+                    for s in range(14):
+                        for r in range(rb_start, rb_end):
+                            # DMRS usually at symbols 3 and 10 in Normal CP
+                            if s == 3 or s == 10:
+                                subframe_grid[s, r] = 3 # DMRS
+                            else:
+                                subframe_grid[s, r] = 1 # PUSCH
+            except Exception:
+                pass
+
+            if not hasattr(self, 'rb_grid_history') or self.rb_grid_history.shape[1] != num_rb:
+                self.rb_grid_history = np.zeros((140, num_rb), dtype=np.uint8)
+            self.rb_grid_history = np.roll(self.rb_grid_history, -14, axis=0)
+            self.rb_grid_history[-14:, :] = subframe_grid
+
             resultados = {
                 'psd_rf': PSD,
                 'rf_chunk': rf_chunk_ui,
@@ -699,6 +721,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 'metricas': {
                     'lte_metrics': self.ultimo_lte_metrics,
                     'pss_pts': dmrs_plot,
+                    'rb_grid': getattr(self, 'rb_grid_history', np.array([]))
                 },
                 'evm_data': None,
             }

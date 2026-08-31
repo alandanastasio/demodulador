@@ -1,9 +1,73 @@
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, QLocale
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
 from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
+
+class FlexibleDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        loc = QLocale(QLocale.Language.C)
+        loc.setNumberOptions(QLocale.NumberOption.OmitGroupSeparator)
+        self.setLocale(loc)
+
+    def validate(self, input_str, pos):
+        input_str = input_str.replace(',', '.')
+        return super().validate(input_str, pos)
+
+    def valueFromText(self, text):
+        return super().valueFromText(text.replace(',', '.'))
+
+
+class LTEPageWidget(QWidget):
+    def __init__(self, main_window, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.main_window = main_window
+        self.force_square = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        
+        if not self.force_square:
+            if hasattr(self.main_window, 'lte_q1_container'):
+                self.main_window.lte_q1_container.setMinimumHeight(0)
+                self.main_window.lte_q1_container.setMaximumHeight(16777215)
+            if hasattr(self.main_window, 'lte_const_widget'):
+                self.main_window.lte_const_widget.setMinimumHeight(0)
+                self.main_window.lte_const_widget.setMaximumHeight(16777215)
+            return
+
+        # Avoid forcing squares if a panel is maximized
+        if getattr(self.main_window, '_maximized_widget', None) is not None:
+            if hasattr(self.main_window, 'lte_q1_container'):
+                self.main_window.lte_q1_container.setMinimumHeight(0)
+                self.main_window.lte_q1_container.setMaximumHeight(16777215)
+            if hasattr(self.main_window, 'lte_const_widget'):
+                self.main_window.lte_const_widget.setMinimumHeight(0)
+                self.main_window.lte_const_widget.setMaximumHeight(16777215)
+            return
+
+        # Not maximized: force square for the bottom widgets
+        if hasattr(self.main_window, 'lte_q1_container') and hasattr(self.main_window, 'lte_const_widget'):
+            w1 = self.main_window.lte_q1_container.width()
+            w2 = self.main_window.lte_const_widget.width()
+            
+            # The layout assigns equal column width, so w1 is approximately w2
+            target_h = max(100, min(w1, w2))
+            
+            # To prevent extreme sizes pushing the layout off screen if window is too short
+            # we can cap target_h to not exceed the available height of page_lte
+            page_h = self.height()
+            if target_h > page_h * 0.75: # Don't take more than 75% of the screen height
+                target_h = int(page_h * 0.75)
+                
+            if self.main_window.lte_q1_container.minimumHeight() != target_h:
+                self.main_window.lte_q1_container.setFixedHeight(target_h)
+                
+            if self.main_window.lte_const_widget.minimumHeight() != target_h:
+                self.main_window.lte_const_widget.setFixedHeight(target_h)
+
 
 def build_ui(self, state):
     # --- BARRA SUPERIOR  ---
@@ -189,7 +253,7 @@ def build_ui(self, state):
     self.waterfall_widget.getViewBox().invertY(True)
     self.waterfall_widget.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     self.waterfall_widget.setXLink(self.freq_plot)
-    self.waterfall_image = pg.ImageItem()
+    self.waterfall_image = pg.ImageItem(axisOrder='row-major')
     
     # Aplicamos la paleta de color Viridis Turbo
     self.waterfall_colormap = pg.colormap.get('turbo')
@@ -353,7 +417,7 @@ def build_ui(self, state):
     # ==========================================
     # PÁGINA 3: MODO LTE
     # ==========================================
-    self.page_lte = QWidget()
+    self.page_lte = LTEPageWidget(self)
     self.layout_lte = QGridLayout(self.page_lte)
     self.layout_lte.setContentsMargins(0, 0, 0, 0)
     
@@ -407,7 +471,7 @@ def build_ui(self, state):
     
     self.btn_lte_q1.raise_()
     
-    self.lte_evm_subc_widget = pg.PlotWidget(title="EVM por Subportadora (LTE)")
+    self.lte_evm_subc_widget = pg.PlotWidget(parent=self.page_lte, title="EVM por Subportadora (LTE)")
     self.lte_evm_subc_widget.setLabel('bottom', 'Subportadora')
     self.lte_evm_subc_widget.setLabel('left', 'EVM [dB]')
     self.lte_evm_subc_widget.setXRange(-300, 300)
@@ -420,7 +484,7 @@ def build_ui(self, state):
     self.lte_evm_subc_widget.addItem(self.lte_evm_rms_subc)
     self.lte_evm_subc_widget.addItem(self.lte_evm_limit)
     
-    self.lte_evm_sym_widget = pg.PlotWidget(title="EVM por Símbolo (LTE)")
+    self.lte_evm_sym_widget = pg.PlotWidget(parent=self.page_lte, title="EVM por Símbolo (LTE)")
     self.lte_evm_sym_widget.setLabel('bottom', 'Símbolo')
     self.lte_evm_sym_widget.setLabel('left', 'EVM [dB]')
     self.lte_evm_sym_widget.setYRange(-40, 0)
@@ -486,7 +550,6 @@ def build_ui(self, state):
     self.action_show_phich = add_checkable_menu_item(self.menu_lte_layers, "PHICH")
     self.btn_lte_layers.clicked.connect(lambda: self.menu_lte_layers.exec(self.btn_lte_layers.mapToGlobal(self.btn_lte_layers.rect().bottomLeft())))
     
-    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
     
     # Cuadrante (0,1) - Frame Summary Table
     self.lte_frame_summary = QTableWidget(11, 5)
@@ -581,6 +644,46 @@ def build_ui(self, state):
             item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.lte_frame_summary.setItem(row, col + 1, item)
             
+    self.lte_rb_allocation_widget = pg.PlotWidget(parent=self.page_lte, title="RB Allocation Table")
+    self.lte_rb_allocation_widget.setLabel('bottom', 'Subframe / Symbol')
+    self.lte_rb_allocation_widget.setLabel('left', 'Resource Block')
+    self.lte_rb_allocation_widget.showGrid(x=True, y=True, alpha=0.3)
+    
+    self.lte_rb_image = pg.ImageItem()
+    self.lte_rb_allocation_widget.addItem(self.lte_rb_image)
+    
+    # Mapa de colores para RB Allocation
+    rb_colors = [
+        (0, 0, 0),       # 0: Empty
+        (0, 255, 0),     # 1: PDSCH / PUSCH (Verde)
+        (0, 0, 255),     # 2: PDCCH / PUCCH (Azul)
+        (255, 255, 0),   # 3: PSS/SSS / DMRS (Amarillo)
+        (0, 255, 255),   # 4: PBCH (Celeste)
+        (255, 0, 0),     # 5: CRS (Rojo)
+        (255, 0, 255),   # 6: PCFICH (Magenta)
+        (255, 128, 0),   # 7: PHICH (Naranja)
+    ]
+    cmap = pg.ColorMap(pos=np.linspace(0.0, 1.0, len(rb_colors)), color=rb_colors)
+    self.lte_rb_image.setLookupTable(cmap.getLookupTable(nPts=256))
+    self.lte_rb_image.setLevels([0, len(rb_colors)-1])
+    
+    # Tooltip descriptivo de colores
+    tooltip_html = """
+    <b>Leyenda de Colores (RB Allocation)</b><br>
+    <span style="color: #00FF00;">■ Verde:</span> Datos (PDSCH / PUSCH)<br>
+    <span style="color: #0000FF;">■ Azul:</span> Control (PDCCH / PUCCH)<br>
+    <span style="color: #FFFF00;">■ Amarillo:</span> Sinc. y Ref. (PSS/SSS / DMRS)<br>
+    <span style="color: #00FFFF;">■ Celeste:</span> Broadcast (PBCH)<br>
+    <span style="color: #FF0000;">■ Rojo:</span> Pilotos (CRS)<br>
+    <span style="color: #FF00FF;">■ Magenta:</span> Control (PCFICH)<br>
+    <span style="color: #FF8000;">■ Naranja:</span> Control (PHICH)<br>
+    <span style="color: #AAAAAA;">■ Negro:</span> Sin asignar / Vacío
+    """
+    self.lte_rb_allocation_widget.setToolTip(tooltip_html)
+    
+    self.lte_rb_allocation_widget.hide()
+    
+    self.layout_lte.addWidget(self.lte_q1_container, 0, 0)
     self.layout_lte.addWidget(self.lte_frame_summary, 0, 1)
     
     self.layout_lte.addWidget(self.lte_const_widget, 1, 1, 2, 1)
@@ -816,7 +919,7 @@ def build_ui(self, state):
    # 1. FRECUENCIA CENTRAL (Común a todos)
     freq_layout = QHBoxLayout() # Layout horizontal para juntar el número y la unidad
 
-    self.freq_input = QDoubleSpinBox()
+    self.freq_input = FlexibleDoubleSpinBox()
     self.freq_input.setKeyboardTracking(False)
     self.freq_input.setDecimals(6) # Le damos bastantes decimales para que aguante conversiones
     self.freq_input.setRange(0.0, 6000000000.0) # Rango gigante para cubrir desde Hz a GHz
@@ -912,6 +1015,29 @@ def build_ui(self, state):
     self.trace_combo.currentTextChanged.connect(self.trace_manager.set_mode)
     form_layout.addRow(QLabel("TRACE:"), self.trace_combo)
 
+    self.fft_window_combo = QComboBox()
+    self.fft_window_combo.addItems([
+        "Rectangular",
+        "Hanning",
+        "Hamming",
+        "Blackman",
+        "Flat-top",
+        "Bartlett"
+    ])
+    
+    # Tooltips para cada opción individual (aparecen al dejar el mouse)
+    self.fft_window_combo.setItemData(0, "Mejor resolución de frecuencia (picos finos), pero alto ruido de fondo (fugas).", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(1, "Balance general excelente. Limpia el ruido engrosando muy poco la señal.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(2, "Similar a Hanning pero optimizada para cancelar el primer lóbulo.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(3, "Máxima supresión de ruido y lóbulos laterales. Ideal para separar señales fuertes de débiles.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(4, "Mejor precisión de amplitud. Usar si querés medir la potencia exacta en dBm.", Qt.ItemDataRole.ToolTipRole)
+    self.fft_window_combo.setItemData(5, "Ventana triangular. Compromiso moderado; poco uso frente a Hanning, pero útil en ciertos ruidos correlacionados.", Qt.ItemDataRole.ToolTipRole)
+    
+    self.fft_window_combo.setToolTip("Elige la ventana matemática a aplicar antes de la FFT.")
+    self.fft_window_combo.setCurrentIndex(0)
+    self.fft_window_combo.currentTextChanged.connect(self.on_fft_window_changed)
+    form_layout.addRow(QLabel("VENTANA FFT:"), self.fft_window_combo)
+
     # ---  BOTÓN ZERO SPAN ---
     self.zero_span_btn = QPushButton("Spam Cero")
 
@@ -992,11 +1118,33 @@ def build_ui(self, state):
     self.wf_btn_save.clicked.connect(self.save_waterfall)
     self.wf_btn_save.setToolTip("Guardar Espectrograma como Imagen PNG")
     
-    wf_bottom_layout = QHBoxLayout()
+    self.wf_btn_crop = QPushButton("✂️ Recortar Señal")
+    self.wf_btn_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_crop.setStyleSheet("background-color: #444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #555; margin-top: 5px;")
+    self.wf_btn_crop.setToolTip("Activa marcadores para recortar y guardar señal IQ del waterfall")
+    self.wf_btn_crop.clicked.connect(self.toggle_waterfall_crop)
+    
+    self.wf_btn_cancel_crop = QPushButton("❌ Cancelar")
+    self.wf_btn_cancel_crop.setCursor(Qt.CursorShape.PointingHandCursor)
+    self.wf_btn_cancel_crop.setStyleSheet("background-color: #880000; color: white; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #550000; margin-top: 5px;")
+    self.wf_btn_cancel_crop.hide()
+    self.wf_btn_cancel_crop.clicked.connect(self._cancel_waterfall_crop)
+    
+    wf_bottom_top_row = QHBoxLayout()
+    wf_bottom_top_row.setContentsMargins(0, 0, 0, 0)
+    wf_bottom_top_row.addWidget(self.wf_smooth_checkbox)
+    wf_bottom_top_row.addStretch()
+    wf_bottom_top_row.addWidget(self.wf_btn_save)
+    
+    wf_bottom_bot_row = QHBoxLayout()
+    wf_bottom_bot_row.setContentsMargins(0, 0, 0, 0)
+    wf_bottom_bot_row.addWidget(self.wf_btn_cancel_crop)
+    wf_bottom_bot_row.addWidget(self.wf_btn_crop)
+    
+    wf_bottom_layout = QVBoxLayout()
     wf_bottom_layout.setContentsMargins(0, 0, 0, 0)
-    wf_bottom_layout.addWidget(self.wf_smooth_checkbox)
-    wf_bottom_layout.addStretch()
-    wf_bottom_layout.addWidget(self.wf_btn_save)
+    wf_bottom_layout.addLayout(wf_bottom_top_row)
+    wf_bottom_layout.addLayout(wf_bottom_bot_row)
     
     self.wf_bottom_widget = QWidget()
     self.wf_bottom_widget.setLayout(wf_bottom_layout)

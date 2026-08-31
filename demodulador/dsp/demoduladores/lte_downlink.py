@@ -979,10 +979,13 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                 pdsch_pts = []
                 
                 tx_antennas = self.ultimo_lte_metrics.get('tx_antennas', 1)
+                num_rb = num_sc // 12
+                subframe_grid = np.zeros((14, num_rb), dtype=np.uint8)
                 
                 for sym_idx in range(14):
                     for k in range(num_sc):
                         pt = constelacion[sym_idx, k]
+                        rb_idx = k // 12
                         if np.isnan(pt): continue
                         
                         # Detectar C-RS (Puerto 0 y Puerto 1)
@@ -997,38 +1000,45 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                         
                         if is_crs_port0 or (tx_antennas > 1 and is_crs_port1):
                             crs_pts.append(pt)
+                            subframe_grid[sym_idx, rb_idx] = 5 # CRS
                             continue
                             
                         # PSS / SSS ya extraídos
                         if (sym_idx == 6 or sym_idx == 5) and (k in idx_sync):
+                            subframe_grid[sym_idx, rb_idx] = 3 # PSS/SSS
                             continue
                             
                         # PBCH
                         if sym_idx in [7, 8, 9, 10] and (k in idx_pbch):
                             pbch_pts.append(pt)
+                            subframe_grid[sym_idx, rb_idx] = 4 # PBCH
                             continue
                             
                         # PCFICH
                         is_pcfich = (sym_idx == 0) and (k in pcfich_k_rel)
                         if is_pcfich:
                             pcfich_pts.append(pt)
+                            if subframe_grid[sym_idx, rb_idx] == 0: subframe_grid[sym_idx, rb_idx] = 2
                             continue
                             
                         # PHICH
                         is_phich = (sym_idx == 0) and (k in phich_k_rel)
                         if is_phich:
                             phich_pts.append(pt)
+                            if subframe_grid[sym_idx, rb_idx] == 0: subframe_grid[sym_idx, rb_idx] = 2
                             continue
                             
                         # PDCCH (Resto de la Región de control)
                         if sym_idx < cfi_val:
                             if np.abs(pt) > 0.1: # Ignorar Resource Elements vacíos
                                 pdcch_pts.append(pt)
+                                if subframe_grid[sym_idx, rb_idx] == 0: subframe_grid[sym_idx, rb_idx] = 2 # PDCCH
                             continue
                             
                         # Lo que sobra es PDSCH
                         if np.abs(pt) > 0.1:
                             pdsch_pts.append(pt)
+                            if subframe_grid[sym_idx, rb_idx] == 0: subframe_grid[sym_idx, rb_idx] = 1 # PDSCH
                             
                 pdcch_pts = np.array(pdcch_pts)
                 crs_pts = np.array(crs_pts)
@@ -1036,6 +1046,12 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                 pcfich_pts = np.array(pcfich_pts)
                 phich_pts = np.array(phich_pts)
                 pdsch_pts = np.array(pdsch_pts)
+                
+                # Update persistent RB grid history
+                if not hasattr(self, 'rb_grid_history') or self.rb_grid_history.shape[1] != num_rb:
+                    self.rb_grid_history = np.zeros((140, num_rb), dtype=np.uint8)
+                self.rb_grid_history = np.roll(self.rb_grid_history, -14, axis=0)
+                self.rb_grid_history[-14:, :] = subframe_grid
                 
                 # Guardar para UI (sin el límite de 0.1 para que se vea completo si quieren)
                 puntos_corr = pdsch_pts
@@ -1196,7 +1212,8 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                     'pcfich_pts': getattr(self, 'ultimo_pcfich_pts', np.array([])),
                     'phich_pts': getattr(self, 'ultimo_phich_pts', np.array([])),
                     'pbch_pts': getattr(self, 'ultimo_pbch_pts', np.array([])),
-                    'crs_pts': getattr(self, 'ultimo_crs_pts', np.array([]))
+                    'crs_pts': getattr(self, 'ultimo_crs_pts', np.array([])),
+                    'rb_grid': getattr(self, 'rb_grid_history', np.array([]))
                 },
                 'evm_data': evm_data
             }
