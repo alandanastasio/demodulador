@@ -192,8 +192,31 @@ class DemoduladorBTLE(DemoduladorBase):
                 local_energy = np.sqrt(np.maximum(local_var * n, 0)) + 1e-12
 
                 ncc = raw_corr / local_energy
-                peak_idx_local = np.argmax(np.abs(ncc))
-                peak_quality = float(np.abs(ncc[peak_idx_local]))
+                abs_ncc = np.abs(ncc)
+                
+                # Buscar máximos locales que superen el umbral
+                is_peak = (abs_ncc[1:-1] > abs_ncc[:-2]) & (abs_ncc[1:-1] > abs_ncc[2:])
+                is_peak = np.concatenate(([False], is_peak, [False]))
+                valid_peaks = np.where(is_peak & (abs_ncc >= self._sync_threshold))[0]
+                
+                if len(valid_peaks) > 0:
+                    # Tomar el PRIMER pico válido en el tiempo, pero cuidado:
+                    # debido al ruido, puede haber pequeños falsos "picos locales" (ripples)
+                    # en la ladera de subida de la montaña de correlación principal.
+                    # Para evitar elegir un ripple de baja calidad (ej. 0.33) en lugar
+                    # de la cima real (ej. 0.95), agrupamos todos los picos que ocurren
+                    # dentro de 1.5 us (el periodo de repetición del preámbulo es 2 us)
+                    # y nos quedamos con el máximo absoluto de ese primer grupo.
+                    first_peak = valid_peaks[0]
+                    cluster_window = int(self.sample_rate * 1.5e-6)
+                    cluster = valid_peaks[valid_peaks - first_peak <= cluster_window]
+                    
+                    peak_idx_local = cluster[np.argmax(abs_ncc[cluster])]
+                    peak_quality = float(abs_ncc[peak_idx_local])
+                else:
+                    # Si no hay picos válidos, guardamos el máximo absoluto por si acaso
+                    peak_idx_local = np.argmax(abs_ncc)
+                    peak_quality = float(abs_ncc[peak_idx_local])
 
                 if peak_quality > best_quality:
                     best_quality = peak_quality
@@ -422,6 +445,16 @@ class DemoduladorBTLE(DemoduladorBase):
                         pwr_dbm = -100
                     channel_power_dbm.append(float(pwr_dbm))
 
+                # Calcular métricas de potencia (sobre la parte activa de la ráfaga)
+                peak_pwr = float(np.max(power_dbm))
+                active_mask = power_dbm > (peak_pwr - 10.0)
+                if np.any(active_mask):
+                    active_power_mw = power_mw[active_mask]
+                    avg_pwr = float(10 * np.log10(np.mean(active_power_mw) + 1e-12))
+                else:
+                    avg_pwr = peak_pwr
+                papr = peak_pwr - avg_pwr
+
                 self.last_burst_metrics = {
                     'burst_time_us': burst_time_us,
                     'power_dbm': power_dbm,
@@ -432,6 +465,10 @@ class DemoduladorBTLE(DemoduladorBase):
                     'cfo_khz': cfo_hz / 1000.0,
                     'sync_quality': sync_quality,
                     'preamble_found': preamble_found,
+                    # ── Métricas de Potencia ──
+                    'avg_power_dbm': avg_pwr,
+                    'peak_power_dbm': peak_pwr,
+                    'papr_db': papr,
                 }
 
         fft_data = np.fft.fftshift(

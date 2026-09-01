@@ -242,6 +242,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("3.0 MHz (Decimado a 300k)") == -1:
             self.sr_combo.addItem("3.0 MHz (Decimado a 300k)")
@@ -276,12 +278,12 @@ class MainWindow(QMainWindow):
             from PyQt6.QtWidgets import QWidget
             self.lte_q1_stack.insertWidget(0, QWidget())
             
-        self.layout_btle_grid.addWidget(self.freq_plot, 0, 0)
-        self.layout_btle_grid.setRowStretch(0, 1)
-        self.layout_btle_grid.setRowStretch(1, 1)
-        self.layout_btle_grid.setRowStretch(2, 1)
-        self.layout_btle_grid.setColumnStretch(0, 1)
-        self.layout_btle_grid.setColumnStretch(1, 1)
+        self.layout_btle.addWidget(self.freq_plot, 0, 0)
+        self.layout_btle.setRowStretch(0, 1)
+        self.layout_btle.setRowStretch(1, 1)
+        self.layout_btle.setRowStretch(2, 1)
+        self.layout_btle.setColumnStretch(0, 1)
+        self.layout_btle.setColumnStretch(1, 1)
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()
@@ -307,6 +309,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.show()
 
         state['demod_mode'] = 'btle'
         state['sample_rate'] = 20e6
@@ -384,6 +388,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.show()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
 
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
@@ -483,6 +489,8 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if hasattr(self, 'action_show_data'):
             self.action_show_data.setText("Datos PDSCH")
@@ -683,6 +691,8 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if hasattr(self, 'action_show_data'):
             self.action_show_data.setText("Datos PUSCH")
@@ -828,6 +838,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)

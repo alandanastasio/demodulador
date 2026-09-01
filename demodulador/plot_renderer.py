@@ -219,7 +219,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 self.wbfm_r_curve.setData(t_axis, audio_R)
             
             # Renderizar las métricas en HTML en el panel derecho
-            if fm_metrics is not None:
+            if fm_metrics is not None and 'pico_max' in fm_metrics:
                 html_text = (
                     f"<div style='line-height: 1.5;'>"
                     f"<span style='color: #FFFFFF'><b>Desv. Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
@@ -471,15 +471,51 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     pwr = np.asarray(btle['acp_power_dbm'])
                     self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)
                 
-                if hasattr(self, 'btle_cfo_label'):
+                if hasattr(self, 'btle_metrics_label'):
                     cfo = btle.get('cfo_khz', 0.0)
-                    self.btle_cfo_label.setText(f"CFO: {cfo:.2f} kHz")
-                
-                if hasattr(self, 'btle_sync_label'):
                     sync = btle.get('sync_quality', 0.0)
-                    if btle.get('preamble_found', False):
-                        self.btle_sync_label.setText(f"Sync Quality: {sync:.2f}")
-                        self.btle_sync_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
-                    else:
-                        self.btle_sync_label.setText("Sync Quality: No Sync")
-                        self.btle_sync_label.setStyleSheet("font-weight: bold; color: #F44336;")
+                    preamble = btle.get('preamble_found', False)
+                    
+                    sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
+                    cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
+                    
+                    avg_pwr = btle.get('avg_power_dbm', 0.0)
+                    peak_pwr = btle.get('peak_power_dbm', 0.0)
+                    papr = btle.get('papr_db', 0.0)
+                    
+                    html = f"""
+                    <div style='font-family: sans-serif;'>
+                        <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                            <b>MÉTRICAS DE SINCRONIZACIÓN</b>
+                        </div>
+                        <table style='width: 100%; margin-bottom: 15px;'>
+                            <tr>
+                                <td style='color: #bbb; padding: 2px 0;'>CFO:</td>
+                                <td style='text-align: right; font-weight: bold;'>{cfo_text}</td>
+                            </tr>
+                            <tr>
+                                <td style='color: #bbb; padding: 2px 0;'>Sync Quality:</td>
+                                <td style='text-align: right; font-weight: bold;'>{sync_text}</td>
+                            </tr>
+                        </table>
+                        
+                        <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                            <b>TX POWER VS. TIME</b>
+                        </div>
+                        <table style='width: 100%;'>
+                            <tr>
+                                <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
+                                <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
+                            </tr>
+                            <tr>
+                                <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
+                                <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
+                            </tr>
+                            <tr>
+                                <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>
+                                <td style='text-align: right; font-weight: bold; color: #FFD500;'>{papr:.2f} dB</td>
+                            </tr>
+                        </table>
+                    </div>
+                    """
+                    self.btle_metrics_label.setText(html)
