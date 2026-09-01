@@ -476,7 +476,19 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     if hasattr(self, 'btle_acp_bars') and len(btle['acp_channels']) > 0:
                         y_floor = -100
                         pwr = np.asarray(btle['acp_power_dbm'])
-                        self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)
+                        channels = btle['acp_channels']
+                        
+                        from PyQt6.QtGui import QColor
+                        brushes = []
+                        for ch in channels:
+                            dist = abs(ch)
+                            max_dist = 5.0
+                            norm_dist = min(dist / max_dist, 1.0)
+                            s = int(255 - norm_dist * 180) # 255 (muy saturado) a 75 (desaturado)
+                            l = int(120 + norm_dist * 80)  # 120 (medio) a 200 (claro)
+                            brushes.append(QColor.fromHsl(110, s, l))
+                            
+                        self.btle_acp_bars.setOpts(x=channels, height=pwr - y_floor, y0=y_floor, brushes=brushes)
                     
                     if hasattr(self, 'btle_metrics_label'):
                         cfo = btle.get('cfo_khz', 0.0)
