@@ -454,3 +454,19 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                                     self.lte_frame_summary.item(row, 1).setText(evm_str)
                                     self.lte_frame_summary.item(row, 2).setText(pwr_str)
                                     self.lte_frame_summary.item(row, 4).setText(rb_str)
+
+        # --- RENDERIZADO ESPECÍFICO DE BTLE ---
+        if state.get('demod_mode') == 'btle':
+            if fm_metrics and 'btle_metrics' in fm_metrics:
+                btle = fm_metrics['btle_metrics']
+                
+                if hasattr(self, 'btle_power_curve'):
+                    self.btle_power_curve.setData(btle['burst_time_us'], btle['power_dbm'])
+                    
+                if hasattr(self, 'btle_freq_curve'):
+                    self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
+                    
+                if hasattr(self, 'btle_acp_bars'):
+                    y_floor = -100
+                    pwr = np.asarray(btle['acp_power_dbm'])
+                    self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)

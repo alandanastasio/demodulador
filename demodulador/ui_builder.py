@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QSize, Qt, QLocale
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
 from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
+
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
@@ -692,6 +693,43 @@ def build_ui(self, state):
     
     self.modes_stack.addWidget(self.page_lte)
 
+    # --- PÁGINA BTLE ---
+    self.page_btle = QWidget()
+    self.layout_btle = QGridLayout(self.page_btle)
+    self.layout_btle.setContentsMargins(0, 0, 0, 0)
+    
+    self.btle_spectrum_widget = pg.PlotWidget(title="Espectro (Waterfall temporal en otro frame)")
+    self.btle_spectrum_widget.setLabel('bottom', 'Frecuencia [MHz]')
+    self.btle_spectrum_widget.setLabel('left', 'Potencia [dB]')
+    self.btle_spectrum_curve = self.btle_spectrum_widget.plot([], pen=pg.mkPen(color="#00FFFF", width=1.5))
+    
+    self.btle_power_widget = pg.PlotWidget(title="Potencia vs Tiempo")
+    self.btle_power_widget.setLabel('bottom', 'Tiempo [us]')
+    self.btle_power_widget.setLabel('left', 'Potencia [dBm]')
+    self.btle_power_curve = self.btle_power_widget.plot([], pen=pg.mkPen(color="blue", width=1.0))
+    
+    self.btle_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia")
+    self.btle_freq_widget.setLabel('bottom', 'Tiempo [us]')
+    self.btle_freq_widget.setLabel('left', 'Frecuencia [kHz]')
+    self.btle_freq_curve = self.btle_freq_widget.plot([], pen=pg.mkPen(color="royalblue", width=1.0))
+    
+    self.btle_acp_widget = pg.PlotWidget(title="Espectro ACP")
+    self.btle_acp_widget.setLabel('bottom', 'Canal (Ch)')
+    self.btle_acp_widget.setLabel('left', 'Potencia [dBm]')
+    
+    # Configure BarGraphItem with defaults so we can update it later
+    
+    self.btle_acp_bars = pg.BarGraphItem(x=[0], height=[0], width=0.35, brush='#dd8459')
+    self.btle_acp_widget.addItem(self.btle_acp_bars)
+    
+    self.layout_btle.addWidget(self.btle_spectrum_widget, 0, 0)
+    self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
+    self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
+    self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+    
+    self.modes_stack.addWidget(self.page_btle)
+
+
     # --- CONTENEDOR PRINCIPAL ---
     self.plot_container = QWidget()
     self.plot_layout = QVBoxLayout(self.plot_container)
@@ -864,6 +902,24 @@ def build_ui(self, state):
     
     self.demod_group.addAction(self.action_wifi_ag)
     self.digital_menu.addAction(self.action_wifi_ag)
+
+    self.btle_menu = QMenu("BTLE", self)
+    self.btle_menu.setStyleSheet("""
+        QMenu { background-color: #2b2b2b; color: #ffffff; border: 1px solid #444; }
+        QMenu::item:selected { background-color: #555555; }
+    """)
+
+    self.btle_bw_actions = []
+    for label, bw in [("1 MHz (LE 1M)", 1), ("2 MHz (LE 2M)", 2)]:
+        action = QAction(label, self)
+        action.setCheckable(True)
+        action.triggered.connect(lambda checked, b=bw: self.set_btle_mode(b))
+        self.demod_group.addAction(action)
+        self.btle_menu.addAction(action)
+        self.btle_bw_actions.append(action)
+
+    self.digital_menu.addMenu(self.btle_menu)
+
 
     self.lte_menu = QMenu("LTE", self)
     self.lte_menu.setStyleSheet("""

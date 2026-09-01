@@ -24,6 +24,7 @@ from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
+from dsp.demoduladores.btle import DemoduladorBTLE
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -99,12 +100,15 @@ class MainWindow(QMainWindow):
         self.radio.start_rx()
 
     def procesar_muestras_iq(self, c_samples):
+        if c_samples is None:
+            return
+            
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
-        if state['is_recording'] and c_samples is not None:
+        if state['is_recording']:
             state['recorded_samples'].append(c_samples.copy())
             
         # 1.5. Grabación retroactiva del Waterfall (Búfer Circular de RAM)
-        if getattr(self, 'waterfall_enabled', False) and c_samples is not None and state.get('demod_mode') == 'none' and not self.is_paused:
+        if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none' and not self.is_paused:
             dt = getattr(self, 'wf_dt_avg', 0.166)
             total_time = dt * getattr(self, 'waterfall_lines', 200)
             expected_samples = int(total_time * state.get('sample_rate', 2e6))
@@ -169,7 +173,8 @@ class MainWindow(QMainWindow):
         plot_names = [
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
-            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -185,7 +190,8 @@ class MainWindow(QMainWindow):
         plot_names = [
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
-            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -259,6 +265,84 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self.freq_input.setValue(100.0)
         self.update_x_axis()
+
+    
+    def set_btle_mode(self, bw_mhz=1):
+        self._reset_maximized_state()
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
+        self.layout_btle.addWidget(self.freq_plot, 0, 0)
+        self.layout_btle.setRowStretch(0, 1)
+        self.layout_btle.setRowStretch(1, 1)
+        self.layout_btle.setRowStretch(2, 1)
+        self.layout_btle.setColumnStretch(0, 1)
+        self.layout_btle.setColumnStretch(1, 1)
+        if hasattr(self, 'waterfall_checkbox'): 
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
+        if hasattr(self, 'zero_span_btn'): 
+            self.zero_span_btn.setChecked(False)
+            state['zero_span'] = False
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        
+        self.trace_manager.reset()
+        
+        self.modes_stack.setCurrentWidget(self.page_btle)
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
+
+        state['demod_mode'] = 'btle'
+        state['sample_rate'] = 20e6
+        
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            # En BTLE usamos 20 Msps, por ende bloques mas grandes
+            self.radio.set_muestras_por_bloque(65536)
+
+        self.demodulador_actual = DemoduladorBTLE()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz)
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        self.unit_combo.setCurrentText("GHz")
+        self.freq_input.setValue(2.402) # BTLE default CH 37
+
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("20 MHz") != -1:
+            self.sr_combo.setCurrentText("20 MHz")
+        elif self.sr_combo.findText("20.0 MHz") != -1:
+            self.sr_combo.setCurrentText("20.0 MHz")
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+        self.freq_plot.show()
+        
+        self.demod_btn.setText(f"BTLE ({bw_mhz} MHz)")
+        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
 
     def set_wifi_ag_mode(self):
         self._reset_maximized_state()
