@@ -4,6 +4,48 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 import datetime
+import pyqtgraph as pg
+
+# --- MONKEYPATCH PYQTGRAPH GRIDS ---
+# Queremos ticks menores, pero NO grillas menores.
+# Hacemos dos pasadas en generateDrawSpecs: una sin grilla para los ticks normales, 
+# y otra con maxTickLevel=0 para dibujar sólo las grillas mayores.
+_original_generateDrawSpecs = pg.AxisItem.generateDrawSpecs
+
+def _custom_generateDrawSpecs(self, p):
+    original_grid = self.grid
+    if original_grid is False:
+        return _original_generateDrawSpecs(self, p)
+        
+    # Primera pasada: obtener todos los ticks cortos (sin grillas largas)
+    self.grid = False
+    specs = _original_generateDrawSpecs(self, p)
+    if specs is None:
+        self.grid = original_grid
+        return None
+    axisSpec, short_tickSpecs, textSpecs = specs
+    
+    # Segunda pasada: obtener las grillas largas, pero solo para nivel mayor (0)
+    original_maxTickLevel = self.style.get('maxTickLevel', 2)
+    self.style['maxTickLevel'] = 0
+    self.grid = original_grid
+    specs_grids = _original_generateDrawSpecs(self, p)
+    
+    # Restaurar estado original
+    self.style['maxTickLevel'] = original_maxTickLevel
+    
+    if specs_grids is not None:
+        axisSpec_grids, major_gridSpecs, textSpecs_grids = specs_grids
+        # Combinar los ticks cortos con las grillas largas mayores
+        final_tickSpecs = short_tickSpecs + major_gridSpecs
+    else:
+        final_tickSpecs = short_tickSpecs
+        
+    return (axisSpec, final_tickSpecs, textSpecs)
+
+pg.AxisItem.generateDrawSpecs = _custom_generateDrawSpecs
+# ------------------------------------
+
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon, QPainter
@@ -1017,14 +1059,41 @@ class MainWindow(QMainWindow):
             if self._maximized_widget is None:
                 self._maximize_panel(obj)
             else:
-                self._restore_panels()
+                self._restore_panels(obj)
             return True
         return super().eventFilter(obj, event)
-
 
     def _maximize_panel(self, widget):
         if not hasattr(self, 'all_panels'): return
         
+        # --- MODO ESPECIAL BTLE ---
+        if state.get('demod_mode') == 'btle' and widget in [self.freq_plot, self.btle_mag_widget]:
+            self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+            self._saved_controls_visible = self.controls_widget.isVisible()
+            self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+            self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+            
+            for w in self.all_panels:
+                w.hide()
+            self.controls_widget.hide()
+            
+            self.freq_plot.show()
+            self.btle_mag_widget.show()
+            
+            # Reorganizar el layout para que ocupen todo el ancho
+            self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 2)
+            self.layout_btle.addWidget(self.btle_mag_widget, 1, 0, 1, 2)
+            self.layout_btle.setRowStretch(0, 1)
+            self.layout_btle.setRowStretch(1, 1)
+            self.layout_btle.setRowStretch(2, 0)
+            
+            self._maximized_widget = widget 
+            self._maximized_layout = self.layout_btle
+            self._btle_special_mode = True
+            if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+                self.demodulador_actual.skip_metrics = True
+            return
+
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
         # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
@@ -1056,9 +1125,30 @@ class MainWindow(QMainWindow):
         self._maximized_widget = widget
         self._maximized_layout = layout if isinstance(layout, QGridLayout) else None
 
-    def _restore_panels(self):
+    def _restore_panels(self, clicked_widget=None):
         if self._maximized_widget is None: return
         
+        if getattr(self, '_btle_special_mode', False):
+            # Remover ambos del layout para evitar conflictos
+            self.layout_btle.removeWidget(self.btle_mag_widget)
+            self.layout_btle.removeWidget(self.freq_plot)
+            
+            # Swappear el panel primario según el widget clickeado
+            if clicked_widget == self.btle_mag_widget:
+                self.layout_btle.addWidget(self.btle_mag_widget, 0, 0, 1, 1)
+                self._saved_visibility[self.btle_mag_widget] = True
+                self._saved_visibility[self.freq_plot] = False
+            else:
+                self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 1)
+                self._saved_visibility[self.freq_plot] = True
+                self._saved_visibility[self.btle_mag_widget] = False
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+                self.demodulador_actual.skip_metrics = False
+            self._btle_special_mode = False
+
         for w, was_visible in self._saved_visibility.items():
             w.setVisible(was_visible)
             
@@ -1078,12 +1168,19 @@ class MainWindow(QMainWindow):
     def _reset_maximized_state(self):
         self._maximized_widget = None
         self._maximized_layout = None
+        self._btle_special_mode = False
+        if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+            self.demodulador_actual.skip_metrics = False
         self._saved_visibility = {}
         self._saved_row_stretches = {}
         self._saved_col_stretches = {}
         if hasattr(self, 'all_panels'):
             for w in self.all_panels:
                 w.show()
+        if hasattr(self, 'btle_mag_widget'):
+            self.btle_mag_widget.hide()
+            if hasattr(self, 'layout_btle'):
+                self.layout_btle.removeWidget(self.btle_mag_widget)
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
         

@@ -722,6 +722,13 @@ def build_ui(self, state):
     self.btle_acp_bars = pg.BarGraphItem(x=[0], height=[0], width=0.35, brush='#dd8459')
     self.btle_acp_widget.addItem(self.btle_acp_bars)
     
+    self.btle_mag_widget = pg.PlotWidget(title="Zoom en la Primera Ráfaga Completa (Magnitud)")
+    self.btle_mag_widget.setLabel('bottom', 'Tiempo [ms]')
+    self.btle_mag_widget.setLabel('left', 'Amplitud')
+    self.btle_mag_widget.showGrid(x=True, y=True)
+    self.btle_mag_curve = self.btle_mag_widget.plot([], pen=pg.mkPen(color="red", width=1.5))
+    self.btle_mag_widget.hide()
+    
     self.layout_btle.addWidget(self.btle_spectrum_widget, 0, 0)
     self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
     self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
@@ -742,9 +749,11 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
+        if isinstance(w, pg.PlotWidget):
+            w.showGrid(x=True, y=True, alpha=0.3)
 
     # Agregamos el contenedor entero al layout principal
     main_layout.addWidget(self.plot_container, stretch=4)
@@ -1279,10 +1288,10 @@ def build_ui(self, state):
     self.btle_metrics_label.hide()
     controls_layout.addWidget(self.btle_metrics_label)
     
-    controls_widget = QWidget()
-    controls_widget.setLayout(controls_layout)
-    controls_widget.setFixedWidth(300)
-    main_layout.addWidget(controls_widget, stretch=1)
+    self.controls_widget = QWidget()
+    self.controls_widget.setLayout(controls_layout)
+    self.controls_widget.setFixedWidth(300)
+    main_layout.addWidget(self.controls_widget, stretch=1)
 
     central_widget = QWidget()
     central_widget.setLayout(main_layout)

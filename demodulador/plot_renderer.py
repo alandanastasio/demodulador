@@ -460,62 +460,69 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
             if fm_metrics and 'btle_metrics' in fm_metrics:
                 btle = fm_metrics['btle_metrics']
                 
-                if hasattr(self, 'btle_power_curve'):
-                    self.btle_power_curve.setData(btle['burst_time_us'], btle['power_dbm'])
-                    
+                skip_metrics = btle.get('skip_metrics', False)
+                
                 if hasattr(self, 'btle_freq_curve'):
                     self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
                     
-                if hasattr(self, 'btle_acp_bars'):
-                    y_floor = -100
-                    pwr = np.asarray(btle['acp_power_dbm'])
-                    self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)
-                
-                if hasattr(self, 'btle_metrics_label'):
-                    cfo = btle.get('cfo_khz', 0.0)
-                    sync = btle.get('sync_quality', 0.0)
-                    preamble = btle.get('preamble_found', False)
+                if hasattr(self, 'btle_mag_curve'):
+                    # El gráfico pide 'Tiempo [ms]', así que dividimos los us por 1000
+                    self.btle_mag_curve.setData(btle['burst_time_us'] / 1000.0, btle['mag_linear'])
                     
-                    sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
-                    cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
-                    
-                    avg_pwr = btle.get('avg_power_dbm', 0.0)
-                    peak_pwr = btle.get('peak_power_dbm', 0.0)
-                    papr = btle.get('papr_db', 0.0)
-                    
-                    html = f"""
-                    <div style='font-family: sans-serif;'>
-                        <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
-                            <b>MÉTRICAS DE SINCRONIZACIÓN</b>
-                        </div>
-                        <table style='width: 100%; margin-bottom: 15px;'>
-                            <tr>
-                                <td style='color: #bbb; padding: 2px 0;'>CFO:</td>
-                                <td style='text-align: right; font-weight: bold;'>{cfo_text}</td>
-                            </tr>
-                            <tr>
-                                <td style='color: #bbb; padding: 2px 0;'>Sync Quality:</td>
-                                <td style='text-align: right; font-weight: bold;'>{sync_text}</td>
-                            </tr>
-                        </table>
+                if not skip_metrics:
+                    if hasattr(self, 'btle_power_curve'):
+                        self.btle_power_curve.setData(btle['burst_time_us'], btle['power_dbm'])
                         
-                        <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
-                            <b>TX POWER VS. TIME</b>
+                    if hasattr(self, 'btle_acp_bars') and len(btle['acp_channels']) > 0:
+                        y_floor = -100
+                        pwr = np.asarray(btle['acp_power_dbm'])
+                        self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)
+                    
+                    if hasattr(self, 'btle_metrics_label'):
+                        cfo = btle.get('cfo_khz', 0.0)
+                        sync = btle.get('sync_quality', 0.0)
+                        preamble = btle.get('preamble_found', False)
+                        
+                        sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
+                        cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
+                        
+                        avg_pwr = btle.get('avg_power_dbm', 0.0)
+                        peak_pwr = btle.get('peak_power_dbm', 0.0)
+                        papr = btle.get('papr_db', 0.0)
+                        
+                        html = f"""
+                        <div style='font-family: sans-serif;'>
+                            <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                                <b>MÉTRICAS DE SINCRONIZACIÓN</b>
+                            </div>
+                            <table style='width: 100%; margin-bottom: 15px;'>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>CFO:</td>
+                                    <td style='text-align: right; font-weight: bold;'>{cfo_text}</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Sync Quality:</td>
+                                    <td style='text-align: right; font-weight: bold;'>{sync_text}</td>
+                                </tr>
+                            </table>
+                            
+                            <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                                <b>TX POWER VS. TIME</b>
+                            </div>
+                            <table style='width: 100%;'>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFD500;'>{papr:.2f} dB</td>
+                                </tr>
+                            </table>
                         </div>
-                        <table style='width: 100%;'>
-                            <tr>
-                                <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
-                                <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
-                            </tr>
-                            <tr>
-                                <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
-                                <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
-                            </tr>
-                            <tr>
-                                <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>
-                                <td style='text-align: right; font-weight: bold; color: #FFD500;'>{papr:.2f} dB</td>
-                            </tr>
-                        </table>
-                    </div>
-                    """
-                    self.btle_metrics_label.setText(html)
+                        """
+                        self.btle_metrics_label.setText(html)

@@ -436,43 +436,48 @@ class DemoduladorBTLE(DemoduladorBase):
                 squelch_mask = power_dbm < (peak_pwr_dbm - 10.0)
                 freq_dev_khz[squelch_mask] = 0.0
 
-                # Espectro ACP (Adjacent Channel Power)
-                N_b = len(burst_samples)
-                fft_vals = (np.fft.fftshift(np.fft.fft(burst_samples))
-                            / N_b)
-                power_spectrum_b = np.abs(fft_vals) ** 2
-                freqs_b = np.fft.fftshift(
-                    np.fft.fftfreq(N_b, 1 / self.sample_rate))
-
-                channel_bw = getattr(self, 'bw_mhz', 1) * 1e6
-                offsets_mhz = np.arange(-10, 11)
-                channel_offsets_ch = offsets_mhz / 2.0
+                channel_offsets_ch = np.array([])
                 channel_power_dbm = []
-                for offset_mhz in offsets_mhz:
-                    center_f = offset_mhz * 1e6
-                    idx = np.where(
-                        (freqs_b >= center_f - channel_bw / 2) &
-                        (freqs_b <= center_f + channel_bw / 2))[0]
-                    if len(idx) > 0:
-                        pwr = np.sum(power_spectrum_b[idx])
-                        pwr_dbm = 10 * np.log10(pwr + 1e-12)
+                avg_pwr = 0.0
+                peak_pwr = 0.0
+                papr = 0.0
+                
+                if not getattr(self, 'skip_metrics', False):
+                    # Espectro ACP (Adjacent Channel Power)
+                    N_b = len(burst_samples)
+                    fft_vals = (np.fft.fftshift(np.fft.fft(burst_samples)) / N_b)
+                    power_spectrum_b = np.abs(fft_vals) ** 2
+                    freqs_b = np.fft.fftshift(np.fft.fftfreq(N_b, 1 / self.sample_rate))
+    
+                    channel_bw = getattr(self, 'bw_mhz', 1) * 1e6
+                    offsets_mhz = np.arange(-10, 11)
+                    channel_offsets_ch = offsets_mhz / 2.0
+                    for offset_mhz in offsets_mhz:
+                        center_f = offset_mhz * 1e6
+                        idx = np.where(
+                            (freqs_b >= center_f - channel_bw / 2) &
+                            (freqs_b <= center_f + channel_bw / 2))[0]
+                        if len(idx) > 0:
+                            pwr = np.sum(power_spectrum_b[idx])
+                            pwr_dbm = 10 * np.log10(pwr + 1e-12)
+                        else:
+                            pwr_dbm = -100
+                        channel_power_dbm.append(float(pwr_dbm))
+    
+                    # Calcular métricas de potencia (sobre la parte activa de la ráfaga)
+                    peak_pwr = float(np.max(power_dbm))
+                    active_mask = power_dbm > (peak_pwr - 10.0)
+                    if np.any(active_mask):
+                        active_power_mw = power_mw[active_mask]
+                        avg_pwr = float(10 * np.log10(np.mean(active_power_mw) + 1e-12))
                     else:
-                        pwr_dbm = -100
-                    channel_power_dbm.append(float(pwr_dbm))
-
-                # Calcular métricas de potencia (sobre la parte activa de la ráfaga)
-                peak_pwr = float(np.max(power_dbm))
-                active_mask = power_dbm > (peak_pwr - 10.0)
-                if np.any(active_mask):
-                    active_power_mw = power_mw[active_mask]
-                    avg_pwr = float(10 * np.log10(np.mean(active_power_mw) + 1e-12))
-                else:
-                    avg_pwr = peak_pwr
-                papr = peak_pwr - avg_pwr
+                        avg_pwr = peak_pwr
+                    papr = peak_pwr - avg_pwr
 
                 self.last_burst_metrics = {
                     'burst_time_us': burst_time_us,
                     'power_dbm': power_dbm,
+                    'mag_linear': np.abs(burst_samples)[:min_len],
                     'freq_dev_khz': freq_dev_khz,
                     'acp_channels': channel_offsets_ch,
                     'acp_power_dbm': np.array(channel_power_dbm),
@@ -484,6 +489,7 @@ class DemoduladorBTLE(DemoduladorBase):
                     'avg_power_dbm': avg_pwr,
                     'peak_power_dbm': peak_pwr,
                     'papr_db': papr,
+                    'skip_metrics': getattr(self, 'skip_metrics', False)
                 }
 
         fft_data = np.fft.fftshift(
