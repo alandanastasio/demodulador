@@ -312,6 +312,8 @@ class MainWindow(QMainWindow):
 
     
     def set_btle_mode(self, bw_mhz=1):
+        if hasattr(self, '_btle_power_stats'):
+            del self._btle_power_stats
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -917,6 +919,8 @@ class MainWindow(QMainWindow):
         state['center_freq'] = val * self.current_freq_multiplier
         self.radio.set_freq(state['center_freq'])
         self.trace_manager.reset()
+        if hasattr(self, '_btle_power_stats'):
+            del self._btle_power_stats
         self.update_x_axis()
 
     def on_sr_changed(self, text):
@@ -1067,32 +1071,58 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'all_panels'): return
         
         # --- MODO ESPECIAL BTLE ---
-        if state.get('demod_mode') == 'btle' and widget in [self.freq_plot, self.btle_mag_widget]:
-            self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
-            self._saved_controls_visible = self.controls_widget.isVisible()
-            self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
-            self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
-            
-            for w in self.all_panels:
-                w.hide()
-            self.controls_widget.hide()
-            
-            self.freq_plot.show()
-            self.btle_mag_widget.show()
-            
-            # Reorganizar el layout para que ocupen todo el ancho
-            self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 2)
-            self.layout_btle.addWidget(self.btle_mag_widget, 1, 0, 1, 2)
-            self.layout_btle.setRowStretch(0, 1)
-            self.layout_btle.setRowStretch(1, 1)
-            self.layout_btle.setRowStretch(2, 0)
-            
-            self._maximized_widget = widget 
-            self._maximized_layout = self.layout_btle
-            self._btle_special_mode = True
-            if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
-                self.demodulador_actual.skip_metrics = True
-            return
+        if state.get('demod_mode') == 'btle':
+            if widget in [self.freq_plot, self.btle_mag_widget]:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.freq_plot.show()
+                self.btle_mag_widget.show()
+                
+                # Reorganizar el layout para que ocupen todo el ancho
+                self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 2)
+                self.layout_btle.addWidget(self.btle_mag_widget, 1, 0, 1, 2)
+                self.layout_btle.setRowStretch(0, 1)
+                self.layout_btle.setRowStretch(1, 1)
+                self.layout_btle.setRowStretch(2, 0)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_special_mode = True
+                if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+                    self.demodulador_actual.skip_metrics = True
+                return
+            elif widget in [self.btle_power_widget, getattr(self, 'btle_power_table_widget', None)]:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_power_widget.show()
+                if hasattr(self, 'btle_power_table_widget'):
+                    self.btle_power_table_widget.show()
+                
+                self.layout_btle.addWidget(self.btle_power_widget, 0, 0, 1, 2)
+                if hasattr(self, 'btle_power_table_widget'):
+                    self.layout_btle.addWidget(self.btle_power_table_widget, 1, 0, 1, 2)
+                self.layout_btle.setRowStretch(0, 2)
+                self.layout_btle.setRowStretch(1, 1)
+                self.layout_btle.setRowStretch(2, 0)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_power_special_mode = True
+                return
 
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
@@ -1149,6 +1179,17 @@ class MainWindow(QMainWindow):
                 self.demodulador_actual.skip_metrics = False
             self._btle_special_mode = False
 
+        if getattr(self, '_btle_power_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_power_widget)
+            if hasattr(self, 'btle_power_table_widget'):
+                self.layout_btle.removeWidget(self.btle_power_table_widget)
+                
+            self.layout_btle.addWidget(self.btle_power_widget, 0, 1, 1, 1)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            self._btle_power_special_mode = False
+
         for w, was_visible in self._saved_visibility.items():
             w.setVisible(was_visible)
             
@@ -1166,9 +1207,13 @@ class MainWindow(QMainWindow):
         self._saved_col_stretches = {}
 
     def _reset_maximized_state(self):
+        if getattr(self, '_maximized_widget', None) is not None:
+            self._restore_panels()
+            
         self._maximized_widget = None
         self._maximized_layout = None
         self._btle_special_mode = False
+        self._btle_power_special_mode = False
         if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
             self.demodulador_actual.skip_metrics = False
         self._saved_visibility = {}
@@ -1181,6 +1226,12 @@ class MainWindow(QMainWindow):
             self.btle_mag_widget.hide()
             if hasattr(self, 'layout_btle'):
                 self.layout_btle.removeWidget(self.btle_mag_widget)
+        if hasattr(self, 'btle_power_table_widget'):
+            self.btle_power_table_widget.hide()
+            if hasattr(self, 'layout_btle'):
+                self.layout_btle.removeWidget(self.btle_power_table_widget)
+        if hasattr(self, 'controls_widget'):
+            self.controls_widget.show()
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
         

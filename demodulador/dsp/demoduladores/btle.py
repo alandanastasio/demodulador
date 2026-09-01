@@ -441,6 +441,7 @@ class DemoduladorBTLE(DemoduladorBase):
                 avg_pwr = 0.0
                 peak_pwr = 0.0
                 papr = 0.0
+                leakage_pwr = -100.0
                 
                 if not getattr(self, 'skip_metrics', False):
                     # Espectro ACP (Adjacent Channel Power)
@@ -473,6 +474,17 @@ class DemoduladorBTLE(DemoduladorBase):
                     else:
                         avg_pwr = peak_pwr
                     papr = peak_pwr - avg_pwr
+                    
+                    # Leakage Power: Calculado a partir de los márgenes de silencio de la ráfaga extraída.
+                    # Esto evita que otras ráfagas en el buffer grande rompan la medición.
+                    burst_power_mw = np.abs(burst_samples)**2
+                    burst_power_dbm = 10 * np.log10(burst_power_mw + 1e-12)
+                    idle_mask_burst = burst_power_dbm < (peak_pwr - 20.0)
+                    
+                    if np.any(idle_mask_burst):
+                        leakage_pwr = float(10 * np.log10(np.mean(burst_power_mw[idle_mask_burst]) + 1e-12))
+                    else:
+                        leakage_pwr = -100.0
 
                 self.last_burst_metrics = {
                     'burst_time_us': burst_time_us,
@@ -489,8 +501,10 @@ class DemoduladorBTLE(DemoduladorBase):
                     'avg_power_dbm': avg_pwr,
                     'peak_power_dbm': peak_pwr,
                     'papr_db': papr,
+                    'leakage_power_dbm': leakage_pwr,
                     'skip_metrics': getattr(self, 'skip_metrics', False)
                 }
+
 
         fft_data = np.fft.fftshift(
             np.fft.fft(muestras_iq, n=self.fft_size))

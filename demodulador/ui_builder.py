@@ -729,6 +729,32 @@ def build_ui(self, state):
     self.btle_mag_curve = self.btle_mag_widget.plot([], pen=pg.mkPen(color="red", width=1.5))
     self.btle_mag_widget.hide()
     
+    self.btle_power_table_widget = QTableWidget(4, 4)
+    self.btle_power_table_widget.setHorizontalHeaderLabels(["Current", "Average", "Max", "Min"])
+    self.btle_power_table_widget.setVerticalHeaderLabels(["Average Power [dBm]", "Peak Power [dBm]", "Peak to Avg Power [dB]", "Leakage Power [dBm]"])
+    self.btle_power_table_widget.setStyleSheet("""
+        QTableWidget {
+            background-color: #1e1e1e;
+            color: white;
+            gridline-color: #444;
+            font-size: 14px;
+        }
+        QHeaderView::section {
+            background-color: #2b2b2b;
+            color: #88c0d0;
+            font-weight: bold;
+            border: 1px solid #444;
+            padding: 4px;
+        }
+        QTableWidget::item {
+            padding: 4px;
+        }
+    """)
+    self.btle_power_table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    self.btle_power_table_widget.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    self.btle_power_table_widget.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    self.btle_power_table_widget.hide()
+    
     self.layout_btle.addWidget(self.btle_spectrum_widget, 0, 0)
     self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
     self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
@@ -749,7 +775,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):

@@ -501,6 +501,44 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         avg_pwr = btle.get('avg_power_dbm', 0.0)
                         peak_pwr = btle.get('peak_power_dbm', 0.0)
                         papr = btle.get('papr_db', 0.0)
+                        leakage_pwr = btle.get('leakage_power_dbm', -100.0)
+                        
+                        if not hasattr(self, '_btle_power_stats'):
+                            self._btle_power_stats = {
+                                'count': 0,
+                                'avg': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'peak': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'papr': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'leakage': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')}
+                            }
+                            
+                        stats = self._btle_power_stats
+                        stats['count'] += 1
+                        
+                        def _update_stat(key, val):
+                            d = stats[key]
+                            d['sum'] += val
+                            if val > d['max']: d['max'] = val
+                            if val < d['min']: d['min'] = val
+                            return (val, d['sum'] / stats['count'], d['max'], d['min'])
+                            
+                        vals_avg = _update_stat('avg', avg_pwr)
+                        vals_peak = _update_stat('peak', peak_pwr)
+                        vals_papr = _update_stat('papr', papr)
+                        vals_leakage = _update_stat('leakage', leakage_pwr)
+                        
+                        if hasattr(self, 'btle_power_table_widget'):
+                            from PyQt6.QtWidgets import QTableWidgetItem
+                            def _set_row(row, vals):
+                                for col, val in enumerate(vals):
+                                    item = QTableWidgetItem(f"{val:.2f}")
+                                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                                    self.btle_power_table_widget.setItem(row, col, item)
+                            
+                            _set_row(0, vals_avg)
+                            _set_row(1, vals_peak)
+                            _set_row(2, vals_papr)
+                            _set_row(3, vals_leakage)
                         
                         html = f"""
                         <div style='font-family: sans-serif;'>
