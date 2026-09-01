@@ -315,6 +315,12 @@ class DemoduladorBTLE(DemoduladorBase):
             phase = np.unwrap(np.angle(iq_samples))
             freq_dev_hz = np.diff(phase) / (2 * np.pi) * self.sample_rate
             freq_dev_hz = np.append(freq_dev_hz, freq_dev_hz[-1])
+            
+            # Limitar matemáticamente los picos transitorios de discontinuidad de fase.
+            # BLE usa desviación de +-250 kHz. Limitando a +-800 kHz damos muchísimo
+            # margen para el CFO (desalineación de portadora), pero matamos los picos
+            # de encendido/ruido que llegan a 5-10 MHz y rompen el auto-scale del gráfico.
+            freq_dev_hz = np.clip(freq_dev_hz, -800000, 800000)
 
             # ═════════════════════════════════════════════════════════
             # PASO 2: Detección aproximada de ráfagas (potencia)
@@ -420,6 +426,15 @@ class DemoduladorBTLE(DemoduladorBase):
                 burst_time_us = burst_time_us[:min_len]
                 power_dbm = power_dbm[:min_len]
                 freq_dev_khz = freq_dev_khz[:min_len]
+
+                # Aplicar Squelch (Silenciador) al gráfico de frecuencia
+                # Equipos de laboratorio como el CMW500 silencian el trazo de FM 
+                # fuera de la ráfaga de energía para limpiar el gráfico.
+                # Al ser BLE de envolvente constante, forzamos a 0 kHz 
+                # todo lo que esté 10 dB por debajo del pico máximo de potencia.
+                peak_pwr_dbm = np.max(power_dbm)
+                squelch_mask = power_dbm < (peak_pwr_dbm - 10.0)
+                freq_dev_khz[squelch_mask] = 0.0
 
                 # Espectro ACP (Adjacent Channel Power)
                 N_b = len(burst_samples)

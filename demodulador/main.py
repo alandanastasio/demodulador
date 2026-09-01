@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
         self.layout_btle.addWidget(self.freq_plot, 0, 0)
         self.layout_btle.setRowStretch(0, 1)
         self.layout_btle.setRowStretch(1, 1)
-        self.layout_btle.setRowStretch(2, 1)
+        self.layout_btle.setRowStretch(2, 0)  # Limpiar cualquier stretch viejo en la fila 2
         self.layout_btle.setColumnStretch(0, 1)
         self.layout_btle.setColumnStretch(1, 1)
         if hasattr(self, 'waterfall_checkbox'): 
