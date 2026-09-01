@@ -276,12 +276,12 @@ class MainWindow(QMainWindow):
             from PyQt6.QtWidgets import QWidget
             self.lte_q1_stack.insertWidget(0, QWidget())
             
-        self.layout_btle.addWidget(self.freq_plot, 0, 0)
-        self.layout_btle.setRowStretch(0, 1)
-        self.layout_btle.setRowStretch(1, 1)
-        self.layout_btle.setRowStretch(2, 1)
-        self.layout_btle.setColumnStretch(0, 1)
-        self.layout_btle.setColumnStretch(1, 1)
+        self.layout_btle_grid.addWidget(self.freq_plot, 0, 0)
+        self.layout_btle_grid.setRowStretch(0, 1)
+        self.layout_btle_grid.setRowStretch(1, 1)
+        self.layout_btle_grid.setRowStretch(2, 1)
+        self.layout_btle_grid.setColumnStretch(0, 1)
+        self.layout_btle_grid.setColumnStretch(1, 1)
         if hasattr(self, 'waterfall_checkbox'): 
             self.waterfall_checkbox.hide()
             self.waterfall_label.hide()

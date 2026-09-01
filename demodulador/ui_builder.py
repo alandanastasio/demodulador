@@ -695,8 +695,19 @@ def build_ui(self, state):
 
     # --- PÁGINA BTLE ---
     self.page_btle = QWidget()
-    self.layout_btle = QGridLayout(self.page_btle)
+    self.layout_btle = QVBoxLayout(self.page_btle)
     self.layout_btle.setContentsMargins(0, 0, 0, 0)
+    
+    self.btle_metrics_layout = QHBoxLayout()
+    self.btle_cfo_label = QLabel("CFO: -- kHz")
+    self.btle_cfo_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+    self.btle_sync_label = QLabel("Sync Quality: --")
+    self.btle_sync_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+    self.btle_metrics_layout.addWidget(self.btle_cfo_label)
+    self.btle_metrics_layout.addWidget(self.btle_sync_label)
+    self.btle_metrics_layout.addStretch()
+    
+    self.layout_btle_grid = QGridLayout()
     
     self.btle_spectrum_widget = pg.PlotWidget(title="Espectro (Waterfall temporal en otro frame)")
     self.btle_spectrum_widget.setLabel('bottom', 'Frecuencia [MHz]')
@@ -722,10 +733,13 @@ def build_ui(self, state):
     self.btle_acp_bars = pg.BarGraphItem(x=[0], height=[0], width=0.35, brush='#dd8459')
     self.btle_acp_widget.addItem(self.btle_acp_bars)
     
-    self.layout_btle.addWidget(self.btle_spectrum_widget, 0, 0)
-    self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
-    self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
-    self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+    self.layout_btle_grid.addWidget(self.btle_spectrum_widget, 0, 0)
+    self.layout_btle_grid.addWidget(self.btle_power_widget, 0, 1)
+    self.layout_btle_grid.addWidget(self.btle_freq_widget, 1, 0)
+    self.layout_btle_grid.addWidget(self.btle_acp_widget, 1, 1)
+    
+    self.layout_btle.addLayout(self.btle_metrics_layout)
+    self.layout_btle.addLayout(self.layout_btle_grid)
     
     self.modes_stack.addWidget(self.page_btle)
 

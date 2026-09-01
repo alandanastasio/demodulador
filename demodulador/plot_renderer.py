@@ -470,3 +470,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     y_floor = -100
                     pwr = np.asarray(btle['acp_power_dbm'])
                     self.btle_acp_bars.setOpts(x=btle['acp_channels'], height=pwr - y_floor, y0=y_floor)
+                
+                if hasattr(self, 'btle_cfo_label'):
+                    cfo = btle.get('cfo_khz', 0.0)
+                    self.btle_cfo_label.setText(f"CFO: {cfo:.2f} kHz")
+                
+                if hasattr(self, 'btle_sync_label'):
+                    sync = btle.get('sync_quality', 0.0)
+                    if btle.get('preamble_found', False):
+                        self.btle_sync_label.setText(f"Sync Quality: {sync:.2f}")
+                        self.btle_sync_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+                    else:
+                        self.btle_sync_label.setText("Sync Quality: No Sync")
+                        self.btle_sync_label.setStyleSheet("font-weight: bold; color: #F44336;")
