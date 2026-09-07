@@ -389,7 +389,6 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
         
-        self.demod_btn.setText(f"BTLE ({bw_mhz} MHz)")
         self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
 
     def set_wifi_ag_mode(self):
@@ -1123,12 +1122,52 @@ class MainWindow(QMainWindow):
                 self._maximized_layout = self.layout_btle
                 self._btle_power_special_mode = True
                 return
+            elif widget == self.btle_acp_widget:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_acp_widget.show()
+                # Ocupar todo el espacio disponible
+                self.layout_btle.addWidget(self.btle_acp_widget, 0, 0, 3, 2)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_acp_special_mode = True
+                
+                # Mostrar textos si ya existen
+                if hasattr(self, 'btle_acp_texts'):
+                    for t in self.btle_acp_texts:
+                        t.setVisible(True)
+                return
+            elif widget == self.btle_freq_widget:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_freq_widget.show()
+                self.layout_btle.addWidget(self.btle_freq_widget, 0, 0, 3, 2)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_freq_special_mode = True
+                return
 
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
         # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
         grid_widget = widget
-        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None)]
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None)]
         while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
             grid_widget = grid_widget.parentWidget()
             
@@ -1189,6 +1228,27 @@ class MainWindow(QMainWindow):
             if hasattr(self, '_saved_controls_visible'):
                 self.controls_widget.setVisible(self._saved_controls_visible)
             self._btle_power_special_mode = False
+
+        if getattr(self, '_btle_acp_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_acp_widget)
+            self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            
+            if hasattr(self, 'btle_acp_texts'):
+                for t in self.btle_acp_texts:
+                    t.setVisible(False)
+            self._btle_acp_special_mode = False
+
+        if getattr(self, '_btle_freq_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_freq_widget)
+            self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            
+            self._btle_freq_special_mode = False
 
         for w, was_visible in self._saved_visibility.items():
             w.setVisible(was_visible)

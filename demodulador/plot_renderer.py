@@ -489,6 +489,25 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                             brushes.append(QColor.fromHsl(110, s, l))
                             
                         self.btle_acp_bars.setOpts(x=channels, height=pwr - y_floor, y0=y_floor, brushes=brushes)
+                        
+                        if not hasattr(self, 'btle_acp_texts'):
+                            self.btle_acp_texts = []
+                            
+                        while len(self.btle_acp_texts) < len(channels):
+                            t = pg.TextItem(text="", anchor=(0.5, 1), color='w')
+                            t.setZValue(10)
+                            self.btle_acp_widget.addItem(t)
+                            self.btle_acp_texts.append(t)
+                            
+                        for i in range(len(channels), len(self.btle_acp_texts)):
+                            self.btle_acp_texts[i].setVisible(False)
+                            
+                        is_special = getattr(self, '_btle_acp_special_mode', False)
+                        for i in range(len(channels)):
+                            val = pwr[i]
+                            self.btle_acp_texts[i].setText(f"{val:.1f}")
+                            self.btle_acp_texts[i].setPos(channels[i], val + 2)
+                            self.btle_acp_texts[i].setVisible(is_special)
                     
                     if hasattr(self, 'btle_metrics_label'):
                         cfo = btle.get('cfo_khz', 0.0)
