@@ -4,6 +4,48 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 import datetime
+import pyqtgraph as pg
+
+# --- MONKEYPATCH PYQTGRAPH GRIDS ---
+# Queremos ticks menores, pero NO grillas menores.
+# Hacemos dos pasadas en generateDrawSpecs: una sin grilla para los ticks normales, 
+# y otra con maxTickLevel=0 para dibujar sólo las grillas mayores.
+_original_generateDrawSpecs = pg.AxisItem.generateDrawSpecs
+
+def _custom_generateDrawSpecs(self, p):
+    original_grid = self.grid
+    if original_grid is False:
+        return _original_generateDrawSpecs(self, p)
+        
+    # Primera pasada: obtener todos los ticks cortos (sin grillas largas)
+    self.grid = False
+    specs = _original_generateDrawSpecs(self, p)
+    if specs is None:
+        self.grid = original_grid
+        return None
+    axisSpec, short_tickSpecs, textSpecs = specs
+    
+    # Segunda pasada: obtener las grillas largas, pero solo para nivel mayor (0)
+    original_maxTickLevel = self.style.get('maxTickLevel', 2)
+    self.style['maxTickLevel'] = 0
+    self.grid = original_grid
+    specs_grids = _original_generateDrawSpecs(self, p)
+    
+    # Restaurar estado original
+    self.style['maxTickLevel'] = original_maxTickLevel
+    
+    if specs_grids is not None:
+        axisSpec_grids, major_gridSpecs, textSpecs_grids = specs_grids
+        # Combinar los ticks cortos con las grillas largas mayores
+        final_tickSpecs = short_tickSpecs + major_gridSpecs
+    else:
+        final_tickSpecs = short_tickSpecs
+        
+    return (axisSpec, final_tickSpecs, textSpecs)
+
+pg.AxisItem.generateDrawSpecs = _custom_generateDrawSpecs
+# ------------------------------------
+
 import usb.core
 from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon, QPainter
@@ -24,6 +66,7 @@ from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
+from dsp.demoduladores.btle import DemoduladorBTLE
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -99,12 +142,15 @@ class MainWindow(QMainWindow):
         self.radio.start_rx()
 
     def procesar_muestras_iq(self, c_samples):
+        if c_samples is None:
+            return
+            
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
-        if state['is_recording'] and c_samples is not None:
+        if state['is_recording']:
             state['recorded_samples'].append(c_samples.copy())
             
         # 1.5. Grabación retroactiva del Waterfall (Búfer Circular de RAM)
-        if getattr(self, 'waterfall_enabled', False) and c_samples is not None and state.get('demod_mode') == 'none' and not self.is_paused:
+        if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none' and not self.is_paused:
             dt = getattr(self, 'wf_dt_avg', 0.166)
             total_time = dt * getattr(self, 'waterfall_lines', 200)
             expected_samples = int(total_time * state.get('sample_rate', 2e6))
@@ -169,7 +215,8 @@ class MainWindow(QMainWindow):
         plot_names = [
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
-            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -185,7 +232,8 @@ class MainWindow(QMainWindow):
         plot_names = [
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
-            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget'
+            'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -236,6 +284,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("3.0 MHz (Decimado a 300k)") == -1:
             self.sr_combo.addItem("3.0 MHz (Decimado a 300k)")
@@ -259,6 +309,87 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self.freq_input.setValue(100.0)
         self.update_x_axis()
+
+    
+    def set_btle_mode(self, bw_mhz=1):
+        if hasattr(self, '_btle_power_stats'):
+            del self._btle_power_stats
+        self._reset_maximized_state()
+        self.btn_change_uplink_freq.hide()
+        self.freq_input.setEnabled(True)
+        if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
+            self.lte_q1_stack.removeWidget(self.freq_plot)
+            from PyQt6.QtWidgets import QWidget
+            self.lte_q1_stack.insertWidget(0, QWidget())
+            
+        self.layout_btle.addWidget(self.freq_plot, 0, 0)
+        self.layout_btle.setRowStretch(0, 1)
+        self.layout_btle.setRowStretch(1, 1)
+        self.layout_btle.setRowStretch(2, 0)  # Limpiar cualquier stretch viejo en la fila 2
+        self.layout_btle.setColumnStretch(0, 1)
+        self.layout_btle.setColumnStretch(1, 1)
+        if hasattr(self, 'waterfall_checkbox'): 
+            self.waterfall_checkbox.hide()
+            self.waterfall_label.hide()
+        if hasattr(self, 'waterfall_controls_widget'):
+            self.waterfall_controls_widget.hide()
+        if hasattr(self, 'wf_bottom_widget'):
+            self.wf_bottom_widget.hide()
+        if hasattr(self, 'waterfall_line2'):
+            self.waterfall_line2.hide()
+        if hasattr(self, 'zero_span_btn'): 
+            self.zero_span_btn.setChecked(False)
+            state['zero_span'] = False
+            self.zero_span_btn.hide()
+            self.zero_span_label.hide()
+        
+        self.trace_manager.reset()
+        
+        self.modes_stack.setCurrentWidget(self.page_btle)
+        self.audio_container.hide()
+        self.fm_metrics_label.hide()
+        self.stereo_metrics_label.hide()
+        self.wifi_metrics_label.hide()
+        self.wifi_hw_metrics_label.hide()
+        if hasattr(self, 'lte_metrics_label'):
+            self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.show()
+
+        state['demod_mode'] = 'btle'
+        state['sample_rate'] = 20e6
+        
+        if hasattr(self.radio, 'set_muestras_por_bloque'):
+            # En BTLE usamos 20 Msps, por ende bloques mas grandes
+            self.radio.set_muestras_por_bloque(65536)
+
+        self.demodulador_actual = DemoduladorBTLE()
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz)
+        self.radio.set_sample_rate(state['sample_rate'])
+        
+        self.unit_combo.setCurrentText("GHz")
+        self.freq_input.setValue(2.402) # BTLE default CH 37
+
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+            
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("20 MHz") != -1:
+            self.sr_combo.setCurrentText("20 MHz")
+        elif self.sr_combo.findText("20.0 MHz") != -1:
+            self.sr_combo.setCurrentText("20.0 MHz")
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+        self.freq_plot.show()
+        
+        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
 
     def set_wifi_ag_mode(self):
         self._reset_maximized_state()
@@ -300,6 +431,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.show()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
 
         state['demod_mode'] = 'wifi_ag'
         state['sample_rate'] = 20e6 
@@ -399,6 +532,8 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if hasattr(self, 'action_show_data'):
             self.action_show_data.setText("Datos PDSCH")
@@ -599,6 +734,8 @@ class MainWindow(QMainWindow):
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if hasattr(self, 'action_show_data'):
             self.action_show_data.setText("Datos PUSCH")
@@ -744,6 +881,8 @@ class MainWindow(QMainWindow):
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
             self.lte_metrics_label.hide()
+        if hasattr(self, 'btle_metrics_label'):
+            self.btle_metrics_label.hide()
         
         if self.audio_l_btn.isChecked() or self.audio_r_btn.isChecked():
             self.audio_l_btn.setChecked(False)
@@ -779,6 +918,8 @@ class MainWindow(QMainWindow):
         state['center_freq'] = val * self.current_freq_multiplier
         self.radio.set_freq(state['center_freq'])
         self.trace_manager.reset()
+        if hasattr(self, '_btle_power_stats'):
+            del self._btle_power_stats
         self.update_x_axis()
 
     def on_sr_changed(self, text):
@@ -921,19 +1062,112 @@ class MainWindow(QMainWindow):
             if self._maximized_widget is None:
                 self._maximize_panel(obj)
             else:
-                self._restore_panels()
+                self._restore_panels(obj)
             return True
         return super().eventFilter(obj, event)
-
 
     def _maximize_panel(self, widget):
         if not hasattr(self, 'all_panels'): return
         
+        # --- MODO ESPECIAL BTLE ---
+        if state.get('demod_mode') == 'btle':
+            if widget in [self.freq_plot, self.btle_mag_widget]:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.freq_plot.show()
+                self.btle_mag_widget.show()
+                
+                # Reorganizar el layout para que ocupen todo el ancho
+                self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 2)
+                self.layout_btle.addWidget(self.btle_mag_widget, 1, 0, 1, 2)
+                self.layout_btle.setRowStretch(0, 1)
+                self.layout_btle.setRowStretch(1, 1)
+                self.layout_btle.setRowStretch(2, 0)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_special_mode = True
+                if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+                    self.demodulador_actual.skip_metrics = True
+                return
+            elif widget in [self.btle_power_widget, getattr(self, 'btle_power_table_widget', None)]:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_power_widget.show()
+                if hasattr(self, 'btle_power_table_widget'):
+                    self.btle_power_table_widget.show()
+                
+                self.layout_btle.addWidget(self.btle_power_widget, 0, 0, 1, 2)
+                if hasattr(self, 'btle_power_table_widget'):
+                    self.layout_btle.addWidget(self.btle_power_table_widget, 1, 0, 1, 2)
+                self.layout_btle.setRowStretch(0, 2)
+                self.layout_btle.setRowStretch(1, 1)
+                self.layout_btle.setRowStretch(2, 0)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_power_special_mode = True
+                return
+            elif widget == self.btle_acp_widget:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_acp_widget.show()
+                # Ocupar todo el espacio disponible
+                self.layout_btle.addWidget(self.btle_acp_widget, 0, 0, 3, 2)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_acp_special_mode = True
+                
+                # Mostrar textos si ya existen
+                if hasattr(self, 'btle_acp_texts'):
+                    for t in self.btle_acp_texts:
+                        t.setVisible(True)
+                return
+            elif widget == self.btle_freq_widget:
+                self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
+                self._saved_controls_visible = self.controls_widget.isVisible()
+                self._saved_row_stretches = {i: self.layout_btle.rowStretch(i) for i in range(self.layout_btle.rowCount())}
+                self._saved_col_stretches = {i: self.layout_btle.columnStretch(i) for i in range(self.layout_btle.columnCount())}
+                
+                for w in self.all_panels:
+                    w.hide()
+                self.controls_widget.hide()
+                
+                self.btle_freq_widget.show()
+                self.layout_btle.addWidget(self.btle_freq_widget, 0, 0, 3, 2)
+                
+                self._maximized_widget = widget 
+                self._maximized_layout = self.layout_btle
+                self._btle_freq_special_mode = True
+                return
+
         self._saved_visibility = {w: w.isVisible() for w in self.all_panels}
         
         # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
         grid_widget = widget
-        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None)]
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None)]
         while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
             grid_widget = grid_widget.parentWidget()
             
@@ -960,9 +1194,62 @@ class MainWindow(QMainWindow):
         self._maximized_widget = widget
         self._maximized_layout = layout if isinstance(layout, QGridLayout) else None
 
-    def _restore_panels(self):
+    def _restore_panels(self, clicked_widget=None):
         if self._maximized_widget is None: return
         
+        if getattr(self, '_btle_special_mode', False):
+            # Remover ambos del layout para evitar conflictos
+            self.layout_btle.removeWidget(self.btle_mag_widget)
+            self.layout_btle.removeWidget(self.freq_plot)
+            
+            # Swappear el panel primario según el widget clickeado
+            if clicked_widget == self.btle_mag_widget:
+                self.layout_btle.addWidget(self.btle_mag_widget, 0, 0, 1, 1)
+                self._saved_visibility[self.btle_mag_widget] = True
+                self._saved_visibility[self.freq_plot] = False
+            else:
+                self.layout_btle.addWidget(self.freq_plot, 0, 0, 1, 1)
+                self._saved_visibility[self.freq_plot] = True
+                self._saved_visibility[self.btle_mag_widget] = False
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+                self.demodulador_actual.skip_metrics = False
+            self._btle_special_mode = False
+
+        if getattr(self, '_btle_power_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_power_widget)
+            if hasattr(self, 'btle_power_table_widget'):
+                self.layout_btle.removeWidget(self.btle_power_table_widget)
+                
+            self.layout_btle.addWidget(self.btle_power_widget, 0, 1, 1, 1)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            self._btle_power_special_mode = False
+
+        if getattr(self, '_btle_acp_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_acp_widget)
+            self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            
+            if hasattr(self, 'btle_acp_texts'):
+                for t in self.btle_acp_texts:
+                    t.setVisible(False)
+            self._btle_acp_special_mode = False
+
+        if getattr(self, '_btle_freq_special_mode', False):
+            self.layout_btle.removeWidget(self.btle_freq_widget)
+            self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
+            
+            if hasattr(self, '_saved_controls_visible'):
+                self.controls_widget.setVisible(self._saved_controls_visible)
+            
+            self._btle_freq_special_mode = False
+
         for w, was_visible in self._saved_visibility.items():
             w.setVisible(was_visible)
             
@@ -980,14 +1267,31 @@ class MainWindow(QMainWindow):
         self._saved_col_stretches = {}
 
     def _reset_maximized_state(self):
+        if getattr(self, '_maximized_widget', None) is not None:
+            self._restore_panels()
+            
         self._maximized_widget = None
         self._maximized_layout = None
+        self._btle_special_mode = False
+        self._btle_power_special_mode = False
+        if hasattr(self, 'demodulador_actual') and self.demodulador_actual:
+            self.demodulador_actual.skip_metrics = False
         self._saved_visibility = {}
         self._saved_row_stretches = {}
         self._saved_col_stretches = {}
         if hasattr(self, 'all_panels'):
             for w in self.all_panels:
                 w.show()
+        if hasattr(self, 'btle_mag_widget'):
+            self.btle_mag_widget.hide()
+            if hasattr(self, 'layout_btle'):
+                self.layout_btle.removeWidget(self.btle_mag_widget)
+        if hasattr(self, 'btle_power_table_widget'):
+            self.btle_power_table_widget.hide()
+            if hasattr(self, 'layout_btle'):
+                self.layout_btle.removeWidget(self.btle_power_table_widget)
+        if hasattr(self, 'controls_widget'):
+            self.controls_widget.show()
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
         

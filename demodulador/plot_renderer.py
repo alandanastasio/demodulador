@@ -219,7 +219,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 self.wbfm_r_curve.setData(t_axis, audio_R)
             
             # Renderizar las métricas en HTML en el panel derecho
-            if fm_metrics is not None:
+            if fm_metrics is not None and 'pico_max' in fm_metrics:
                 html_text = (
                     f"<div style='line-height: 1.5;'>"
                     f"<span style='color: #FFFFFF'><b>Desv. Pico Máx:</b></span> <span style='color: #00B000;'>{fm_metrics['pico_max']:+.2f} kHz</span><br>"
@@ -454,3 +454,203 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                                     self.lte_frame_summary.item(row, 1).setText(evm_str)
                                     self.lte_frame_summary.item(row, 2).setText(pwr_str)
                                     self.lte_frame_summary.item(row, 4).setText(rb_str)
+
+        # --- RENDERIZADO ESPECÍFICO DE BTLE ---
+        if state.get('demod_mode') == 'btle':
+            if fm_metrics and 'btle_metrics' in fm_metrics:
+                btle = fm_metrics['btle_metrics']
+                
+                skip_metrics = btle.get('skip_metrics', False)
+                
+                if hasattr(self, 'btle_freq_curve'):
+                    self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
+                    
+                    # ── Overlay de métricas de desviación de frecuencia ──
+                    if not skip_metrics and getattr(self, '_btle_freq_special_mode', False):
+                        df1_avg = btle.get('df1_avg_khz', 0.0)
+                        df2_avg = btle.get('df2_avg_khz', 0.0)
+                        df1_max = btle.get('df1_max_khz', 0.0)
+                        df2_min = btle.get('df2_min_khz', 0.0)
+                        mod_idx = btle.get('mod_index', 0.0)
+                        drift = btle.get('freq_drift_khz', 0.0)
+                        
+                        # Colores según pass/fail de la spec BLE
+                        green = '#4CAF50'
+                        red = '#F44336'
+                        yellow = '#FFD600'
+                        
+                        # Δf1avg/Δf2avg en TRÁFICO VIVO:
+                        # La especificación exige medir con la secuencia 11110000 para obtener >225 kHz.
+                        # En payloads aleatorios (live traffic), la media cae a 150-220 kHz por el patrón 1010 y el filtro Gaussiano.
+                        c1 = green if 140 <= df1_avg <= 280 else (yellow if 120 <= df1_avg <= 300 else red)
+                        c2 = green if -280 <= df2_avg <= -140 else (yellow if -300 <= df2_avg <= -120 else red)
+                        
+                        # Δf1max / Δf2min: el pico debe alcanzar cerca de 250 kHz y no exceder los 300 kHz
+                        c3 = green if 185 <= df1_max <= 320 else (yellow if 170 <= df1_max <= 350 else red)
+                        c4 = green if -320 <= df2_min <= -185 else (yellow if -350 <= df2_min <= -170 else red)
+                        
+                        # Mod index: En tráfico vivo, al promediar todos los bits, el índice cae a ~0.3 - 0.45.
+                        c5 = green if 0.28 <= mod_idx <= 0.55 else (yellow if 0.25 <= mod_idx <= 0.60 else red)
+                        # Drift: spec ≤ 25 kHz
+                        c6 = green if abs(drift) <= 25 else red
+                        
+                        text = (
+                            f"<span style='font-size:13pt; font-family:monospace;'>"
+                            f"<span style='color:{c1};'>Δf1avg:  {df1_avg:+.1f} kHz</span><br>"
+                            f"<span style='color:{c2};'>Δf2avg:  {df2_avg:+.1f} kHz</span><br>"
+                            f"<span style='color:{c3};'>Δf1max:  {df1_max:+.1f} kHz</span><br>"
+                            f"<span style='color:{c4};'>Δf2min:  {df2_min:+.1f} kHz</span><br>"
+                            f"<span style='color:{c5};'>Mod Index (h): {mod_idx:.3f}</span><br>"
+                            f"<span style='color:{c6};'>Freq Drift: {drift:+.1f} kHz</span>"
+                            f"</span>"
+                        )
+                        
+                        if not hasattr(self, '_btle_freq_metrics_text'):
+                            self._btle_freq_metrics_text = pg.TextItem(
+                                html=text, anchor=(1, 0))
+                            self._btle_freq_metrics_text.setZValue(100)
+                            self.btle_freq_widget.addItem(self._btle_freq_metrics_text)
+                        else:
+                            self._btle_freq_metrics_text.setHtml(text)
+                        
+                        # Posicionar en la esquina superior derecha del viewport
+                        vb = self.btle_freq_widget.getPlotItem().getViewBox()
+                        view_range = vb.viewRange()
+                        x_max = view_range[0][1]
+                        y_max = view_range[1][1]
+                        self._btle_freq_metrics_text.setPos(x_max, y_max)
+                        self._btle_freq_metrics_text.setVisible(True)
+                    else:
+                        if hasattr(self, '_btle_freq_metrics_text'):
+                            self._btle_freq_metrics_text.setVisible(False)
+                    
+                if hasattr(self, 'btle_mag_curve'):
+                    # El gráfico pide 'Tiempo [ms]', así que dividimos los us por 1000
+                    self.btle_mag_curve.setData(btle['burst_time_us'] / 1000.0, btle['mag_linear'])
+                    
+                if not skip_metrics:
+                    if hasattr(self, 'btle_power_curve'):
+                        self.btle_power_curve.setData(btle['burst_time_us'], btle['power_dbm'])
+                        
+                    if hasattr(self, 'btle_acp_bars') and len(btle['acp_channels']) > 0:
+                        y_floor = -100
+                        pwr = np.asarray(btle['acp_power_dbm'])
+                        channels = btle['acp_channels']
+                        
+                        from PyQt6.QtGui import QColor
+                        brushes = []
+                        for ch in channels:
+                            dist = abs(ch)
+                            max_dist = 5.0
+                            norm_dist = min(dist / max_dist, 1.0)
+                            s = int(255 - norm_dist * 180) # 255 (muy saturado) a 75 (desaturado)
+                            l = int(120 + norm_dist * 80)  # 120 (medio) a 200 (claro)
+                            brushes.append(QColor.fromHsl(110, s, l))
+                            
+                        self.btle_acp_bars.setOpts(x=channels, height=pwr - y_floor, y0=y_floor, brushes=brushes)
+                        
+                        if not hasattr(self, 'btle_acp_texts'):
+                            self.btle_acp_texts = []
+                            
+                        while len(self.btle_acp_texts) < len(channels):
+                            t = pg.TextItem(text="", anchor=(0.5, 1), color='w')
+                            t.setZValue(10)
+                            self.btle_acp_widget.addItem(t)
+                            self.btle_acp_texts.append(t)
+                            
+                        for i in range(len(channels), len(self.btle_acp_texts)):
+                            self.btle_acp_texts[i].setVisible(False)
+                            
+                        is_special = getattr(self, '_btle_acp_special_mode', False)
+                        for i in range(len(channels)):
+                            val = pwr[i]
+                            self.btle_acp_texts[i].setText(f"{val:.1f}")
+                            self.btle_acp_texts[i].setPos(channels[i], val + 2)
+                            self.btle_acp_texts[i].setVisible(is_special)
+                    
+                    if hasattr(self, 'btle_metrics_label'):
+                        cfo = btle.get('cfo_khz', 0.0)
+                        sync = btle.get('sync_quality', 0.0)
+                        preamble = btle.get('preamble_found', False)
+                        
+                        sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
+                        cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
+                        
+                        avg_pwr = btle.get('avg_power_dbm', 0.0)
+                        peak_pwr = btle.get('peak_power_dbm', 0.0)
+                        papr = btle.get('papr_db', 0.0)
+                        leakage_pwr = btle.get('leakage_power_dbm', -100.0)
+                        
+                        if not hasattr(self, '_btle_power_stats'):
+                            self._btle_power_stats = {
+                                'count': 0,
+                                'avg': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'peak': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'papr': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')},
+                                'leakage': {'sum': 0.0, 'max': -float('inf'), 'min': float('inf')}
+                            }
+                            
+                        stats = self._btle_power_stats
+                        stats['count'] += 1
+                        
+                        def _update_stat(key, val):
+                            d = stats[key]
+                            d['sum'] += val
+                            if val > d['max']: d['max'] = val
+                            if val < d['min']: d['min'] = val
+                            return (val, d['sum'] / stats['count'], d['max'], d['min'])
+                            
+                        vals_avg = _update_stat('avg', avg_pwr)
+                        vals_peak = _update_stat('peak', peak_pwr)
+                        vals_papr = _update_stat('papr', papr)
+                        vals_leakage = _update_stat('leakage', leakage_pwr)
+                        
+                        if hasattr(self, 'btle_power_table_widget'):
+                            from PyQt6.QtWidgets import QTableWidgetItem
+                            def _set_row(row, vals):
+                                for col, val in enumerate(vals):
+                                    item = QTableWidgetItem(f"{val:.2f}")
+                                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                                    self.btle_power_table_widget.setItem(row, col, item)
+                            
+                            _set_row(0, vals_avg)
+                            _set_row(1, vals_peak)
+                            _set_row(2, vals_papr)
+                            _set_row(3, vals_leakage)
+                        
+                        html = f"""
+                        <div style='font-family: sans-serif;'>
+                            <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                                <b>MÉTRICAS DE SINCRONIZACIÓN</b>
+                            </div>
+                            <table style='width: 100%; margin-bottom: 15px;'>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>CFO:</td>
+                                    <td style='text-align: right; font-weight: bold;'>{cfo_text}</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Sync Quality:</td>
+                                    <td style='text-align: right; font-weight: bold;'>{sync_text}</td>
+                                </tr>
+                            </table>
+                            
+                            <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
+                                <b>TX POWER VS. TIME</b>
+                            </div>
+                            <table style='width: 100%;'>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
+                                </tr>
+                                <tr>
+                                    <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFD500;'>{papr:.2f} dB</td>
+                                </tr>
+                            </table>
+                        </div>
+                        """
+                        self.btle_metrics_label.setText(html)
