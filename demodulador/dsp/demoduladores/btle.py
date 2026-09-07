@@ -383,6 +383,11 @@ class DemoduladorBTLE(DemoduladorBase):
             overlap = int(self.sample_rate * 2e-3)
             self.buffer = self.buffer[target_len - overlap:]
 
+            # Remover DC Offset (Fuga del Oscilador Local / LO Leakage). 
+            # Esto evita oscilaciones de baja frecuencia (wobble/senoidal) en la
+            # demodulación de FM que ocurren cuando hay un DC Offset y un pequeño CFO.
+            iq_samples = iq_samples - np.mean(iq_samples)
+
             # ═════════════════════════════════════════════════════════
             # PASO 1: FM Demodulación del buffer completo
             # Derivada de la fase → frecuencia instantánea
@@ -452,6 +457,39 @@ class DemoduladorBTLE(DemoduladorBase):
             # ═════════════════════════════════════════════════════════
             if extract_start is not None:
                 burst_samples = iq_samples[extract_start:extract_end]
+                
+                # RE-DEMODULAR LA RÁFAGA LOCALMENTE PARA ELIMINAR EL WOBBLE (DC OFFSET DINÁMICO)
+                # El AGC puede cambiar el DC offset durante la ráfaga. Restar la media no es perfecto
+                # si la ráfaga es corta y tiene CFO. Usamos min/max para hallar el centro real (señal de envolvente constante).
+                I = np.real(burst_samples)
+                Q = np.imag(burst_samples)
+                center_I = (np.max(I) + np.min(I)) / 2.0
+                center_Q = (np.max(Q) + np.min(Q)) / 2.0
+                burst_centered = burst_samples - (center_I + 1j * center_Q)
+                
+                b_phase = np.unwrap(np.angle(burst_centered))
+                b_freq_dev_hz = np.diff(b_phase) / (2 * np.pi) * self.sample_rate
+                b_freq_dev_hz = np.concatenate((b_freq_dev_hz, b_freq_dev_hz[-1:]))
+                
+                # Limitar los picos impulsivos antes del filtro (Spike Killer)
+                # Un salto de fase por ruido a 20 Msps genera picos irreales de +-10 MHz.
+                # Si entran al filtro sin limitar, su energía "ensancha" el filtro hasta +-500 kHz.
+                np.clip(b_freq_dev_hz, -500000.0, 500000.0, out=b_freq_dev_hz)
+                
+                # Filtrar el ruido de alta frecuencia (Suavizado FM)
+                # Aplicamos un filtro pasabajos Butterworth ajustado al ancho de banda real
+                # de la señal GFSK (BT=0.5 -> ~500 kHz). Esto es crucial en tráfico vivo (bajo SNR) 
+                # porque la derivada de fase (FM) amplifica exponencialmente el ruido térmico.
+                from scipy.signal import butter, lfilter
+                nyq = 0.5 * self.sample_rate
+                cutoff = 0.5e6 / nyq  # 500 kHz cutoff
+                b, a = butter(4, cutoff, btype='low')
+                b_freq_dev_hz = lfilter(b, a, b_freq_dev_hz)
+                
+                # Aplicamos la misma corrección de CFO que se calculó en el Paso 3
+                if cfo_hz != 0.0:
+                    b_freq_dev_hz -= cfo_hz
+
                 n_samples = len(burst_samples)
                 burst_time_us = (np.arange(n_samples)
                                  / self.sample_rate * 1e6)
@@ -460,9 +498,8 @@ class DemoduladorBTLE(DemoduladorBase):
                 power_mw = np.abs(burst_samples) ** 2
                 power_dbm = 10 * np.log10(power_mw + 1e-12)
 
-                # Desviación de frecuencia (ya corregida por CFO)
-                freq_dev_khz = (
-                    freq_dev_hz[extract_start:extract_end] / 1000.0)
+                # Desviación de frecuencia (re-calculada y corregida)
+                freq_dev_khz = b_freq_dev_hz / 1000.0
 
                 # Garantizar longitudes consistentes
                 min_len = min(len(burst_time_us), len(freq_dev_khz),
