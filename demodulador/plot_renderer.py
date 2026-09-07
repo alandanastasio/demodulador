@@ -465,6 +465,65 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 if hasattr(self, 'btle_freq_curve'):
                     self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
                     
+                    # ── Overlay de métricas de desviación de frecuencia ──
+                    if not skip_metrics and getattr(self, '_btle_freq_special_mode', False):
+                        df1_avg = btle.get('df1_avg_khz', 0.0)
+                        df2_avg = btle.get('df2_avg_khz', 0.0)
+                        df1_max = btle.get('df1_max_khz', 0.0)
+                        df2_min = btle.get('df2_min_khz', 0.0)
+                        mod_idx = btle.get('mod_index', 0.0)
+                        drift = btle.get('freq_drift_khz', 0.0)
+                        
+                        # Colores según pass/fail de la spec BLE
+                        green = '#4CAF50'
+                        red = '#F44336'
+                        yellow = '#FFD600'
+                        
+                        # Δf1avg/Δf2avg en TRÁFICO VIVO:
+                        # La especificación exige medir con la secuencia 11110000 para obtener >225 kHz.
+                        # En payloads aleatorios (live traffic), la media cae a 150-220 kHz por el patrón 1010 y el filtro Gaussiano.
+                        c1 = green if 140 <= df1_avg <= 280 else (yellow if 120 <= df1_avg <= 300 else red)
+                        c2 = green if -280 <= df2_avg <= -140 else (yellow if -300 <= df2_avg <= -120 else red)
+                        
+                        # Δf1max / Δf2min: el pico debe alcanzar cerca de 250 kHz y no exceder los 300 kHz
+                        c3 = green if 185 <= df1_max <= 320 else (yellow if 170 <= df1_max <= 350 else red)
+                        c4 = green if -320 <= df2_min <= -185 else (yellow if -350 <= df2_min <= -170 else red)
+                        
+                        # Mod index: En tráfico vivo, al promediar todos los bits, el índice cae a ~0.3 - 0.45.
+                        c5 = green if 0.28 <= mod_idx <= 0.55 else (yellow if 0.25 <= mod_idx <= 0.60 else red)
+                        # Drift: spec ≤ 25 kHz
+                        c6 = green if abs(drift) <= 25 else red
+                        
+                        text = (
+                            f"<span style='font-size:13pt; font-family:monospace;'>"
+                            f"<span style='color:{c1};'>Δf1avg:  {df1_avg:+.1f} kHz</span><br>"
+                            f"<span style='color:{c2};'>Δf2avg:  {df2_avg:+.1f} kHz</span><br>"
+                            f"<span style='color:{c3};'>Δf1max:  {df1_max:+.1f} kHz</span><br>"
+                            f"<span style='color:{c4};'>Δf2min:  {df2_min:+.1f} kHz</span><br>"
+                            f"<span style='color:{c5};'>Mod Index (h): {mod_idx:.3f}</span><br>"
+                            f"<span style='color:{c6};'>Freq Drift: {drift:+.1f} kHz</span>"
+                            f"</span>"
+                        )
+                        
+                        if not hasattr(self, '_btle_freq_metrics_text'):
+                            self._btle_freq_metrics_text = pg.TextItem(
+                                html=text, anchor=(1, 0))
+                            self._btle_freq_metrics_text.setZValue(100)
+                            self.btle_freq_widget.addItem(self._btle_freq_metrics_text)
+                        else:
+                            self._btle_freq_metrics_text.setHtml(text)
+                        
+                        # Posicionar en la esquina superior derecha del viewport
+                        vb = self.btle_freq_widget.getPlotItem().getViewBox()
+                        view_range = vb.viewRange()
+                        x_max = view_range[0][1]
+                        y_max = view_range[1][1]
+                        self._btle_freq_metrics_text.setPos(x_max, y_max)
+                        self._btle_freq_metrics_text.setVisible(True)
+                    else:
+                        if hasattr(self, '_btle_freq_metrics_text'):
+                            self._btle_freq_metrics_text.setVisible(False)
+                    
                 if hasattr(self, 'btle_mag_curve'):
                     # El gráfico pide 'Tiempo [ms]', así que dividimos los us por 1000
                     self.btle_mag_curve.setData(btle['burst_time_us'] / 1000.0, btle['mag_linear'])
