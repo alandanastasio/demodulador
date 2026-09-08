@@ -392,10 +392,25 @@ class DemoduladorBTLE(DemoduladorBase):
             # PASO 1: FM Demodulación del buffer completo
             # Derivada de la fase → frecuencia instantánea
             # ═════════════════════════════════════════════════════════
-            phase = np.unwrap(np.angle(iq_samples))
-            freq_dev_hz = np.diff(phase) / (2 * np.pi) * self.sample_rate
-            # Igualar longitud al array original duplicando la última muestra
-            freq_dev_hz = np.concatenate((freq_dev_hz, freq_dev_hz[-1:]))
+            # Discriminador FM con retardo múltiple (arctangent discriminator)
+            # np.diff(unwrap(angle(x))) tiene BW = fs/2 = 10 MHz a 20 Msps,
+            # lo cual amplifica el ruido de fase del SDR en 20× sobre lo necesario.
+            # El discriminador con retardo d:
+            #   freq[n] = angle(x[n] · conj(x[n-d])) × fs / (2π·d)
+            # tiene BW ≈ fs/d. Con d = sps/4 → BW ≈ 4 × bit_rate = 4 MHz,
+            # suficiente para GFSK BT=0.5 (cuyo BW real es ~2 × bit_rate)
+            # y con ~7 dB menos de ruido que np.diff.
+            d = max(1, self._samples_per_bit // 4)
+            product = iq_samples[d:] * np.conj(iq_samples[:-d])
+            freq_dev_hz = np.angle(product) / (2 * np.pi * d) * self.sample_rate
+            # Centrar temporalmente y rellenar a longitud original N
+            pad_start = d // 2
+            pad_end = d - pad_start
+            freq_dev_hz = np.concatenate((
+                np.full(pad_start, freq_dev_hz[0]),
+                freq_dev_hz,
+                np.full(pad_end, freq_dev_hz[-1])
+            ))
             
             # Limitar matemáticamente los picos transitorios de discontinuidad de fase.
             # BLE usa desviación de +-250 kHz. Limitando a +-800 kHz damos muchísimo
@@ -458,37 +473,33 @@ class DemoduladorBTLE(DemoduladorBase):
             if extract_start is not None:
                 burst_samples = iq_samples[extract_start:extract_end]
                 
-                # RE-DEMODULAR LA RÁFAGA LOCALMENTE PARA ELIMINAR EL WOBBLE (DC OFFSET DINÁMICO)
-                # El AGC puede cambiar el DC offset durante la ráfaga. Restar la media no es perfecto
-                # si la ráfaga es corta y tiene CFO. Usamos min/max para hallar el centro real (señal de envolvente constante).
-                I = np.real(burst_samples)
-                Q = np.imag(burst_samples)
-                center_I = (np.max(I) + np.min(I)) / 2.0
-                center_Q = (np.max(Q) + np.min(Q)) / 2.0
-                burst_centered = burst_samples - (center_I + 1j * center_Q)
+                # Reusar la desviación de frecuencia ya calculada en PASO 1 y 
+                # corregida en PASO 3 (CFO). Esto evita re-demodular con el centrado
+                # min/max que es inestable (sensible a outliers, cambia entre frames
+                # → flickering) y evita la doble corrección de CFO.
+                # El freq_dev_hz del PASO 1 tiene: DC removal estable (np.mean del
+                # buffer completo), FM demod consistente, clamp a ±800 kHz, y CFO
+                # corregido desde el preámbulo.
+                b_freq_dev_hz = freq_dev_hz[extract_start:extract_end].copy()
                 
-                b_phase = np.unwrap(np.angle(burst_centered))
-                b_freq_dev_hz = np.diff(b_phase) / (2 * np.pi) * self.sample_rate
-                b_freq_dev_hz = np.concatenate((b_freq_dev_hz, b_freq_dev_hz[-1:]))
+                # Filtro Gaussiano Post-Detección (Cero Overshoot)
+                # Pablo tenía razón: el problema es el filtro. Los filtros Butterworth
+                # (incluso filtfilt) tienen "ringing" y overshoot en su respuesta al escalón,
+                # lo que infla los picos de la señal GFSK (onda cuadrada) superando los 300 kHz.
+                # La especificación Bluetooth exige un filtro de medida Gaussiano (BT=0.5).
+                # El filtro Gaussiano no tiene NINGÚN overshoot.
+                from scipy.ndimage import gaussian_filter1d
+                # Para BT=0.5 a 20 MSps, sigma ideal es ~5.3. Usamos 4.5 para no atenuar de más.
+                b_freq_dev_hz = gaussian_filter1d(b_freq_dev_hz, sigma=4.5)
                 
-                # Limitar los picos impulsivos antes del filtro (Spike Killer)
-                # Un salto de fase por ruido a 20 Msps genera picos irreales de +-10 MHz.
-                # Si entran al filtro sin limitar, su energía "ensancha" el filtro hasta +-500 kHz.
-                np.clip(b_freq_dev_hz, -500000.0, 500000.0, out=b_freq_dev_hz)
-                
-                # Filtrar el ruido de alta frecuencia (Suavizado FM)
-                # Aplicamos un filtro pasabajos Butterworth ajustado al ancho de banda real
-                # de la señal GFSK (BT=0.5 -> ~500 kHz). Esto es crucial en tráfico vivo (bajo SNR) 
-                # porque la derivada de fase (FM) amplifica exponencialmente el ruido térmico.
-                from scipy.signal import butter, lfilter
-                nyq = 0.5 * self.sample_rate
-                cutoff = 0.5e6 / nyq  # 500 kHz cutoff
-                b, a = butter(4, cutoff, btype='low')
-                b_freq_dev_hz = lfilter(b, a, b_freq_dev_hz)
-                
-                # Aplicamos la misma corrección de CFO que se calculó en el Paso 3
-                if cfo_hz != 0.0:
-                    b_freq_dev_hz -= cfo_hz
+                # Centrado Dinámico Robusto (Elimina el "salto" vertical)
+                # Estimar el CFO usando solo los 8 µs del preámbulo es muy ruidoso,
+                # lo que causa que el gráfico salte hacia arriba y abajo entre frames.
+                # Como GFSK es simétrico, el punto medio entre los percentiles superior
+                # e inferior de toda la ráfaga nos da un centro (CFO) extremadamente estable.
+                top_lvl = np.percentile(b_freq_dev_hz, 95)
+                bot_lvl = np.percentile(b_freq_dev_hz, 5)
+                b_freq_dev_hz -= (top_lvl + bot_lvl) / 2.0
 
                 n_samples = len(burst_samples)
                 burst_time_us = (np.arange(n_samples)

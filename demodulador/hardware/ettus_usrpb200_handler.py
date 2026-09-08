@@ -99,6 +99,10 @@ class USRPB200Handler(SDRBase):
                 self.usrp.set_master_clock_rate(61.44e6)
             elif sr_hz == 23.04e6:
                 self.usrp.set_master_clock_rate(46.08e6)
+            elif sr_hz == 20e6:
+                # 40 MHz / 2 = 20 MHz. Evita decimación impar de 3 (60/20) 
+                # que UHD suele forzar a 4 (dejando el sample rate real en 15 MHz).
+                self.usrp.set_master_clock_rate(40e6)
             else:
                 self.usrp.set_master_clock_rate(60e6)
         except Exception:
