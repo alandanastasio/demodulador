@@ -72,9 +72,18 @@ class HackRFHandler(SDRBase):
 
     def stop_rx(self):
         self.is_running = False
-        self.sdr.pyhackrf_stop_rx()
+        try:
+            self.sdr.pyhackrf_stop_rx()
+        except Exception as e:
+            print(f"Warning on stop_rx: {e}")
 
     def close(self):
         self.stop_rx()
-        self.sdr.pyhackrf_close()
-        pyhackrf.pyhackrf_exit()
+        try:
+            self.sdr.pyhackrf_close()
+        except Exception as e:
+            print(f"Warning on pyhackrf_close: {e}")
+        try:
+            pyhackrf.pyhackrf_exit()
+        except Exception as e:
+            pass
