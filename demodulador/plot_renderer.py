@@ -1,7 +1,56 @@
 import pyqtgraph as pg
 import numpy as np
+from html import escape
 from PyQt6.QtCore import Qt
 import time
+
+
+def render_lora(self, state, metrics):
+    if not metrics:
+        return
+    visual = metrics.get('lora_visual')
+    if visual is not None:
+        self.lora_time_curve.setData(visual['time_ms'], visual['magnitude'])
+        self.lora_freq_curve.setData(visual['time_ms'], visual['freq_khz'])
+        magnitude_max = max(float(np.max(visual['magnitude'])), 1e-6)
+        self.lora_time_widget.setYRange(0, magnitude_max * 1.1, padding=0)
+        if visual['complete_frame']:
+            self.lora_time_widget.setXRange(0, visual['duration_ms'], padding=0.02)
+
+    frame = metrics.get('lora_frame')
+    if frame is None:
+        return
+
+    n_sym = 1 << state['lora_sf']
+    samples_per_symbol = n_sym * int(state['sample_rate'] / state['lora_bw_hz'])
+    sfd_symbol = (frame.sfd_start_sample - frame.frame_start_sample) / samples_per_symbol
+    observed = [(offset, bin_index) for offset, bin_index in
+                zip(frame.observed_offsets, frame.observed_bins) if bin_index is not None]
+    preamble = [(x, y) for x, y in observed if x < sfd_symbol - 2]
+    sync = [(x, y) for x, y in observed if sfd_symbol - 2 <= x < sfd_symbol]
+
+    def show_bins(curve, points):
+        curve.setData([x for x, _ in points], [y for _, y in points])
+
+    show_bins(self.lora_preamble_curve, preamble)
+    show_bins(self.lora_sync_curve, sync)
+    header_x = (frame.header_start_sample - frame.frame_start_sample) / samples_per_symbol
+    payload_x = (frame.payload_start_sample - frame.frame_start_sample) / samples_per_symbol
+    self.lora_header_curve.setData(header_x + np.arange(len(frame.header_bins)), frame.header_bins)
+    self.lora_payload_curve.setData(payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins)
+    self.lora_symbols_widget.setXRange(0, max(payload_x + len(frame.payload_bins), 1), padding=0.03)
+    self.lora_symbols_widget.setYRange(0, n_sym - 1, padding=0.03)
+
+    payload_text = frame.payload.decode('utf-8', errors='replace')
+    if not payload_text.isprintable():
+        payload_text = frame.payload.hex(' ')
+    if len(payload_text) > 40:
+        payload_text = payload_text[:40] + '…'
+    crc_text = 'CRC OK' if frame.crc_ok else ('CRC falló' if frame.crc_ok is False else 'sin CRC')
+    self.lora_symbols_widget.setTitle(
+        f'Símbolos LoRa · sync 0x{frame.sync_word:02X} · '
+        f'{escape(payload_text)} · {crc_text}'
+    )
 
 def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
     if self.is_paused:
@@ -101,6 +150,9 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     getattr(self, 'last_f_axis_audio', None), 
                     state.get('demod_mode')
                 )
+
+        if state.get('demod_mode') == 'lora':
+            render_lora(self, state, fm_metrics)
 
         # --- RENDERIZADO ESPECÍFICO DE WIFI A/G ---
         if state.get('demod_mode') == 'wifi_ag':

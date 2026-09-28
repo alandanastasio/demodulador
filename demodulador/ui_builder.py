@@ -768,12 +768,38 @@ def build_ui(self, state):
     self.layout_lora.setContentsMargins(0, 0, 0, 0)
 
     self.lora_time_widget = pg.PlotWidget(title="Señal IQ en el Tiempo")
+    self.lora_time_widget.setLabel('bottom', 'Tiempo [ms]')
+    self.lora_time_widget.setLabel('left', 'Magnitud IQ')
+    self.lora_time_curve = self.lora_time_widget.plot(
+        [], pen=pg.mkPen('#00C8FF', width=1.5)
+    )
     self.lora_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia Instantánea")
     self.lora_freq_widget.setLabel('bottom', 'Tiempo [ms]')
     self.lora_freq_widget.setLabel('left', 'Desviación [kHz]')
+    self.lora_freq_widget.setXLink(self.lora_time_widget)
+    self.lora_freq_curve = self.lora_freq_widget.plot(
+        [], pen=pg.mkPen('#FFD500', width=1.5)
+    )
     self.lora_symbols_widget = pg.PlotWidget(title="Símbolos LoRa")
-    self.lora_symbols_widget.setLabel('bottom', 'Índice de símbolo')
+    self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
     self.lora_symbols_widget.setLabel('left', 'Bin plegado')
+    self.lora_symbols_widget.addLegend(offset=(10, 10))
+    self.lora_preamble_curve = self.lora_symbols_widget.plot(
+        [], pen=None, symbol='o', symbolSize=6,
+        symbolBrush='#00C8FF', symbolPen=None, name='Preámbulo'
+    )
+    self.lora_sync_curve = self.lora_symbols_widget.plot(
+        [], pen=None, symbol='o', symbolSize=8,
+        symbolBrush='#FF9A3C', symbolPen=None, name='Sync'
+    )
+    self.lora_header_curve = self.lora_symbols_widget.plot(
+        [], pen=None, symbol='o', symbolSize=7,
+        symbolBrush='#FFD500', symbolPen=None, name='Header'
+    )
+    self.lora_payload_curve = self.lora_symbols_widget.plot(
+        [], pen=None, symbol='o', symbolSize=7,
+        symbolBrush='#54D86A', symbolPen=None, name='Payload'
+    )
 
     self.layout_lora.addWidget(self.lora_time_widget, 0, 1)
     self.layout_lora.addWidget(self.lora_freq_widget, 1, 0)

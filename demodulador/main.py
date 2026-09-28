@@ -67,6 +67,7 @@ from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
 from dsp.demoduladores.btle import DemoduladorBTLE
+from dsp.demoduladores.lora import DemoduladorLoRa
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -145,6 +146,8 @@ class MainWindow(QMainWindow):
 
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
+            if isinstance(self.demodulador_actual, DemoduladorLoRa):
+                self.demodulador_actual.reset_stream()
             return
             
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
@@ -848,6 +851,32 @@ class MainWindow(QMainWindow):
         self.freq_input.blockSignals(False)
         self.on_freq_changed(917.5)
 
+    def _configure_lora_plots(self):
+        samples_per_symbol = (1 << state['lora_sf']) * int(
+            state['sample_rate'] / state['lora_bw_hz']
+        )
+        window_samples = min(
+            262_144, max(int(state['sample_rate'] * 0.012), 3 * samples_per_symbol)
+        )
+        window_ms = window_samples * 1000.0 / state['sample_rate']
+        self._lora_live_window_ms = window_ms
+        self.lora_time_widget.setXRange(0, window_ms, padding=0)
+        half_range_khz = state['lora_bw_hz'] * 0.6 / 1000.0
+        self.lora_freq_widget.setYRange(-half_range_khz, half_range_khz, padding=0)
+        self.lora_symbols_widget.setYRange(0, (1 << state['lora_sf']) - 1, padding=0.03)
+        self._clear_lora_plots()
+
+    def _clear_lora_plots(self):
+        for curve in (
+            self.lora_time_curve, self.lora_freq_curve,
+            self.lora_preamble_curve, self.lora_sync_curve,
+            self.lora_header_curve, self.lora_payload_curve,
+        ):
+            curve.setData([], [])
+        if hasattr(self, '_lora_live_window_ms'):
+            self.lora_time_widget.setXRange(0, self._lora_live_window_ms, padding=0)
+        self.lora_symbols_widget.setTitle("Símbolos LoRa")
+
     def set_lora_mode(self, bw_khz, sf):
         if bw_khz not in (125, 250, 500):
             raise ValueError(f"Ancho de banda LoRa no soportado: {bw_khz} kHz")
@@ -857,11 +886,13 @@ class MainWindow(QMainWindow):
         state['lora_bw_hz'] = bw_khz * 1000
         state['lora_sf'] = sf
         if state['demod_mode'] == 'lora':
+            self.demodulador_actual.configurar(
+                state['sample_rate'], state['fft_size'], state['lora_bw_hz'], state['lora_sf']
+            )
+            self._configure_lora_plots()
             self._set_lora_default_frequency()
             return
 
-        # Por ahora conservamos el analizador de espectro y dejamos los demás
-        # paneles listos para conectar las etapas del demodulador LoRa.
         self.set_normal_mode()
         self.layout_lora.addWidget(self.freq_plot, 0, 0)
         self.freq_plot.show()
@@ -884,12 +915,18 @@ class MainWindow(QMainWindow):
         self.sr_combo.setCurrentText("2 MHz")
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
-        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self.demodulador_actual = DemoduladorLoRa()
+        self.demodulador_actual.configurar(
+            state['sample_rate'], state['fft_size'], state['lora_bw_hz'], state['lora_sf']
+        )
+        self._configure_lora_plots()
         self.radio.set_sample_rate(state['sample_rate'])
         self._set_lora_default_frequency()
         self.modes_stack.setCurrentWidget(self.page_lora)
 
     def set_normal_mode(self):
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.close()
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -969,6 +1006,9 @@ class MainWindow(QMainWindow):
     def on_freq_changed(self, val):
         state['center_freq'] = val * self.current_freq_multiplier
         self.radio.set_freq(state['center_freq'])
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.reset_stream()
+            self._clear_lora_plots()
         self.trace_manager.reset()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
@@ -1084,6 +1124,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         print("Cerrando aplicación SDR...")
         self.audio_manager.stop_all()
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.close()
         self.radio.close()
         event.accept()
         
