@@ -762,6 +762,28 @@ def build_ui(self, state):
     
     self.modes_stack.addWidget(self.page_btle)
 
+    # --- PÁGINA LORA ---
+    self.page_lora = QWidget()
+    self.layout_lora = QGridLayout(self.page_lora)
+    self.layout_lora.setContentsMargins(0, 0, 0, 0)
+
+    self.lora_time_widget = pg.PlotWidget(title="Señal IQ en el Tiempo")
+    self.lora_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia Instantánea")
+    self.lora_freq_widget.setLabel('bottom', 'Tiempo [ms]')
+    self.lora_freq_widget.setLabel('left', 'Desviación [kHz]')
+    self.lora_symbols_widget = pg.PlotWidget(title="Símbolos LoRa")
+    self.lora_symbols_widget.setLabel('bottom', 'Índice de símbolo')
+    self.lora_symbols_widget.setLabel('left', 'Bin plegado')
+
+    self.layout_lora.addWidget(self.lora_time_widget, 0, 1)
+    self.layout_lora.addWidget(self.lora_freq_widget, 1, 0)
+    self.layout_lora.addWidget(self.lora_symbols_widget, 1, 1)
+    self.layout_lora.setRowStretch(0, 1)
+    self.layout_lora.setRowStretch(1, 1)
+    self.layout_lora.setColumnStretch(0, 1)
+    self.layout_lora.setColumnStretch(1, 1)
+    self.modes_stack.addWidget(self.page_lora)
+
 
     # --- CONTENEDOR PRINCIPAL ---
     self.plot_container = QWidget()
@@ -775,7 +797,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_time_widget, self.lora_freq_widget, self.lora_symbols_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):
@@ -954,6 +976,22 @@ def build_ui(self, state):
         self.btle_bw_actions.append(action)
 
     self.digital_menu.addMenu(self.btle_menu)
+
+    self.lora_menu = QMenu("LoRa", self)
+    self.lora_menu.setStyleSheet(self.digital_menu.styleSheet())
+    self.lora_sf_actions = {}
+    for bw_khz in (125, 250, 500):
+        bw_menu = QMenu(f"{bw_khz} kHz", self.lora_menu)
+        bw_menu.setStyleSheet(self.lora_menu.styleSheet())
+        for sf in range(7, 13):
+            action = QAction(f"SF{sf}", self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked, bw=bw_khz, selected_sf=sf: self.set_lora_mode(bw, selected_sf))
+            self.demod_group.addAction(action)
+            bw_menu.addAction(action)
+            self.lora_sf_actions[(bw_khz, sf)] = action
+        self.lora_menu.addMenu(bw_menu)
+    self.digital_menu.addMenu(self.lora_menu)
 
 
     self.lte_menu = QMenu("LTE", self)
@@ -1322,4 +1360,3 @@ def build_ui(self, state):
     central_widget = QWidget()
     central_widget.setLayout(main_layout)
     self.setCentralWidget(central_widget)
-

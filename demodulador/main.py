@@ -80,6 +80,8 @@ state = {
     'fft_size': 4096,
     'center_freq': 100e6,
     'sample_rate': 10e6,
+    'lora_bw_hz': None,
+    'lora_sf': None,
     'demod_mode': 'none',
     'is_recording': False,
     'recorded_samples': [],
@@ -216,7 +218,8 @@ class MainWindow(QMainWindow):
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
-            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
+            'lora_time_widget', 'lora_freq_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -233,7 +236,8 @@ class MainWindow(QMainWindow):
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
-            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
+            'lora_time_widget', 'lora_freq_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
             plot = getattr(self, name, None)
@@ -837,6 +841,54 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = DemoduladorWBFMAudio()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
+    def _set_lora_default_frequency(self):
+        self.unit_combo.setCurrentText("MHz")
+        self.freq_input.blockSignals(True)
+        self.freq_input.setValue(917.5)
+        self.freq_input.blockSignals(False)
+        self.on_freq_changed(917.5)
+
+    def set_lora_mode(self, bw_khz, sf):
+        if bw_khz not in (125, 250, 500):
+            raise ValueError(f"Ancho de banda LoRa no soportado: {bw_khz} kHz")
+        if sf not in range(7, 13):
+            raise ValueError(f"Spreading factor LoRa no soportado: SF{sf}")
+
+        state['lora_bw_hz'] = bw_khz * 1000
+        state['lora_sf'] = sf
+        if state['demod_mode'] == 'lora':
+            self._set_lora_default_frequency()
+            return
+
+        # Por ahora conservamos el analizador de espectro y dejamos los demás
+        # paneles listos para conectar las etapas del demodulador LoRa.
+        self.set_normal_mode()
+        self.layout_lora.addWidget(self.freq_plot, 0, 0)
+        self.freq_plot.show()
+
+        self.waterfall_checkbox.hide()
+        self.waterfall_label.hide()
+        self.waterfall_controls_widget.hide()
+        self.wf_bottom_widget.hide()
+        self.waterfall_line2.hide()
+        self.zero_span_btn.setChecked(False)
+        self.toggle_zero_span()
+        self.zero_span_btn.hide()
+        self.zero_span_label.hide()
+
+        state['demod_mode'] = 'lora'
+        state['sample_rate'] = 2e6
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("2 MHz") == -1:
+            self.sr_combo.addItem("2 MHz")
+        self.sr_combo.setCurrentText("2 MHz")
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self.radio.set_sample_rate(state['sample_rate'])
+        self._set_lora_default_frequency()
+        self.modes_stack.setCurrentWidget(self.page_lora)
+
     def set_normal_mode(self):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -1167,7 +1219,7 @@ class MainWindow(QMainWindow):
         
         # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
         grid_widget = widget
-        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None)]
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None), getattr(self, 'page_lora', None)]
         while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
             grid_widget = grid_widget.parentWidget()
             
