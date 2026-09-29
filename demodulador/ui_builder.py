@@ -784,22 +784,18 @@ def build_ui(self, state):
     self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
     self.lora_symbols_widget.setLabel('left', 'Bin plegado')
     self.lora_symbols_widget.addLegend(offset=(10, 10))
-    self.lora_preamble_curve = self.lora_symbols_widget.plot(
-        [], pen=None, symbol='o', symbolSize=6,
-        symbolBrush='#00C8FF', symbolPen=None, name='Preámbulo'
-    )
-    self.lora_sync_curve = self.lora_symbols_widget.plot(
-        [], pen=None, symbol='o', symbolSize=8,
-        symbolBrush='#FF9A3C', symbolPen=None, name='Sync'
-    )
-    self.lora_header_curve = self.lora_symbols_widget.plot(
-        [], pen=None, symbol='o', symbolSize=7,
-        symbolBrush='#FFD500', symbolPen=None, name='Header'
-    )
-    self.lora_payload_curve = self.lora_symbols_widget.plot(
-        [], pen=None, symbol='o', symbolSize=7,
-        symbolBrush='#54D86A', symbolPen=None, name='Payload'
-    )
+    self.lora_symbol_marks = {}
+    for key, label, color in (
+        ('preamble', 'Preámbulo', '#00C8FF'),
+        ('sync', 'Sync', '#FF9A3C'),
+        ('header', 'Header', '#FFD500'),
+        ('payload', 'Payload', '#54D86A'),
+    ):
+        marks = self.lora_symbols_widget.plot(
+            [], pen=None, symbol='_', symbolSize=14,
+            symbolBrush=color, symbolPen=None, name=label,
+        )
+        self.lora_symbol_marks[key] = marks
 
     self.layout_lora.addWidget(self.lora_time_widget, 0, 1)
     self.layout_lora.addWidget(self.lora_freq_widget, 1, 0)

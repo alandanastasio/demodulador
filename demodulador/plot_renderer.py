@@ -25,19 +25,24 @@ def render_lora(self, state, metrics):
     samples_per_symbol = n_sym * int(state['sample_rate'] / state['lora_bw_hz'])
     sfd_symbol = (frame.sfd_start_sample - frame.frame_start_sample) / samples_per_symbol
     observed = [(offset, bin_index) for offset, bin_index in
-                zip(frame.observed_offsets, frame.observed_bins) if bin_index is not None]
+                zip(frame.observed_offsets, frame.observed_bins)
+                if offset >= 0 and bin_index is not None]
     preamble = [(x, y) for x, y in observed if x < sfd_symbol - 2]
     sync = [(x, y) for x, y in observed if sfd_symbol - 2 <= x < sfd_symbol]
 
-    def show_bins(curve, points):
-        curve.setData([x for x, _ in points], [y for _, y in points])
+    def show_bins(marks, points):
+        marks.setData([x for x, _ in points], [y for _, y in points])
 
-    show_bins(self.lora_preamble_curve, preamble)
-    show_bins(self.lora_sync_curve, sync)
+    show_bins(self.lora_symbol_marks['preamble'], preamble)
+    show_bins(self.lora_symbol_marks['sync'], sync)
     header_x = (frame.header_start_sample - frame.frame_start_sample) / samples_per_symbol
     payload_x = (frame.payload_start_sample - frame.frame_start_sample) / samples_per_symbol
-    self.lora_header_curve.setData(header_x + np.arange(len(frame.header_bins)), frame.header_bins)
-    self.lora_payload_curve.setData(payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins)
+    self.lora_symbol_marks['header'].setData(
+        header_x + np.arange(len(frame.header_bins)), frame.header_bins
+    )
+    self.lora_symbol_marks['payload'].setData(
+        payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins
+    )
     self.lora_symbols_widget.setXRange(0, max(payload_x + len(frame.payload_bins), 1), padding=0.03)
     self.lora_symbols_widget.setYRange(0, n_sym - 1, padding=0.03)
 

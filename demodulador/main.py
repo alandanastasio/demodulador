@@ -867,12 +867,10 @@ class MainWindow(QMainWindow):
         self._clear_lora_plots()
 
     def _clear_lora_plots(self):
-        for curve in (
-            self.lora_time_curve, self.lora_freq_curve,
-            self.lora_preamble_curve, self.lora_sync_curve,
-            self.lora_header_curve, self.lora_payload_curve,
-        ):
+        for curve in (self.lora_time_curve, self.lora_freq_curve):
             curve.setData([], [])
+        for marks in self.lora_symbol_marks.values():
+            marks.setData([], [])
         if hasattr(self, '_lora_live_window_ms'):
             self.lora_time_widget.setXRange(0, self._lora_live_window_ms, padding=0)
         self.lora_symbols_widget.setTitle("Símbolos LoRa")
