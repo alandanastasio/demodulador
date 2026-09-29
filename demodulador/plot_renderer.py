@@ -39,7 +39,7 @@ def render_lora(self, state, metrics):
     sfd_symbol = (frame.sfd_start_sample - frame.frame_start_sample) / samples_per_symbol
     observed = [(offset, bin_index) for offset, bin_index in
                 zip(frame.observed_offsets, frame.observed_bins)
-                if offset >= 0 and bin_index is not None]
+                if bin_index is not None]
     preamble = [(x, y) for x, y in observed if x < sfd_symbol - 2]
     sync = [(x, y) for x, y in observed if sfd_symbol - 2 <= x < sfd_symbol]
 
@@ -56,7 +56,10 @@ def render_lora(self, state, metrics):
     self.lora_symbol_marks['payload'].setData(
         payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins
     )
-    self.lora_symbols_widget.setXRange(0, max(payload_x + len(frame.payload_bins), 1), padding=0.03)
+    first_symbol = min((x for x, _ in observed), default=0)
+    self.lora_symbols_widget.setXRange(
+        min(0, first_symbol), max(payload_x + len(frame.payload_bins), 1), padding=0.03
+    )
     self.lora_symbols_widget.setYRange(0, n_sym - 1, padding=0.03)
 
     payload_text = frame.payload.decode('utf-8', errors='replace')
