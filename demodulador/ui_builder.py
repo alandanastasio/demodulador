@@ -793,6 +793,33 @@ def build_ui(self, state):
             symbolBrush=color, symbolPen=None, name=label,
         )
         self.lora_symbol_marks[key] = marks
+    self.lora_folded_image = pg.ImageItem(axisOrder='row-major', autoDownsample=True)
+    self.lora_folded_image.setColorMap(pg.ColorMap(
+        [0.0, 0.25, 0.55, 0.8, 1.0],
+        [(0, 0, 0), (0, 25, 80), (0, 140, 210), (255, 213, 0), (255, 255, 235)],
+    ))
+    self.lora_folded_image.setZValue(-10)
+    self.lora_symbols_widget.addItem(self.lora_folded_image)
+    self.lora_folded_image.hide()
+    self.lora_fft_section_lines = {}
+    for section, color in (
+        ('sync', '#FF9A3C'),
+        ('header', '#FFD500'),
+        ('payload', '#54D86A'),
+    ):
+        line = pg.InfiniteLine(angle=90, pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
+        self.lora_symbols_widget.addItem(line)
+        line.hide()
+        self.lora_fft_section_lines[section] = line
+    self.lora_symbols_view_combo = QComboBox(self.lora_symbols_widget)
+    self.lora_symbols_view_combo.addItems(['Símbolos', 'FFT dechirp + folding'])
+    self.lora_symbols_view_combo.setFixedWidth(190)
+    self.lora_symbols_view_combo.setStyleSheet(
+        'QComboBox { background-color: #333; color: white; border: 1px solid #666; '
+        'padding: 3px; } QComboBox QAbstractItemView { background-color: #333; color: white; }'
+    )
+    self.lora_symbols_view_combo.currentIndexChanged.connect(self._refresh_lora_symbols_view)
+    self.lora_symbols_view_combo.hide()
 
     self.layout_lora.addWidget(self.lora_waterfall_widget, 0, 1)
     self.layout_lora.addWidget(self.lora_symbols_widget, 1, 0)

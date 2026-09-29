@@ -4,7 +4,7 @@ Las etapas siguen captura_y_demod_LORA.ipynb: detección del preámbulo,
 sincronización CFO/STO, plegado de la FFT, header explícito y payload PHY.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -88,6 +88,8 @@ class LoRaFrame:
     payload_symbols: tuple[int, ...]
     header_concentrations: tuple[float, ...]
     payload_concentrations: tuple[float, ...]
+    folded_power: np.ndarray = field(compare=False, repr=False)
+    folded_section_starts: tuple[int, int, int]
 
 
 def instantaneous_frequency(iq: np.ndarray, sample_rate: float) -> np.ndarray:
@@ -363,27 +365,32 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
     ])
     pilot_reference_offset = float(np.mean(pilot_offsets))
     drift, pilot_frequency = np.polyfit(pilot_offsets - pilot_reference_offset, pilot_bins, 1)
+    symbol_samples = np.arange(n_sym)
+
+    def folded_power_at(idx: int) -> np.ndarray:
+        symbol_offset = (idx - true_start) / n_sym
+        residual = pilot_frequency + drift * (symbol_offset - pilot_reference_offset)
+        corrected = iq_synced[idx:idx + n_sym] * np.exp(
+            -2j * np.pi * residual * symbol_samples / n_sym
+        )
+        return _folded_power(corrected, down, config)
 
     def demod_symbols(start: int, count: int, reduced: bool = False):
         if start < 0 or start + count * n_sym > len(iq_synced):
             raise LoRaIncompleteFrame(start + count * n_sym, true_start)
-        symbols, peaks, concentrations = [], [], []
+        symbols, peaks, concentrations, powers = [], [], [], []
         for i in range(count):
             idx = start + i * n_sym
-            symbol_offset = (idx - true_start) / n_sym
-            residual = pilot_frequency + drift * (symbol_offset - pilot_reference_offset)
-            corrected = iq_synced[idx:idx + n_sym] * np.exp(
-                -2j * np.pi * residual * np.arange(n_sym) / n_sym
-            )
-            power = _folded_power(corrected, down, config)
+            power = folded_power_at(idx)
             peak = int(np.argmax(power))
             value = (peak - 1) % config.n_bins
             symbols.append(value // 4 if reduced else value)
             peaks.append(peak)
             concentrations.append(float(power.max() / max(power.sum(), 1e-30)))
-        return symbols, peaks, concentrations
+            powers.append(power.astype(np.float32))
+        return symbols, peaks, concentrations, powers
 
-    header_symbols, header_bins, header_concentrations = demod_symbols(
+    header_symbols, header_bins, header_concentrations, header_powers = demod_symbols(
         header_start, 8, reduced=True
     )
     header_codewords = _deinterleave(header_symbols, config.sf - 2)
@@ -403,7 +410,7 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
     remaining = max(0, nibbles_needed - len(nibbles))
     n_blocks = (remaining + sf_app - 1) // sf_app
     n_symbols = n_blocks * codeword_len
-    payload_symbols, payload_bins, payload_concentrations = demod_symbols(
+    payload_symbols, payload_bins, payload_concentrations, payload_powers = demod_symbols(
         payload_start, n_symbols, reduced=config.ldro_enabled
     )
     for block_index in range(n_blocks):
@@ -425,6 +432,17 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
         crc_ok = received_crc == _payload_crc(payload)
 
     observed = rows[:j + 2]
+    pre_sfd_rows = [row for row in rows[:j] if row[1] is not None]
+    pre_sfd_powers = [
+        folded_power_at(true_start + row[0] * n_sym).astype(np.float32)
+        for row in pre_sfd_rows
+    ]
+    folded_power = np.stack(pre_sfd_powers + header_powers + payload_powers)
+    folded_section_starts = (
+        len(pre_sfd_powers) - 2,
+        len(pre_sfd_powers),
+        len(pre_sfd_powers) + len(header_powers),
+    )
     return LoRaFrame(
         payload=payload,
         crc_ok=crc_ok,
@@ -448,4 +466,6 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
         payload_symbols=tuple(payload_symbols),
         header_concentrations=tuple(header_concentrations),
         payload_concentrations=tuple(payload_concentrations),
+        folded_power=folded_power,
+        folded_section_starts=folded_section_starts,
     )

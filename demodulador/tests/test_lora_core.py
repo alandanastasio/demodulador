@@ -26,6 +26,19 @@ def test_decodes_recorded_lora_frame():
     assert frame.sync_word == 0x34
     assert frame.coding_rate == 1
     assert frame.header_checksum_ok is True
+    sync_start, header_start, payload_start = frame.folded_section_starts
+    assert 0 <= sync_start < header_start < payload_start
+    assert frame.folded_power.shape == (
+        payload_start + len(frame.payload_bins), config.n_bins
+    )
+    np.testing.assert_array_equal(
+        np.argmax(frame.folded_power[header_start:payload_start], axis=1),
+        frame.header_bins,
+    )
+    np.testing.assert_array_equal(
+        np.argmax(frame.folded_power[payload_start:], axis=1),
+        frame.payload_bins,
+    )
 
 
 def test_decodes_same_frame_when_channel_is_centered():

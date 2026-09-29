@@ -863,13 +863,18 @@ class MainWindow(QMainWindow):
         self.lora_waterfall_image.clear()
         for marks in self.lora_symbol_marks.values():
             marks.setData([], [])
+        self._lora_latest_frame = None
+        self._lora_symbols_title = 'Símbolos LoRa'
+        self._lora_symbols_x_range = (0, 1)
+        self.lora_folded_image.clear()
+        self.lora_symbols_view_combo.setCurrentIndex(0)
+        self._refresh_lora_symbols_view()
         self.lora_waterfall_widget.setXRange(0, 100, padding=0)
         center_mhz = state['center_freq'] / 1e6
         half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
         self.lora_waterfall_widget.setYRange(
             center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
         )
-        self.lora_symbols_widget.setTitle("Símbolos LoRa")
         for value in (
             self.lora_header_length_value,
             self.lora_header_cr_value,
@@ -880,6 +885,44 @@ class MainWindow(QMainWindow):
             value.setText('—')
         self.lora_payload_hex.clear()
         self.lora_payload_text.clear()
+
+    def _position_lora_symbols_view_selector(self):
+        if hasattr(self, 'lora_symbols_view_combo'):
+            combo = self.lora_symbols_view_combo
+            width = self.lora_symbols_widget.width()
+            combo.move(max(8, width - combo.width() - 12), 30 if width < 650 else 6)
+
+    def _refresh_lora_symbols_view(self, *_):
+        frame = getattr(self, '_lora_latest_frame', None)
+        show_fft = (
+            frame is not None
+            and self._maximized_widget is self.lora_symbols_widget
+            and self.lora_symbols_view_combo.currentIndex() == 1
+        )
+        for marks in self.lora_symbol_marks.values():
+            marks.setVisible(not show_fft)
+        self.lora_symbols_widget.plotItem.legend.setVisible(not show_fft)
+        self.lora_folded_image.setVisible(show_fft)
+        for line in self.lora_fft_section_lines.values():
+            line.setVisible(show_fft)
+        if show_fft:
+            columns, bins = frame.folded_power.shape
+            self.lora_symbols_widget.setLabel('bottom', 'Símbolo analizado (sin SFD)')
+            self.lora_symbols_widget.setLabel('left', 'Bin FFT plegado')
+            self.lora_symbols_widget.setTitle('Espectrograma FFT plegada')
+            self.lora_symbols_widget.setXRange(-0.5, columns - 0.5, padding=0.02)
+            self.lora_symbols_widget.setYRange(-0.5, bins - 0.5, padding=0.02)
+        else:
+            self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
+            self.lora_symbols_widget.setLabel('left', 'Bin plegado')
+            self.lora_symbols_widget.setTitle(
+                getattr(self, '_lora_symbols_title', 'Símbolos LoRa')
+            )
+            left, right = getattr(self, '_lora_symbols_x_range', (0, 1))
+            self.lora_symbols_widget.setXRange(left, right, padding=0.03)
+            self.lora_symbols_widget.setYRange(
+                0, (1 << state['lora_sf']) - 1, padding=0.03
+            )
 
     def set_lora_mode(self, bw_khz, sf):
         if bw_khz not in (125, 250, 500):
@@ -1156,6 +1199,8 @@ class MainWindow(QMainWindow):
 
     # --- SISTEMA DE MAXIMIZAR/RESTAURAR PANELES (doble-click) ---
     def eventFilter(self, obj, event):
+        if obj is getattr(self, 'lora_symbols_widget', None) and event.type() == event.Type.Resize:
+            self._position_lora_symbols_view_selector()
         if event.type() == event.Type.MouseButtonDblClick:
             if self._maximized_widget is None:
                 self._maximize_panel(obj)
@@ -1291,9 +1336,18 @@ class MainWindow(QMainWindow):
         widget.show()
         self._maximized_widget = widget
         self._maximized_layout = layout if isinstance(layout, QGridLayout) else None
+        if widget is self.lora_symbols_widget:
+            self._position_lora_symbols_view_selector()
+            self.lora_symbols_view_combo.show()
+            self.lora_symbols_view_combo.raise_()
+            self._refresh_lora_symbols_view()
 
     def _restore_panels(self, clicked_widget=None):
         if self._maximized_widget is None: return
+        if self._maximized_widget is self.lora_symbols_widget:
+            self.lora_symbols_view_combo.hide()
+            self.lora_symbols_view_combo.setCurrentIndex(0)
+            self._refresh_lora_symbols_view()
         
         if getattr(self, '_btle_special_mode', False):
             # Remover ambos del layout para evitar conflictos

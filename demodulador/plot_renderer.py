@@ -56,12 +56,24 @@ def render_lora(self, state, metrics):
         payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins
     )
     first_symbol = min((x for x, _ in observed), default=0)
-    self.lora_symbols_widget.setXRange(
-        min(0, first_symbol), max(payload_x + len(frame.payload_bins), 1), padding=0.03
+    self._lora_symbols_x_range = (
+        min(0, first_symbol), max(payload_x + len(frame.payload_bins), 1)
     )
-    self.lora_symbols_widget.setYRange(0, n_sym - 1, padding=0.03)
+    self._lora_symbols_title = f'Símbolos LoRa · sync 0x{frame.sync_word:02X}'
+    folded_db = 10 * np.log10(np.maximum(frame.folded_power, 1e-12))
+    columns, bins = frame.folded_power.shape
+    peak_db = float(np.percentile(folded_db, 99.7))
+    self.lora_folded_image.setImage(
+        folded_db.T, autoLevels=False, levels=(peak_db - 45, peak_db)
+    )
+    self.lora_folded_image.setRect(QRectF(-0.5, -0.5, columns, bins))
+    for section, index in zip(
+        ('sync', 'header', 'payload'), frame.folded_section_starts
+    ):
+        self.lora_fft_section_lines[section].setPos(index - 0.5)
+    self._lora_latest_frame = frame
+    self._refresh_lora_symbols_view()
 
-    self.lora_symbols_widget.setTitle(f'Símbolos LoRa · sync 0x{frame.sync_word:02X}')
     self.lora_header_length_value.setText(f'{len(frame.payload)} bytes')
     self.lora_header_cr_value.setText(f'4/{4 + frame.coding_rate}')
     self.lora_header_crc_flag_value.setText('Sí' if frame.has_crc else 'No')
