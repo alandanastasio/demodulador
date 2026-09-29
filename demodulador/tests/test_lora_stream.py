@@ -12,6 +12,13 @@ from dsp.demoduladores.lora import DemoduladorLoRa
 FIXTURE = Path(__file__).parent / "fixtures" / "lora_sf8_500k.npy"
 
 
+def centered_fixture():
+    iq = np.load(FIXTURE).copy()
+    iq -= np.mean(iq)
+    iq *= np.exp(-2j * np.pi * 500_000 * np.arange(len(iq)) / 2_000_000)
+    return iq
+
+
 def test_live_frequency_plot_preserves_tone_frequency():
     sample_rate = 2_000_000
     tone_hz = 50_000
@@ -30,9 +37,7 @@ def test_live_frequency_plot_preserves_tone_frequency():
 
 
 def test_stream_decodes_frame_and_resets_on_reconfiguration():
-    iq = np.load(FIXTURE).copy()
-    iq -= np.mean(iq)
-    iq *= np.exp(-2j * np.pi * 500_000 * np.arange(len(iq)) / 2_000_000)
+    iq = centered_fixture()
     stream = np.concatenate((iq, np.zeros(600_000, dtype=np.complex64)))
 
     demod = DemoduladorLoRa()
@@ -66,5 +71,40 @@ def test_stream_decodes_frame_and_resets_on_reconfiguration():
         assert demod.last_frame is None
         assert demod.bandwidth_hz == 125_000
         assert demod.sf == 12
+    finally:
+        demod.close()
+
+
+def test_first_frame_after_idle_is_decoded():
+    """Una sola trama tras varios segundos de ruido no debe esperar otra repetición."""
+    rng = np.random.default_rng(17)
+    demod = DemoduladorLoRa()
+    demod.configurar(2_000_000, 4096, 500_000, 8)
+    try:
+        for _ in range(80):
+            noise = (
+                rng.normal(0, 0.02, 65_536)
+                + 1j * rng.normal(0, 0.02, 65_536)
+            ).astype(np.complex64)
+            demod.procesar(noise)
+        time.sleep(0.3)
+
+        stream = np.concatenate((centered_fixture(), np.zeros(600_000, np.complex64)))
+        frame = None
+        for start in range(0, len(stream), 8192):
+            result = demod.procesar(stream[start:start + 8192])
+            if result is not None:
+                frame = result.get('metricas', {}).get('lora_frame') or frame
+
+        deadline = time.monotonic() + 5
+        while frame is None and time.monotonic() < deadline:
+            result = demod.procesar(np.zeros(8192, np.complex64))
+            if result is not None:
+                frame = result.get('metricas', {}).get('lora_frame')
+            time.sleep(0.02)
+
+        assert frame is not None
+        assert frame.payload == b'INTI'
+        assert frame.crc_ok is True
     finally:
         demod.close()

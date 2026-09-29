@@ -105,6 +105,18 @@ class DemoduladorLoRa(DemoduladorBase):
             remaining -= len(parts[-1])
         return np.concatenate(parts[::-1]) if parts else np.empty(0, np.complex64)
 
+    def _snapshot_chunks_locked(self, start_abs):
+        """Entrega al worker sólo el IQ desde el inicio elegido para la búsqueda."""
+        skip = start_abs - (self._total_samples - self._buffer_samples)
+        parts = []
+        for chunk in self._chunks:
+            if skip >= len(chunk):
+                skip -= len(chunk)
+                continue
+            parts.append(chunk[skip:])
+            skip = 0
+        return tuple(parts)
+
     @staticmethod
     def _visual_window_samples(config):
         return min(
@@ -135,24 +147,21 @@ class DemoduladorLoRa(DemoduladorBase):
             'complete_frame': complete_frame,
         }
 
-    def _decode_worker(self, chunks, snapshot_start_abs, search_start_abs,
-                       config, generation):
+    def _decode_worker(self, chunks, snapshot_start_abs, config, generation):
         frame = None
         frame_visual = None
         incomplete = None
         try:
             snapshot = np.concatenate(chunks)
-            search_start = max(0, search_start_abs - snapshot_start_abs)
-            if search_start < len(snapshot):
-                frame = decode_capture(snapshot, config, start_sample=search_start)
-                visual_end = (
-                    frame.payload_start_sample
-                    + len(frame.payload_symbols) * config.samples_per_symbol
-                )
-                frame_visual = self._visual_data(
-                    snapshot[frame.frame_start_sample:visual_end],
-                    config.sample_rate, complete_frame=True,
-                )
+            frame = decode_capture(snapshot, config)
+            visual_end = (
+                frame.payload_start_sample
+                + len(frame.payload_symbols) * config.samples_per_symbol
+            )
+            frame_visual = self._visual_data(
+                snapshot[frame.frame_start_sample:visual_end],
+                config.sample_rate, complete_frame=True,
+            )
         except LoRaIncompleteFrame as exc:
             incomplete = exc
         except LoRaDecodeError:
@@ -215,15 +224,28 @@ class DemoduladorLoRa(DemoduladorBase):
                         int(self.sample_rate * 0.25)
                     )
                     now = time.monotonic()
-                    ready = self._needed_end_abs is None or self._total_samples >= self._needed_end_abs
+                    waiting_for_frame = self._needed_end_abs is not None
+                    ready = not waiting_for_frame or self._total_samples >= self._needed_end_abs
+                    retry_due = waiting_for_frame and ready
                     if (not self._processing and ready and available >= min_samples
-                            and now - self._last_attempt >= 0.25):
+                            and (retry_due or now - self._last_attempt >= 0.25)):
+                        buffer_start_abs = self._total_samples - self._buffer_samples
+                        search_start_abs = max(buffer_start_abs, self._next_search_abs)
+                        if not waiting_for_frame:
+                            # Un preámbulo que cruza el borde sigue teniendo
+                            # al menos un segundo de IQ para completarse.
+                            search_start_abs = max(
+                                search_start_abs,
+                                self._total_samples - max(
+                                    self.sample_rate,
+                                    20 * self._config.samples_per_symbol,
+                                ),
+                            )
                         self._processing = True
                         self._last_attempt = now
                         worker_args = (
-                            tuple(self._chunks),
-                            self._total_samples - self._buffer_samples,
-                            self._next_search_abs,
+                            self._snapshot_chunks_locked(search_start_abs),
+                            search_start_abs,
                             self._config,
                             self._generation,
                         )
