@@ -222,9 +222,11 @@ class MainWindow(QMainWindow):
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
             'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
-            'lora_time_widget', 'lora_freq_widget', 'lora_symbols_widget'
+            'lora_waterfall_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
+            if state['demod_mode'] == 'lora' and name.startswith('lora_'):
+                continue
             plot = getattr(self, name, None)
             if plot is not None and plot.isVisible():
                 try:
@@ -240,9 +242,11 @@ class MainWindow(QMainWindow):
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
             'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
-            'lora_time_widget', 'lora_freq_widget', 'lora_symbols_widget'
+            'lora_waterfall_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
+            if state['demod_mode'] == 'lora' and name.startswith('lora_'):
+                continue
             plot = getattr(self, name, None)
             if plot is not None and plot.isVisible():
                 try:
@@ -852,27 +856,19 @@ class MainWindow(QMainWindow):
         self.on_freq_changed(917.5)
 
     def _configure_lora_plots(self):
-        samples_per_symbol = (1 << state['lora_sf']) * int(
-            state['sample_rate'] / state['lora_bw_hz']
-        )
-        window_samples = min(
-            262_144, max(int(state['sample_rate'] * 0.012), 3 * samples_per_symbol)
-        )
-        window_ms = window_samples * 1000.0 / state['sample_rate']
-        self._lora_live_window_ms = window_ms
-        self.lora_time_widget.setXRange(0, window_ms, padding=0)
-        half_range_khz = state['lora_bw_hz'] * 0.6 / 1000.0
-        self.lora_freq_widget.setYRange(-half_range_khz, half_range_khz, padding=0)
         self.lora_symbols_widget.setYRange(0, (1 << state['lora_sf']) - 1, padding=0.03)
         self._clear_lora_plots()
 
     def _clear_lora_plots(self):
-        for curve in (self.lora_time_curve, self.lora_freq_curve):
-            curve.setData([], [])
+        self.lora_waterfall_image.clear()
         for marks in self.lora_symbol_marks.values():
             marks.setData([], [])
-        if hasattr(self, '_lora_live_window_ms'):
-            self.lora_time_widget.setXRange(0, self._lora_live_window_ms, padding=0)
+        self.lora_waterfall_widget.setXRange(0, 100, padding=0)
+        center_mhz = state['center_freq'] / 1e6
+        half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
+        self.lora_waterfall_widget.setYRange(
+            center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
+        )
         self.lora_symbols_widget.setTitle("Símbolos LoRa")
 
     def set_lora_mode(self, bw_khz, sf):

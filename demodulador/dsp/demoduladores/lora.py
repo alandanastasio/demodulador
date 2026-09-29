@@ -94,17 +94,6 @@ class DemoduladorLoRa(DemoduladorBase):
                 self._chunks[0] = first[excess:].copy()
                 self._buffer_samples -= excess
 
-    def _recent_samples_locked(self, count):
-        """Copia sólo la ventana que necesitan los gráficos, no todo el buffer DSP."""
-        parts = []
-        remaining = count
-        for chunk in reversed(self._chunks):
-            if remaining <= 0:
-                break
-            parts.append(chunk[-remaining:])
-            remaining -= len(parts[-1])
-        return np.concatenate(parts[::-1]) if parts else np.empty(0, np.complex64)
-
     def _snapshot_chunks_locked(self, start_abs):
         """Entrega al worker sólo el IQ desde el inicio elegido para la búsqueda."""
         skip = start_abs - (self._total_samples - self._buffer_samples)
@@ -118,38 +107,38 @@ class DemoduladorLoRa(DemoduladorBase):
         return tuple(parts)
 
     @staticmethod
-    def _visual_window_samples(config):
-        return min(
-            262_144,
-            max(int(config.sample_rate * 0.012), 3 * config.samples_per_symbol),
-        )
-
-    @staticmethod
-    def _visual_data(samples, sample_rate, complete_frame=False):
-        if len(samples) < 2:
-            return None
-        # Muestreamos pares contiguos en distintas posiciones de la trama.
-        # Así el costo queda acotado aunque la trama dure varios segundos, y
-        # la frecuencia instantánea no sufre aliasing por el salto del gráfico.
-        smooth = min(16, len(samples) - 1)
-        count = min(6000 if complete_frame else 3000, len(samples) - smooth)
-        indices = np.linspace(0, len(samples) - smooth - 1, count, dtype=np.int64)
-        offsets = np.arange(smooth)
-        positions = indices[:, None] + offsets
-        cross = samples[positions + 1] * np.conjugate(samples[positions])
-        average_cross = cross.mean(axis=1)
-        magnitude = np.abs(samples[positions]).mean(axis=1)
+    def _packet_waterfall(samples, sample_rate):
+        """FFT del IQ recibido, quitando sólo el offset DC del paquete."""
+        fft_size = 1024
+        if len(samples) < fft_size:
+            raise ValueError("La trama es demasiado corta para su waterfall.")
+        count = min(4096, 1 + (len(samples) - fft_size) // 256)
+        starts = np.linspace(0, len(samples) - fft_size, count, dtype=np.int64)
+        frequencies = np.fft.fftshift(np.fft.fftfreq(fft_size, 1 / sample_rate))
+        power_db = np.empty((fft_size, count), dtype=np.float32)
+        window = np.hanning(fft_size).astype(np.float32)
+        offsets = np.arange(fft_size)
+        dc = np.mean(samples, dtype=np.complex128)
+        for begin in range(0, count, 128):
+            end = min(begin + 128, count)
+            frames = samples[starts[begin:end, None] + offsets] - dc
+            spectrum = np.fft.fftshift(
+                np.fft.fft(frames * window, axis=1), axes=1
+            )
+            power_db[:, begin:end] = (
+                20 * np.log10(np.maximum(np.abs(spectrum), 1e-8))
+            ).T
+        peak_db = float(np.percentile(power_db, 99.7))
         return {
-            'time_ms': (indices + smooth / 2) * (1000.0 / sample_rate),
-            'magnitude': magnitude,
-            'freq_khz': np.angle(average_cross) * (sample_rate / (2000.0 * np.pi)),
+            'power_db': power_db,
+            'freq_hz': frequencies,
             'duration_ms': len(samples) * 1000.0 / sample_rate,
-            'complete_frame': complete_frame,
+            'levels_db': (peak_db - 50, peak_db),
         }
 
     def _decode_worker(self, chunks, snapshot_start_abs, config, generation):
         frame = None
-        frame_visual = None
+        frame_waterfall = None
         incomplete = None
         try:
             snapshot = np.concatenate(chunks)
@@ -158,9 +147,8 @@ class DemoduladorLoRa(DemoduladorBase):
                 frame.payload_start_sample
                 + len(frame.payload_symbols) * config.samples_per_symbol
             )
-            frame_visual = self._visual_data(
-                snapshot[frame.frame_start_sample:visual_end],
-                config.sample_rate, complete_frame=True,
+            frame_waterfall = self._packet_waterfall(
+                snapshot[frame.frame_start_sample:visual_end], config.sample_rate
             )
         except LoRaIncompleteFrame as exc:
             incomplete = exc
@@ -173,7 +161,7 @@ class DemoduladorLoRa(DemoduladorBase):
                 if generation != self._generation or self._closed:
                     return
                 if frame is not None:
-                    self._pending_frames.append((frame, frame_visual))
+                    self._pending_frames.append((frame, frame_waterfall))
                     self._next_search_abs = (
                         snapshot_start_abs + frame.payload_start_sample
                         + len(frame.payload_symbols) * config.samples_per_symbol
@@ -200,7 +188,6 @@ class DemoduladorLoRa(DemoduladorBase):
         spectrum = self._spectrum.procesar(muestras_iq)
         samples = np.asarray(muestras_iq)
         worker_args = None
-        visual_samples = None
         if len(samples):
             chunk = samples.astype(np.complex64, copy=True)
             with self._lock:
@@ -209,11 +196,6 @@ class DemoduladorLoRa(DemoduladorBase):
                     self._buffer_samples += len(chunk)
                     self._total_samples += len(chunk)
                     self._trim_buffer_locked()
-
-                    if spectrum is not None and self.last_frame is None:
-                        visual_samples = self._recent_samples_locked(
-                            self._visual_window_samples(self._config)
-                        )
 
                     available = self._total_samples - max(
                         self._next_search_abs,
@@ -257,12 +239,10 @@ class DemoduladorLoRa(DemoduladorBase):
 
         if spectrum is not None:
             metrics = {}
-            if visual_samples is not None:
-                metrics['lora_visual'] = self._visual_data(visual_samples, self.sample_rate)
             with self._lock:
                 if self._pending_frames:
-                    self.last_frame, frame_visual = self._pending_frames.popleft()
+                    self.last_frame, frame_waterfall = self._pending_frames.popleft()
                     metrics['lora_frame'] = self.last_frame
-                    metrics['lora_visual'] = frame_visual
+                    metrics['lora_waterfall'] = frame_waterfall
             spectrum['metricas'] = metrics
         return spectrum

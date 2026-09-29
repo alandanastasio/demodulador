@@ -767,19 +767,16 @@ def build_ui(self, state):
     self.layout_lora = QGridLayout(self.page_lora)
     self.layout_lora.setContentsMargins(0, 0, 0, 0)
 
-    self.lora_time_widget = pg.PlotWidget(title="Señal IQ en el Tiempo")
-    self.lora_time_widget.setLabel('bottom', 'Tiempo [ms]')
-    self.lora_time_widget.setLabel('left', 'Magnitud IQ')
-    self.lora_time_curve = self.lora_time_widget.plot(
-        [], pen=pg.mkPen('#00C8FF', width=1.5)
-    )
-    self.lora_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia Instantánea")
-    self.lora_freq_widget.setLabel('bottom', 'Tiempo [ms]')
-    self.lora_freq_widget.setLabel('left', 'Desviación [kHz]')
-    self.lora_freq_widget.setXLink(self.lora_time_widget)
-    self.lora_freq_curve = self.lora_freq_widget.plot(
-        [], pen=pg.mkPen('#FFD500', width=1.5)
-    )
+    self.lora_waterfall_widget = pg.PlotWidget(title="Waterfall IQ del último paquete")
+    self.lora_waterfall_widget.setLabel('bottom', 'Tiempo [ms]')
+    self.lora_waterfall_widget.setLabel('left', 'Frecuencia [MHz]')
+    self.lora_waterfall_image = pg.ImageItem(axisOrder='row-major', autoDownsample=True)
+    self.lora_waterfall_image.setColorMap(pg.ColorMap(
+        [0.0, 0.25, 0.55, 0.8, 1.0],
+        [(0, 0, 0), (0, 25, 80), (0, 140, 210), (255, 213, 0), (255, 255, 235)],
+    ))
+    self.lora_waterfall_widget.addItem(self.lora_waterfall_image)
+    self.lora_waterfall_widget.setMouseEnabled(x=True, y=True)
     self.lora_symbols_widget = pg.PlotWidget(title="Símbolos LoRa")
     self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
     self.lora_symbols_widget.setLabel('left', 'Bin plegado')
@@ -797,9 +794,11 @@ def build_ui(self, state):
         )
         self.lora_symbol_marks[key] = marks
 
-    self.layout_lora.addWidget(self.lora_time_widget, 0, 1)
-    self.layout_lora.addWidget(self.lora_freq_widget, 1, 0)
-    self.layout_lora.addWidget(self.lora_symbols_widget, 1, 1)
+    self.layout_lora.addWidget(self.lora_waterfall_widget, 0, 1)
+    self.layout_lora.addWidget(self.lora_symbols_widget, 1, 0)
+    self.lora_packet_info_placeholder = QFrame()
+    self.lora_packet_info_placeholder.setStyleSheet('background-color: black;')
+    self.layout_lora.addWidget(self.lora_packet_info_placeholder, 1, 1)
     self.layout_lora.setRowStretch(0, 1)
     self.layout_lora.setRowStretch(1, 1)
     self.layout_lora.setColumnStretch(0, 1)
@@ -819,7 +818,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_time_widget, self.lora_freq_widget, self.lora_symbols_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_placeholder]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):

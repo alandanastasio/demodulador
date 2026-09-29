@@ -1,21 +1,34 @@
 import pyqtgraph as pg
 import numpy as np
 from html import escape
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
 import time
 
 
 def render_lora(self, state, metrics):
     if not metrics:
         return
-    visual = metrics.get('lora_visual')
-    if visual is not None:
-        self.lora_time_curve.setData(visual['time_ms'], visual['magnitude'])
-        self.lora_freq_curve.setData(visual['time_ms'], visual['freq_khz'])
-        magnitude_max = max(float(np.max(visual['magnitude'])), 1e-6)
-        self.lora_time_widget.setYRange(0, magnitude_max * 1.1, padding=0)
-        if visual['complete_frame']:
-            self.lora_time_widget.setXRange(0, visual['duration_ms'], padding=0.02)
+    waterfall = metrics.get('lora_waterfall')
+    if waterfall is not None:
+        freqs = waterfall['freq_hz']
+        step_hz = freqs[1] - freqs[0]
+        center_mhz = state['center_freq'] / 1e6
+        self.lora_waterfall_image.setImage(
+            waterfall['power_db'], autoLevels=False,
+            levels=waterfall['levels_db'],
+        )
+        self.lora_waterfall_image.setRect(QRectF(
+            0, center_mhz + (freqs[0] - step_hz / 2) / 1e6,
+            waterfall['duration_ms'],
+            (freqs[-1] - freqs[0] + step_hz) / 1e6,
+        ))
+        half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
+        self.lora_waterfall_widget.setXRange(
+            0, waterfall['duration_ms'], padding=0.02
+        )
+        self.lora_waterfall_widget.setYRange(
+            center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
+        )
 
     frame = metrics.get('lora_frame')
     if frame is None:

@@ -19,21 +19,27 @@ def centered_fixture():
     return iq
 
 
-def test_live_frequency_plot_preserves_tone_frequency():
+def test_packet_waterfall_removes_dc_and_keeps_full_iq_band():
     sample_rate = 2_000_000
-    tone_hz = 50_000
-    iq = np.exp(2j * np.pi * tone_hz * np.arange(32_768) / sample_rate)
-    demod = DemoduladorLoRa()
-    demod.configurar(sample_rate, 4096, 125_000, 7)
-    try:
-        result = demod.procesar(iq)
-        visual = result['metricas']['lora_visual']
-        assert len(visual['time_ms']) == len(visual['magnitude']) == len(visual['freq_khz'])
-        assert len(visual['time_ms']) <= 3000
-        assert np.median(visual['freq_khz']) == pytest.approx(50.0, abs=0.1)
-        assert np.median(visual['magnitude']) == pytest.approx(1.0, abs=0.01)
-    finally:
-        demod.close()
+    t = np.arange(8192) / sample_rate
+    iq = (0.25 + np.exp(2j * np.pi * 750_000 * t)).astype(np.complex64)
+
+    waterfall = DemoduladorLoRa._packet_waterfall(iq, sample_rate)
+    frequencies = waterfall['freq_hz']
+    spectrum = waterfall['power_db'][:, waterfall['power_db'].shape[1] // 2]
+
+    assert waterfall['power_db'].shape[0] == 1024
+    assert frequencies[0] == -sample_rate / 2
+    assert frequencies[-1] == sample_rate / 2 - sample_rate / 1024
+    assert spectrum[np.argmin(abs(frequencies - 750_000))] > np.median(spectrum) + 40
+    assert spectrum[np.argmin(abs(frequencies))] < (
+        spectrum[np.argmin(abs(frequencies - 750_000))] - 40
+    )
+    np.testing.assert_allclose(
+        waterfall['power_db'],
+        DemoduladorLoRa._packet_waterfall(iq - 0.25, sample_rate)['power_db'],
+        atol=0.1,
+    )
 
 
 def test_stream_decodes_frame_and_resets_on_reconfiguration():
@@ -47,25 +53,23 @@ def test_stream_decodes_frame_and_resets_on_reconfiguration():
             demod.procesar(stream[start:start + 8192])
 
         frame = None
-        frame_visual = None
+        frame_waterfall = None
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             result = demod.procesar(np.zeros(8192, dtype=np.complex64))
             if result is not None and result.get("metricas", {}).get("lora_frame"):
                 frame = result["metricas"]["lora_frame"]
-                frame_visual = result["metricas"]["lora_visual"]
+                frame_waterfall = result["metricas"]["lora_waterfall"]
                 break
             time.sleep(0.02)
 
         assert frame is not None
         assert frame.payload == b"INTI"
         assert frame.crc_ok is True
-        assert frame_visual is not None
-        assert frame_visual['complete_frame'] is True
-        assert frame_visual['duration_ms'] > 12
-        assert frame_visual['time_ms'][-1] > 0.95 * frame_visual['duration_ms']
-        assert np.max(frame_visual['magnitude']) > 0
-        assert len(frame_visual['freq_khz']) > 0
+        assert frame_waterfall['duration_ms'] > 12
+        assert frame_waterfall['power_db'].shape[0] == len(frame_waterfall['freq_hz'])
+        assert frame_waterfall['power_db'].shape[1] > 1
+        assert frame_waterfall['freq_hz'][0] == -1_000_000
 
         demod.configurar(2_000_000, 4096, 125_000, 12)
         assert demod.last_frame is None
