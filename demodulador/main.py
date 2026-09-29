@@ -864,6 +864,7 @@ class MainWindow(QMainWindow):
         for marks in self.lora_symbol_marks.values():
             marks.setData([], [])
         self._lora_latest_frame = None
+        self._lora_sync_word = None
         self._lora_symbols_title = 'Símbolos LoRa'
         self._lora_symbols_x_range = (0, 1)
         self.lora_folded_image.clear()
@@ -888,6 +889,8 @@ class MainWindow(QMainWindow):
             value.setText('—')
         self.lora_payload_hex.clear()
         self.lora_payload_text.clear()
+        if state.get('demod_mode') == 'lora':
+            self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
 
     def _position_lora_symbols_view_selector(self):
         if hasattr(self, 'lora_symbols_view_combo'):
@@ -1011,10 +1014,13 @@ class MainWindow(QMainWindow):
         self._show_lora_config(bw_khz, sf)
 
     def _show_lora_config(self, bw_khz, sf):
+        sync_word = getattr(self, '_lora_sync_word', None)
+        sync_text = f'0x{sync_word:02X}' if sync_word is not None else '—'
         self.lora_config_label.setText(
             f'<b>DEMODULACIÓN LoRa</b><br><br>'
             f'BW: <b>{bw_khz} kHz</b><br>'
-            f'SF: <b>{sf}</b>'
+            f'SF: <b>{sf}</b><br>'
+            f'Sync word: <b>{sync_text}</b>'
         )
         self.lora_config_label.show()
 

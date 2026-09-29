@@ -59,7 +59,7 @@ def render_lora(self, state, metrics):
     self._lora_symbols_x_range = (
         min(0, first_symbol), max(payload_x + len(frame.payload_bins), 1)
     )
-    self._lora_symbols_title = f'Símbolos LoRa · sync 0x{frame.sync_word:02X}'
+    self._lora_symbols_title = 'Símbolos LoRa'
     folded_db = 10 * np.log10(np.maximum(frame.folded_power, 1e-12))
     columns, bins = frame.folded_power.shape
     peak_db = float(np.percentile(folded_db, 99.7))
@@ -93,6 +93,8 @@ def render_lora(self, state, metrics):
         self.lora_waterfall_stage_regions[section].setRegion((relative_ms(start), relative_ms(end)))
     self._lora_latest_frame = frame
     self._refresh_lora_symbols_view()
+    self._lora_sync_word = frame.sync_word
+    self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
 
     self.lora_header_length_value.setText(f'{len(frame.payload)} bytes')
     self.lora_header_cr_value.setText(f'4/{4 + frame.coding_rate}')
