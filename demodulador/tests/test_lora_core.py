@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from dsp.demoduladores.lora_core import LoRaConfig, decode_capture
+from dsp.demoduladores import lora_core
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "lora_sf8_500k.npy"
@@ -24,6 +25,7 @@ def test_decodes_recorded_lora_frame():
     assert frame.crc_ok is True
     assert frame.sync_word == 0x34
     assert frame.coding_rate == 1
+    assert frame.header_checksum_ok is True
 
 
 def test_decodes_same_frame_when_channel_is_centered():
@@ -35,3 +37,16 @@ def test_decodes_same_frame_when_channel_is_centered():
 
     assert frame.payload == b"INTI"
     assert frame.crc_ok is True
+
+
+def test_reports_payload_crc_failure(monkeypatch):
+    iq = np.load(FIXTURE)
+    config = LoRaConfig(bandwidth_hz=500_000, sf=8, channel_offset_hz=500_000)
+    monkeypatch.setattr(lora_core, '_payload_crc', lambda payload: -1)
+
+    frame = decode_capture(iq, config)
+
+    assert frame.payload == b'INTI'
+    assert frame.has_crc is True
+    assert frame.header_checksum_ok is True
+    assert frame.crc_ok is False

@@ -1,6 +1,5 @@
 import pyqtgraph as pg
 import numpy as np
-from html import escape
 from PyQt6.QtCore import Qt, QRectF
 import time
 
@@ -62,16 +61,24 @@ def render_lora(self, state, metrics):
     )
     self.lora_symbols_widget.setYRange(0, n_sym - 1, padding=0.03)
 
-    payload_text = frame.payload.decode('utf-8', errors='replace')
-    if not payload_text.isprintable():
-        payload_text = frame.payload.hex(' ')
-    if len(payload_text) > 40:
-        payload_text = payload_text[:40] + '…'
-    crc_text = 'CRC OK' if frame.crc_ok else ('CRC falló' if frame.crc_ok is False else 'sin CRC')
-    self.lora_symbols_widget.setTitle(
-        f'Símbolos LoRa · sync 0x{frame.sync_word:02X} · '
-        f'{escape(payload_text)} · {crc_text}'
+    self.lora_symbols_widget.setTitle(f'Símbolos LoRa · sync 0x{frame.sync_word:02X}')
+    self.lora_header_length_value.setText(f'{len(frame.payload)} bytes')
+    self.lora_header_cr_value.setText(f'4/{4 + frame.coding_rate}')
+    self.lora_header_crc_flag_value.setText('Sí' if frame.has_crc else 'No')
+    self.lora_header_checksum_value.setText(
+        'Válido' if frame.header_checksum_ok else 'Inválido'
     )
+    self.lora_payload_hex.setPlainText(frame.payload.hex(' ').upper())
+    decoded_text = frame.payload.decode('utf-8', errors='replace')
+    printable_text = ''.join(
+        char if char.isprintable() or char in '\n\t' else f'\\u{ord(char):04X}'
+        for char in decoded_text
+    )
+    self.lora_payload_text.setPlainText(printable_text)
+    crc_text = 'Válido' if frame.crc_ok else (
+        'Inválido' if frame.crc_ok is False else 'No presente'
+    )
+    self.lora_payload_crc_value.setText(crc_text)
 
 def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
     if self.is_paused:

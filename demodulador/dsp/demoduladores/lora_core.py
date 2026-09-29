@@ -68,6 +68,7 @@ class LoRaConfig:
 class LoRaFrame:
     payload: bytes
     crc_ok: bool | None
+    header_checksum_ok: bool
     sync_word: int
     coding_rate: int
     has_crc: bool
@@ -390,7 +391,8 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
     n0, n1, n2, n3, n4 = header_nibbles[:5]
     header_checksum = ((n3 & 1) << 4) | n4
     length, cr, has_crc = (n0 << 4) | n1, n2 >> 1, bool(n2 & 1)
-    if (header_checksum != _header_checksum(n0, n1, n2) or
+    header_checksum_ok = header_checksum == _header_checksum(n0, n1, n2)
+    if (not header_checksum_ok or
             not 1 <= cr <= 4 or n3 & 0xE or length == 0):
         raise LoRaDecodeError("El header PHY no pasó el checksum.")
 
@@ -421,13 +423,12 @@ def decode_capture(iq_raw: np.ndarray, config: LoRaConfig, start_sample: int = 0
     if has_crc:
         received_crc = bytes_wh[length] | (bytes_wh[length + 1] << 8)
         crc_ok = received_crc == _payload_crc(payload)
-        if not crc_ok:
-            raise LoRaDecodeError("El CRC PHY del payload no coincide.")
 
     observed = rows[:j + 2]
     return LoRaFrame(
         payload=payload,
         crc_ok=crc_ok,
+        header_checksum_ok=header_checksum_ok,
         sync_word=sync_word,
         coding_rate=cr,
         has_crc=has_crc,

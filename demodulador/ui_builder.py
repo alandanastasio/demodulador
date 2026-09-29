@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt, QLocale
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 
 import pyqtgraph as pg
 import numpy as np
@@ -796,9 +796,69 @@ def build_ui(self, state):
 
     self.layout_lora.addWidget(self.lora_waterfall_widget, 0, 1)
     self.layout_lora.addWidget(self.lora_symbols_widget, 1, 0)
-    self.lora_packet_info_placeholder = QFrame()
-    self.lora_packet_info_placeholder.setStyleSheet('background-color: black;')
-    self.layout_lora.addWidget(self.lora_packet_info_placeholder, 1, 1)
+    self.lora_packet_info_widget = QFrame()
+    self.lora_packet_info_widget.setStyleSheet('background-color: black;')
+    packet_info_layout = QVBoxLayout(self.lora_packet_info_widget)
+    packet_info_layout.setContentsMargins(5, 5, 5, 5)
+    packet_info_layout.setSpacing(6)
+
+    group_style = (
+        'QGroupBox { color: #88c0d0; font-weight: bold; border: 1px solid #444; '
+        'border-radius: 3px; margin-top: 10px; background-color: black; }'
+        'QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 3px; }'
+    )
+    header_box = QGroupBox('Header')
+    header_box.setStyleSheet(group_style)
+    header_layout = QGridLayout(header_box)
+    header_layout.setContentsMargins(9, 7, 9, 6)
+    header_layout.setHorizontalSpacing(8)
+    header_layout.setVerticalSpacing(2)
+    self.lora_header_length_value = QLabel('—')
+    self.lora_header_cr_value = QLabel('—')
+    self.lora_header_crc_flag_value = QLabel('—')
+    self.lora_header_checksum_value = QLabel('—')
+    for row, col, label, value in (
+        (0, 0, 'Longitud:', self.lora_header_length_value),
+        (0, 2, 'CR:', self.lora_header_cr_value),
+        (1, 0, 'Flag CRC:', self.lora_header_crc_flag_value),
+        (1, 2, 'Checksum:', self.lora_header_checksum_value),
+    ):
+        header_layout.addWidget(QLabel(label), row, col)
+        header_layout.addWidget(value, row, col + 1)
+    header_layout.setColumnStretch(1, 1)
+    header_layout.setColumnStretch(3, 1)
+    packet_info_layout.addWidget(header_box)
+
+    payload_box = QGroupBox('Payload')
+    payload_box.setStyleSheet(group_style)
+    payload_layout = QVBoxLayout(payload_box)
+    payload_layout.setContentsMargins(9, 7, 9, 7)
+    payload_layout.setSpacing(4)
+    payload_columns = QHBoxLayout()
+    payload_columns.setSpacing(8)
+    self.lora_payload_hex = QPlainTextEdit()
+    self.lora_payload_text = QPlainTextEdit()
+    for label, editor in (
+        ('Hexadecimal', self.lora_payload_hex),
+        ('Texto', self.lora_payload_text),
+    ):
+        editor.setReadOnly(True)
+        editor.setStyleSheet('background-color: #101010; border: 1px solid #333; color: white;')
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+        column.addWidget(QLabel(label))
+        column.addWidget(editor)
+        payload_columns.addLayout(column, 1)
+    payload_layout.addLayout(payload_columns, 1)
+    crc_row = QHBoxLayout()
+    crc_row.addWidget(QLabel('CRC:'))
+    self.lora_payload_crc_value = QLabel('—')
+    crc_row.addWidget(self.lora_payload_crc_value)
+    crc_row.addStretch(1)
+    payload_layout.addLayout(crc_row)
+    packet_info_layout.addWidget(payload_box, 1)
+    self.layout_lora.addWidget(self.lora_packet_info_widget, 1, 1)
     self.layout_lora.setRowStretch(0, 1)
     self.layout_lora.setRowStretch(1, 1)
     self.layout_lora.setColumnStretch(0, 1)
@@ -818,7 +878,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_placeholder]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):

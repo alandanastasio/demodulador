@@ -870,6 +870,16 @@ class MainWindow(QMainWindow):
             center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
         )
         self.lora_symbols_widget.setTitle("Símbolos LoRa")
+        for value in (
+            self.lora_header_length_value,
+            self.lora_header_cr_value,
+            self.lora_header_crc_flag_value,
+            self.lora_header_checksum_value,
+            self.lora_payload_crc_value,
+        ):
+            value.setText('—')
+        self.lora_payload_hex.clear()
+        self.lora_payload_text.clear()
 
     def set_lora_mode(self, bw_khz, sf):
         if bw_khz not in (125, 250, 500):
