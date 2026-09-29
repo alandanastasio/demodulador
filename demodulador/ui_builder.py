@@ -777,6 +777,53 @@ def build_ui(self, state):
     ))
     self.lora_waterfall_widget.addItem(self.lora_waterfall_image)
     self.lora_waterfall_widget.setMouseEnabled(x=True, y=True)
+    stage_colors = (
+        ('preamble', 'Preámbulo', '#00C8FF'),
+        ('sync', 'Sync', '#FF9A3C'),
+        ('sfd', 'SFD', '#B57CFF'),
+        ('header', 'Header', '#FFD500'),
+        ('payload', 'Payload', '#54D86A'),
+    )
+
+    def add_stage_regions(plot, include_sfd, z_value):
+        regions = {}
+        legend_parts = []
+        for key, label, color in stage_colors:
+            if key == 'sfd' and not include_sfd:
+                continue
+            fill_color = QColor(color)
+            fill_color.setAlpha(42)
+            border_color = QColor(color)
+            border_color.setAlpha(120)
+            region = pg.LinearRegionItem(
+                values=(0, 1), movable=False,
+                brush=pg.mkBrush(fill_color), pen=pg.mkPen(border_color),
+            )
+            region.setZValue(z_value)
+            region.setToolTip(label)
+            plot.addItem(region)
+            region.hide()
+            regions[key] = region
+            legend_parts.append(f'<span style="color:{color}">■ {label}</span>')
+        legend = QLabel(' &nbsp; '.join(legend_parts), plot)
+        legend.setStyleSheet('background-color: rgba(0, 0, 0, 180); padding: 2px 4px;')
+        legend.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        legend.adjustSize()
+        legend.hide()
+        return regions, legend
+
+    self.lora_waterfall_stage_regions, self.lora_waterfall_stage_legend = (
+        add_stage_regions(self.lora_waterfall_widget, True, 5)
+    )
+    self.lora_waterfall_stages_toggle = QCheckBox('Etapas de trama', self.lora_waterfall_widget)
+    self.lora_waterfall_stages_toggle.setStyleSheet(
+        'QCheckBox { background-color: #333; color: white; padding: 4px 7px; '
+        'border: 1px solid #666; }'
+    )
+    self.lora_waterfall_stages_toggle.adjustSize()
+    self.lora_waterfall_stages_toggle.toggled.connect(self._refresh_lora_stage_overlays)
+    self.lora_waterfall_stages_toggle.hide()
+
     self.lora_symbols_widget = pg.PlotWidget(title="Símbolos LoRa")
     self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
     self.lora_symbols_widget.setLabel('left', 'Bin plegado')
@@ -820,6 +867,17 @@ def build_ui(self, state):
     )
     self.lora_symbols_view_combo.currentIndexChanged.connect(self._refresh_lora_symbols_view)
     self.lora_symbols_view_combo.hide()
+    self.lora_fft_stage_regions, self.lora_fft_stage_legend = (
+        add_stage_regions(self.lora_symbols_widget, False, -5)
+    )
+    self.lora_fft_stages_toggle = QCheckBox('Etapas de trama', self.lora_symbols_widget)
+    self.lora_fft_stages_toggle.setStyleSheet(
+        'QCheckBox { background-color: #333; color: white; padding: 4px 7px; '
+        'border: 1px solid #666; }'
+    )
+    self.lora_fft_stages_toggle.adjustSize()
+    self.lora_fft_stages_toggle.toggled.connect(self._refresh_lora_stage_overlays)
+    self.lora_fft_stages_toggle.hide()
 
     self.layout_lora.addWidget(self.lora_waterfall_widget, 0, 1)
     self.layout_lora.addWidget(self.lora_symbols_widget, 1, 0)

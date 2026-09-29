@@ -71,6 +71,26 @@ def render_lora(self, state, metrics):
         ('sync', 'header', 'payload'), frame.folded_section_starts
     ):
         self.lora_fft_section_lines[section].setPos(index - 0.5)
+    sync_index, header_index, payload_index = frame.folded_section_starts
+    for section, start, end in (
+        ('preamble', 0, sync_index),
+        ('sync', sync_index, header_index),
+        ('header', header_index, payload_index),
+        ('payload', payload_index, columns),
+    ):
+        self.lora_fft_stage_regions[section].setRegion((start - 0.5, end - 0.5))
+
+    sync_start = frame.sfd_start_sample - 2 * samples_per_symbol
+    packet_end = frame.payload_start_sample + len(frame.payload_symbols) * samples_per_symbol
+    relative_ms = lambda sample: (sample - frame.frame_start_sample) * 1000 / state['sample_rate']
+    for section, start, end in (
+        ('preamble', frame.frame_start_sample, sync_start),
+        ('sync', sync_start, frame.sfd_start_sample),
+        ('sfd', frame.sfd_start_sample, frame.header_start_sample),
+        ('header', frame.header_start_sample, frame.payload_start_sample),
+        ('payload', frame.payload_start_sample, packet_end),
+    ):
+        self.lora_waterfall_stage_regions[section].setRegion((relative_ms(start), relative_ms(end)))
     self._lora_latest_frame = frame
     self._refresh_lora_symbols_view()
 

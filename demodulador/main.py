@@ -868,7 +868,10 @@ class MainWindow(QMainWindow):
         self._lora_symbols_x_range = (0, 1)
         self.lora_folded_image.clear()
         self.lora_symbols_view_combo.setCurrentIndex(0)
+        self.lora_waterfall_stages_toggle.setChecked(False)
+        self.lora_fft_stages_toggle.setChecked(False)
         self._refresh_lora_symbols_view()
+        self._refresh_lora_stage_overlays()
         self.lora_waterfall_widget.setXRange(0, 100, padding=0)
         center_mhz = state['center_freq'] / 1e6
         half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
@@ -890,7 +893,39 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'lora_symbols_view_combo'):
             combo = self.lora_symbols_view_combo
             width = self.lora_symbols_widget.width()
-            combo.move(max(8, width - combo.width() - 12), 30 if width < 650 else 6)
+            narrow = width < 650
+            combo.move(max(8, width - combo.width() - 12), 30 if narrow else 6)
+            toggle = self.lora_fft_stages_toggle
+            toggle.move(max(8, width - toggle.width() - 12), 60 if narrow else 34)
+            self.lora_fft_stage_legend.move(68, 91 if narrow else 35)
+
+    def _position_lora_waterfall_stage_controls(self):
+        if hasattr(self, 'lora_waterfall_stages_toggle'):
+            width = self.lora_waterfall_widget.width()
+            narrow = width < 650
+            toggle = self.lora_waterfall_stages_toggle
+            toggle.move(max(8, width - toggle.width() - 12), 30 if narrow else 6)
+            self.lora_waterfall_stage_legend.move(68, 61 if narrow else 35)
+
+    def _refresh_lora_stage_overlays(self, *_):
+        frame = getattr(self, '_lora_latest_frame', None)
+        waterfall_on = (
+            frame is not None
+            and self._maximized_widget is self.lora_waterfall_widget
+            and self.lora_waterfall_stages_toggle.isChecked()
+        )
+        fft_on = (
+            frame is not None
+            and self._maximized_widget is self.lora_symbols_widget
+            and self.lora_symbols_view_combo.currentIndex() == 1
+            and self.lora_fft_stages_toggle.isChecked()
+        )
+        for region in self.lora_waterfall_stage_regions.values():
+            region.setVisible(waterfall_on)
+        for region in self.lora_fft_stage_regions.values():
+            region.setVisible(fft_on)
+        self.lora_waterfall_stage_legend.setVisible(waterfall_on)
+        self.lora_fft_stage_legend.setVisible(fft_on)
 
     def _refresh_lora_symbols_view(self, *_):
         frame = getattr(self, '_lora_latest_frame', None)
@@ -903,6 +938,7 @@ class MainWindow(QMainWindow):
             marks.setVisible(not show_fft)
         self.lora_symbols_widget.plotItem.legend.setVisible(not show_fft)
         self.lora_folded_image.setVisible(show_fft)
+        self.lora_fft_stages_toggle.setVisible(show_fft)
         for line in self.lora_fft_section_lines.values():
             line.setVisible(show_fft)
         if show_fft:
@@ -923,6 +959,7 @@ class MainWindow(QMainWindow):
             self.lora_symbols_widget.setYRange(
                 0, (1 << state['lora_sf']) - 1, padding=0.03
             )
+        self._refresh_lora_stage_overlays()
 
     def set_lora_mode(self, bw_khz, sf):
         if bw_khz not in (125, 250, 500):
@@ -1201,6 +1238,8 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         if obj is getattr(self, 'lora_symbols_widget', None) and event.type() == event.Type.Resize:
             self._position_lora_symbols_view_selector()
+        if obj is getattr(self, 'lora_waterfall_widget', None) and event.type() == event.Type.Resize:
+            self._position_lora_waterfall_stage_controls()
         if event.type() == event.Type.MouseButtonDblClick:
             if self._maximized_widget is None:
                 self._maximize_panel(obj)
@@ -1341,13 +1380,24 @@ class MainWindow(QMainWindow):
             self.lora_symbols_view_combo.show()
             self.lora_symbols_view_combo.raise_()
             self._refresh_lora_symbols_view()
+        elif widget is self.lora_waterfall_widget:
+            self._position_lora_waterfall_stage_controls()
+            self.lora_waterfall_stages_toggle.show()
+            self.lora_waterfall_stages_toggle.raise_()
+            self._refresh_lora_stage_overlays()
 
     def _restore_panels(self, clicked_widget=None):
         if self._maximized_widget is None: return
         if self._maximized_widget is self.lora_symbols_widget:
             self.lora_symbols_view_combo.hide()
+            self.lora_fft_stages_toggle.hide()
+            self.lora_fft_stages_toggle.setChecked(False)
             self.lora_symbols_view_combo.setCurrentIndex(0)
             self._refresh_lora_symbols_view()
+        elif self._maximized_widget is self.lora_waterfall_widget:
+            self.lora_waterfall_stages_toggle.hide()
+            self.lora_waterfall_stages_toggle.setChecked(False)
+            self._refresh_lora_stage_overlays()
         
         if getattr(self, '_btle_special_mode', False):
             # Remover ambos del layout para evitar conflictos
