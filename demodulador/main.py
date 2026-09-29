@@ -975,6 +975,7 @@ class MainWindow(QMainWindow):
             )
             self._configure_lora_plots()
             self._set_lora_default_frequency()
+            self._show_lora_config(bw_khz, sf)
             return
 
         self.set_normal_mode()
@@ -1007,6 +1008,15 @@ class MainWindow(QMainWindow):
         self.radio.set_sample_rate(state['sample_rate'])
         self._set_lora_default_frequency()
         self.modes_stack.setCurrentWidget(self.page_lora)
+        self._show_lora_config(bw_khz, sf)
+
+    def _show_lora_config(self, bw_khz, sf):
+        self.lora_config_label.setText(
+            f'<b>DEMODULACIÓN LoRa</b><br><br>'
+            f'BW: <b>{bw_khz} kHz</b><br>'
+            f'SF: <b>{sf}</b>'
+        )
+        self.lora_config_label.show()
 
     def set_normal_mode(self):
         if isinstance(self.demodulador_actual, DemoduladorLoRa):
@@ -1049,6 +1059,7 @@ class MainWindow(QMainWindow):
         
         self.audio_container.hide()
         self.fm_metrics_label.hide()
+        self.lora_config_label.hide()
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()

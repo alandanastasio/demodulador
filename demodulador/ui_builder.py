@@ -106,6 +106,8 @@ def build_ui(self, state):
     self.easter_egg_active = False
     
     def on_logo_clicked(event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         if getattr(self, 'easter_egg_active', False):
             return
             
@@ -115,12 +117,11 @@ def build_ui(self, state):
                 self.easter_egg_active = True
                 from PyQt6.QtCore import QPropertyAnimation, QSequentialAnimationGroup, QPauseAnimation, QPoint, QEasingCurve
                 
-                # Force the label size to match the movie frames if possible, or give a fixed reasonable size
-                w = 200 # Approx width, adjust if needed
-                h = 200
-                if self.easter_egg_movie.currentImage():
-                    w = self.easter_egg_movie.currentImage().width()
-                    h = self.easter_egg_movie.currentImage().height()
+                if self.easter_egg_movie.currentImage().isNull():
+                    self.easter_egg_movie.jumpToFrame(0)
+                frame_size = self.easter_egg_movie.frameRect().size()
+                w = frame_size.width() if frame_size.width() > 0 else 200
+                h = frame_size.height() if frame_size.height() > 0 else 200
                 
                 self.easter_egg_label.resize(w, h)
                 
@@ -172,6 +173,7 @@ def build_ui(self, state):
             self.logo_clicks = 0
             
     self.logo_label.mousePressEvent = on_logo_clicked
+    self.logo_label.mouseDoubleClickEvent = on_logo_clicked
 
     # 1 Rec/Play
     self.rec_play_btn = QToolButton()
@@ -1340,6 +1342,7 @@ def build_ui(self, state):
     self.easter_egg_label = QLabel(self)
     self.easter_egg_movie = QMovie(os.path.join(os.path.dirname(__file__), "easteregg.gif"))
     self.easter_egg_label.setMovie(self.easter_egg_movie)
+    self.easter_egg_movie.jumpToFrame(0)
     self.easter_egg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     self.easter_egg_label.setStyleSheet("background-color: transparent;")
     self.easter_egg_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1361,6 +1364,15 @@ def build_ui(self, state):
     line.setFrameShadow(QFrame.Shadow.Sunken)
     line.setStyleSheet("background-color: #555;")
     controls_layout.addWidget(line)
+
+    self.lora_config_label = QLabel()
+    self.lora_config_label.setTextFormat(Qt.TextFormat.RichText)
+    self.lora_config_label.setStyleSheet(
+        'background-color: #1e1e1e; padding: 10px; border-radius: 4px; '
+        'border: 1px solid #444; margin-top: 10px;'
+    )
+    self.lora_config_label.hide()
+    controls_layout.addWidget(self.lora_config_label)
 
     # --- SECCIÓN ESPECTROGRAMA ---
     self.waterfall_label = QLabel("ESPECTROGRAMA")
