@@ -4,6 +4,7 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 import datetime
+import logging
 import pyqtgraph as pg
 
 # --- MONKEYPATCH PYQTGRAPH GRIDS ---
@@ -56,6 +57,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
+from hardware.stream_transition import receiver_transition
 from hardware.rtlsdr_handler import RtlSdrHandler
 from hardware.nuand_bladerf_handler import BladeRFHandler
 from hardware.ettus_usrpb200_handler import USRPB200Handler
@@ -67,6 +69,8 @@ from dsp.demoduladores.wifi_ag import DemoduladorWiFiAG
 from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
 from dsp.demoduladores.btle import DemoduladorBTLE
+from dsp.demoduladores.lora import DemoduladorLoRa
+from dsp.stream_reset import reset_demodulator_stream
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -80,6 +84,8 @@ state = {
     'fft_size': 4096,
     'center_freq': 100e6,
     'sample_rate': 10e6,
+    'lora_bw_hz': None,
+    'lora_sf': None,
     'demod_mode': 'none',
     'is_recording': False,
     'recorded_samples': [],
@@ -143,6 +149,10 @@ class MainWindow(QMainWindow):
 
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
+            if self.demodulador_actual is not None:
+                self.demodulador_actual = reset_demodulator_stream(
+                    self.demodulador_actual
+                )
             return
             
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
@@ -216,9 +226,12 @@ class MainWindow(QMainWindow):
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
-            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
+            'lora_waterfall_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
+            if state['demod_mode'] == 'lora' and name.startswith('lora_'):
+                continue
             plot = getattr(self, name, None)
             if plot is not None and plot.isVisible():
                 try:
@@ -233,9 +246,12 @@ class MainWindow(QMainWindow):
             'freq_plot', 'wbfm_mpx_widget', 'wbfm_audio_widget', 'wbfm_l_widget', 'wbfm_r_widget',
             'wifi_time_widget', 'wifi_evm_subc_widget', 'wifi_evm_sym_widget', 'wifi_const_widget',
             'lte_time_widget', 'lte_evm_subc_widget', 'lte_evm_sym_widget', 'lte_const_widget',
-            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget'
+            'btle_power_widget', 'btle_freq_widget', 'btle_acp_widget',
+            'lora_waterfall_widget', 'lora_symbols_widget'
         ]
         for name in plot_names:
+            if state['demod_mode'] == 'lora' and name.startswith('lora_'):
+                continue
             plot = getattr(self, name, None)
             if plot is not None and plot.isVisible():
                 try:
@@ -245,6 +261,7 @@ class MainWindow(QMainWindow):
 
     # ==========================================
 
+    @receiver_transition
     def set_wbfm_mode(self):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -311,6 +328,7 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     
+    @receiver_transition
     def set_btle_mode(self, bw_mhz=1):
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
@@ -391,6 +409,7 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
 
+    @receiver_transition
     def set_wifi_ag_mode(self):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -469,6 +488,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
 
+    @receiver_transition
     def set_lte_mode(self, bw_mhz=5):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -483,6 +503,7 @@ class MainWindow(QMainWindow):
             20:  (30.72e6, 2048),
         }
         sample_rate, fft_size = bw_to_config.get(bw_mhz, (7.68e6, 512))
+        self.radio.validate_sample_rate(sample_rate)
         
         # Insertamos el espectro en el stack del cuadrante 1 (reemplazando el widget temporal si existe)
         current_w = self.lte_q1_stack.widget(0)
@@ -635,6 +656,7 @@ class MainWindow(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.lte_frame_summary.setItem(row, col + 1, item)
 
+    @receiver_transition
     def set_lte_uplink_mode(self, bw_mhz=5):
         self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
@@ -691,6 +713,7 @@ class MainWindow(QMainWindow):
             20:  (30.72e6, 2048, 100),
         }
         sample_rate, fft_size, rb_count = bw_to_config.get(bw_mhz, (7.68e6, 512, 25))
+        self.radio.validate_sample_rate(sample_rate)
         
         current_w = self.lte_q1_stack.widget(0)
         if current_w != self.freq_plot:
@@ -805,6 +828,7 @@ class MainWindow(QMainWindow):
         # (El sniffer ahora notifica directamente a través del diccionario de resultados
         # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
         
+    @receiver_transition
     def _force_switch_to_ul(self):
         if hasattr(self, '_ul_sniff_timer'):
             self._ul_sniff_timer.stop()
@@ -827,6 +851,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'update_x_axis'):
                 self.update_x_axis()
 
+    @receiver_transition
     def set_wbfm_audio_mode(self):
         self.set_wbfm_mode() 
         self.audio_container.show()
@@ -837,7 +862,187 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = DemoduladorWBFMAudio()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
 
+    def _set_lora_default_frequency(self):
+        self.unit_combo.setCurrentText("MHz")
+        self.freq_input.blockSignals(True)
+        self.freq_input.setValue(917.5)
+        self.freq_input.blockSignals(False)
+        self.on_freq_changed(917.5)
+
+    def _configure_lora_plots(self):
+        self.lora_symbols_widget.setYRange(0, (1 << state['lora_sf']) - 1, padding=0.03)
+        self._clear_lora_plots()
+
+    def _clear_lora_plots(self):
+        self.lora_waterfall_image.clear()
+        for marks in self.lora_symbol_marks.values():
+            marks.setData([], [])
+        self._lora_latest_frame = None
+        self._lora_sync_word = None
+        self._lora_symbols_title = 'Símbolos LoRa'
+        self._lora_symbols_x_range = (0, 1)
+        self.lora_folded_image.clear()
+        self.lora_symbols_view_combo.setCurrentIndex(0)
+        self.lora_waterfall_stages_toggle.setChecked(False)
+        self.lora_fft_stages_toggle.setChecked(False)
+        self._refresh_lora_symbols_view()
+        self._refresh_lora_stage_overlays()
+        self.lora_waterfall_widget.setXRange(0, 100, padding=0)
+        center_mhz = state['center_freq'] / 1e6
+        half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
+        self.lora_waterfall_widget.setYRange(
+            center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
+        )
+        for value in (
+            self.lora_header_length_value,
+            self.lora_header_cr_value,
+            self.lora_header_crc_flag_value,
+            self.lora_header_checksum_value,
+            self.lora_payload_crc_value,
+        ):
+            value.setText('—')
+        self.lora_payload_hex.clear()
+        self.lora_payload_text.clear()
+        if state.get('demod_mode') == 'lora':
+            self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
+
+    def _position_lora_symbols_view_selector(self):
+        if hasattr(self, 'lora_symbols_view_combo'):
+            combo = self.lora_symbols_view_combo
+            width = self.lora_symbols_widget.width()
+            narrow = width < 650
+            combo.move(max(8, width - combo.width() - 12), 30 if narrow else 6)
+            toggle = self.lora_fft_stages_toggle
+            toggle.move(max(8, width - toggle.width() - 12), 60 if narrow else 34)
+            self.lora_fft_stage_legend.move(68, 91 if narrow else 35)
+
+    def _position_lora_waterfall_stage_controls(self):
+        if hasattr(self, 'lora_waterfall_stages_toggle'):
+            width = self.lora_waterfall_widget.width()
+            narrow = width < 650
+            toggle = self.lora_waterfall_stages_toggle
+            toggle.move(max(8, width - toggle.width() - 12), 30 if narrow else 6)
+            self.lora_waterfall_stage_legend.move(68, 61 if narrow else 35)
+
+    def _refresh_lora_stage_overlays(self, *_):
+        frame = getattr(self, '_lora_latest_frame', None)
+        waterfall_on = (
+            frame is not None
+            and self._maximized_widget is self.lora_waterfall_widget
+            and self.lora_waterfall_stages_toggle.isChecked()
+        )
+        fft_on = (
+            frame is not None
+            and self._maximized_widget is self.lora_symbols_widget
+            and self.lora_symbols_view_combo.currentIndex() == 1
+            and self.lora_fft_stages_toggle.isChecked()
+        )
+        for region in self.lora_waterfall_stage_regions.values():
+            region.setVisible(waterfall_on)
+        for region in self.lora_fft_stage_regions.values():
+            region.setVisible(fft_on)
+        self.lora_waterfall_stage_legend.setVisible(waterfall_on)
+        self.lora_fft_stage_legend.setVisible(fft_on)
+
+    def _refresh_lora_symbols_view(self, *_):
+        frame = getattr(self, '_lora_latest_frame', None)
+        show_fft = (
+            frame is not None
+            and self._maximized_widget is self.lora_symbols_widget
+            and self.lora_symbols_view_combo.currentIndex() == 1
+        )
+        for marks in self.lora_symbol_marks.values():
+            marks.setVisible(not show_fft)
+        self.lora_symbols_widget.plotItem.legend.setVisible(not show_fft)
+        self.lora_folded_image.setVisible(show_fft)
+        self.lora_fft_stages_toggle.setVisible(show_fft)
+        for line in self.lora_fft_section_lines.values():
+            line.setVisible(show_fft)
+        if show_fft:
+            columns, bins = frame.folded_power.shape
+            self.lora_symbols_widget.setLabel('bottom', 'Símbolo analizado (sin SFD)')
+            self.lora_symbols_widget.setLabel('left', 'Bin FFT plegado')
+            self.lora_symbols_widget.setTitle('Espectrograma FFT plegada')
+            self.lora_symbols_widget.setXRange(-0.5, columns - 0.5, padding=0.02)
+            self.lora_symbols_widget.setYRange(-0.5, bins - 0.5, padding=0.02)
+        else:
+            self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
+            self.lora_symbols_widget.setLabel('left', 'Bin plegado')
+            self.lora_symbols_widget.setTitle(
+                getattr(self, '_lora_symbols_title', 'Símbolos LoRa')
+            )
+            left, right = getattr(self, '_lora_symbols_x_range', (0, 1))
+            self.lora_symbols_widget.setXRange(left, right, padding=0.03)
+            self.lora_symbols_widget.setYRange(
+                0, (1 << state['lora_sf']) - 1, padding=0.03
+            )
+        self._refresh_lora_stage_overlays()
+
+    @receiver_transition
+    def set_lora_mode(self, bw_khz, sf):
+        if bw_khz not in (125, 250, 500):
+            raise ValueError(f"Ancho de banda LoRa no soportado: {bw_khz} kHz")
+        if sf not in range(7, 13):
+            raise ValueError(f"Spreading factor LoRa no soportado: SF{sf}")
+
+        state['lora_bw_hz'] = bw_khz * 1000
+        state['lora_sf'] = sf
+        if state['demod_mode'] == 'lora':
+            self.demodulador_actual.configurar(
+                state['sample_rate'], state['fft_size'], state['lora_bw_hz'], state['lora_sf']
+            )
+            self._configure_lora_plots()
+            self._set_lora_default_frequency()
+            self._show_lora_config(bw_khz, sf)
+            return
+
+        self.set_normal_mode()
+        self.layout_lora.addWidget(self.freq_plot, 0, 0)
+        self.freq_plot.show()
+
+        self.waterfall_checkbox.hide()
+        self.waterfall_label.hide()
+        self.waterfall_controls_widget.hide()
+        self.wf_bottom_widget.hide()
+        self.waterfall_line2.hide()
+        self.zero_span_btn.setChecked(False)
+        self.toggle_zero_span()
+        self.zero_span_btn.hide()
+        self.zero_span_label.hide()
+
+        state['demod_mode'] = 'lora'
+        state['sample_rate'] = 2e6
+        self.sr_combo.blockSignals(True)
+        if self.sr_combo.findText("2 MHz") == -1:
+            self.sr_combo.addItem("2 MHz")
+        self.sr_combo.setCurrentText("2 MHz")
+        self.sr_combo.setEnabled(False)
+        self.sr_combo.blockSignals(False)
+        self.demodulador_actual = DemoduladorLoRa()
+        self.demodulador_actual.configurar(
+            state['sample_rate'], state['fft_size'], state['lora_bw_hz'], state['lora_sf']
+        )
+        self._configure_lora_plots()
+        self.radio.set_sample_rate(state['sample_rate'])
+        self._set_lora_default_frequency()
+        self.modes_stack.setCurrentWidget(self.page_lora)
+        self._show_lora_config(bw_khz, sf)
+
+    def _show_lora_config(self, bw_khz, sf):
+        sync_word = getattr(self, '_lora_sync_word', None)
+        sync_text = f'0x{sync_word:02X}' if sync_word is not None else '—'
+        self.lora_config_label.setText(
+            f'<b>DEMODULACIÓN LoRa</b><br><br>'
+            f'BW: <b>{bw_khz} kHz</b><br>'
+            f'SF: <b>{sf}</b><br>'
+            f'Sync word: <b>{sync_text}</b>'
+        )
+        self.lora_config_label.show()
+
+    @receiver_transition
     def set_normal_mode(self):
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.close()
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -876,6 +1081,7 @@ class MainWindow(QMainWindow):
         
         self.audio_container.hide()
         self.fm_metrics_label.hide()
+        self.lora_config_label.hide()
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
@@ -915,8 +1121,32 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     def on_freq_changed(self, val):
-        state['center_freq'] = val * self.current_freq_multiplier
-        self.radio.set_freq(state['center_freq'])
+        center_freq = val * self.current_freq_multiplier
+        if isinstance(self.radio, HackRFHandler):
+            try:
+                self.radio.validate_frequency(center_freq)
+            except ValueError as exc:
+                self.statusBar().showMessage(str(exc), 5000)
+                return
+        try:
+            self._apply_freq_change(center_freq)
+        except Exception as exc:
+            logging.exception("No se pudo sintonizar la SDR")
+            self.statusBar().showMessage(f"Error al sintonizar: {exc}", 0)
+            self.freq_input.blockSignals(True)
+            self.freq_input.setValue(state['center_freq'] / self.current_freq_multiplier)
+            self.freq_input.blockSignals(False)
+
+    @receiver_transition
+    def _apply_freq_change(self, center_freq):
+        self.radio.set_freq(center_freq)
+        state['center_freq'] = center_freq
+        if not isinstance(self.radio, HackRFHandler) and isinstance(
+            self.demodulador_actual, DemoduladorLoRa
+        ):
+            self.demodulador_actual.reset_stream()
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self._clear_lora_plots()
         self.trace_manager.reset()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
@@ -924,14 +1154,32 @@ class MainWindow(QMainWindow):
 
     def on_sr_changed(self, text):
         if not text: return
-        
+        val_mhz = float(text.replace(" MHz", ""))
+        try:
+            self.radio.validate_sample_rate(val_mhz * 1e6)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        previous_rate = state['sample_rate']
+        try:
+            self._apply_sample_rate_change(text, val_mhz * 1e6)
+        except Exception as exc:
+            logging.exception("No se pudo cambiar la tasa de muestreo")
+            self.statusBar().showMessage(f"Error al cambiar la tasa: {exc}", 0)
+            if state['sample_rate'] == previous_rate:
+                previous_text = getattr(
+                    self, 'sa_sample_rate_text', f"{previous_rate / 1e6:g} MHz"
+                )
+                self.sr_combo.blockSignals(True)
+                self.sr_combo.setCurrentText(previous_text)
+                self.sr_combo.blockSignals(False)
+
+    @receiver_transition
+    def _apply_sample_rate_change(self, text, sample_rate):
+        self.radio.set_sample_rate(sample_rate)
+        state['sample_rate'] = sample_rate
         if state.get('demod_mode', 'none') == 'none':
             self.sa_sample_rate_text = text
-            
-        val_mhz = float(text.replace(" MHz", ""))
-        state['sample_rate'] = val_mhz * 1e6
-        
-        self.radio.set_sample_rate(state['sample_rate'])
         
         # Si hay un plugin activo, le avisamos que cambió el sample rate
         if self.demodulador_actual is not None:
@@ -1032,6 +1280,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         print("Cerrando aplicación SDR...")
         self.audio_manager.stop_all()
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.close()
         self.radio.close()
         event.accept()
         
@@ -1058,6 +1308,10 @@ class MainWindow(QMainWindow):
 
     # --- SISTEMA DE MAXIMIZAR/RESTAURAR PANELES (doble-click) ---
     def eventFilter(self, obj, event):
+        if obj is getattr(self, 'lora_symbols_widget', None) and event.type() == event.Type.Resize:
+            self._position_lora_symbols_view_selector()
+        if obj is getattr(self, 'lora_waterfall_widget', None) and event.type() == event.Type.Resize:
+            self._position_lora_waterfall_stage_controls()
         if event.type() == event.Type.MouseButtonDblClick:
             if self._maximized_widget is None:
                 self._maximize_panel(obj)
@@ -1167,7 +1421,7 @@ class MainWindow(QMainWindow):
         
         # Subir en la jerarquía hasta encontrar el QGridLayout de la página principal
         grid_widget = widget
-        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None)]
+        pages = [getattr(self, 'page_normal', None), getattr(self, 'page_wbfm', None), getattr(self, 'page_wifi', None), getattr(self, 'page_lte', None), getattr(self, 'page_btle', None), getattr(self, 'page_lora', None)]
         while grid_widget.parentWidget() and grid_widget.parentWidget() not in pages:
             grid_widget = grid_widget.parentWidget()
             
@@ -1193,9 +1447,29 @@ class MainWindow(QMainWindow):
         widget.show()
         self._maximized_widget = widget
         self._maximized_layout = layout if isinstance(layout, QGridLayout) else None
+        if widget is self.lora_symbols_widget:
+            self._position_lora_symbols_view_selector()
+            self.lora_symbols_view_combo.show()
+            self.lora_symbols_view_combo.raise_()
+            self._refresh_lora_symbols_view()
+        elif widget is self.lora_waterfall_widget:
+            self._position_lora_waterfall_stage_controls()
+            self.lora_waterfall_stages_toggle.show()
+            self.lora_waterfall_stages_toggle.raise_()
+            self._refresh_lora_stage_overlays()
 
     def _restore_panels(self, clicked_widget=None):
         if self._maximized_widget is None: return
+        if self._maximized_widget is self.lora_symbols_widget:
+            self.lora_symbols_view_combo.hide()
+            self.lora_fft_stages_toggle.hide()
+            self.lora_fft_stages_toggle.setChecked(False)
+            self.lora_symbols_view_combo.setCurrentIndex(0)
+            self._refresh_lora_symbols_view()
+        elif self._maximized_widget is self.lora_waterfall_widget:
+            self.lora_waterfall_stages_toggle.hide()
+            self.lora_waterfall_stages_toggle.setChecked(False)
+            self._refresh_lora_stage_overlays()
         
         if getattr(self, '_btle_special_mode', False):
             # Remover ambos del layout para evitar conflictos

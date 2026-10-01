@@ -1,7 +1,118 @@
 import pyqtgraph as pg
 import numpy as np
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
 import time
+
+
+def render_lora(self, state, metrics):
+    if not metrics:
+        return
+    waterfall = metrics.get('lora_waterfall')
+    if waterfall is not None:
+        freqs = waterfall['freq_hz']
+        step_hz = freqs[1] - freqs[0]
+        center_mhz = state['center_freq'] / 1e6
+        self.lora_waterfall_image.setImage(
+            waterfall['power_db'], autoLevels=False,
+            levels=waterfall['levels_db'],
+        )
+        self.lora_waterfall_image.setRect(QRectF(
+            0, center_mhz + (freqs[0] - step_hz / 2) / 1e6,
+            waterfall['duration_ms'],
+            (freqs[-1] - freqs[0] + step_hz) / 1e6,
+        ))
+        half_band_mhz = state['lora_bw_hz'] * 0.85 / 1e6
+        self.lora_waterfall_widget.setXRange(
+            0, waterfall['duration_ms'], padding=0.02
+        )
+        self.lora_waterfall_widget.setYRange(
+            center_mhz - half_band_mhz, center_mhz + half_band_mhz, padding=0.03
+        )
+
+    frame = metrics.get('lora_frame')
+    if frame is None:
+        return
+
+    n_sym = 1 << state['lora_sf']
+    samples_per_symbol = n_sym * int(state['sample_rate'] / state['lora_bw_hz'])
+    sfd_symbol = (frame.sfd_start_sample - frame.frame_start_sample) / samples_per_symbol
+    observed = [(offset, bin_index) for offset, bin_index in
+                zip(frame.observed_offsets, frame.observed_bins)
+                if bin_index is not None]
+    preamble = [(x, y) for x, y in observed if x < sfd_symbol - 2]
+    sync = [(x, y) for x, y in observed if sfd_symbol - 2 <= x < sfd_symbol]
+
+    def show_bins(marks, points):
+        marks.setData([x for x, _ in points], [y for _, y in points])
+
+    show_bins(self.lora_symbol_marks['preamble'], preamble)
+    show_bins(self.lora_symbol_marks['sync'], sync)
+    header_x = (frame.header_start_sample - frame.frame_start_sample) / samples_per_symbol
+    payload_x = (frame.payload_start_sample - frame.frame_start_sample) / samples_per_symbol
+    self.lora_symbol_marks['header'].setData(
+        header_x + np.arange(len(frame.header_bins)), frame.header_bins
+    )
+    self.lora_symbol_marks['payload'].setData(
+        payload_x + np.arange(len(frame.payload_bins)), frame.payload_bins
+    )
+    first_symbol = min((x for x, _ in observed), default=0)
+    self._lora_symbols_x_range = (
+        min(0, first_symbol), max(payload_x + len(frame.payload_bins), 1)
+    )
+    self._lora_symbols_title = 'Símbolos LoRa'
+    folded_db = 10 * np.log10(np.maximum(frame.folded_power, 1e-12))
+    columns, bins = frame.folded_power.shape
+    peak_db = float(np.percentile(folded_db, 99.7))
+    self.lora_folded_image.setImage(
+        folded_db.T, autoLevels=False, levels=(peak_db - 45, peak_db)
+    )
+    self.lora_folded_image.setRect(QRectF(-0.5, -0.5, columns, bins))
+    for section, index in zip(
+        ('sync', 'header', 'payload'), frame.folded_section_starts
+    ):
+        self.lora_fft_section_lines[section].setPos(index - 0.5)
+    sync_index, header_index, payload_index = frame.folded_section_starts
+    for section, start, end in (
+        ('preamble', 0, sync_index),
+        ('sync', sync_index, header_index),
+        ('header', header_index, payload_index),
+        ('payload', payload_index, columns),
+    ):
+        self.lora_fft_stage_regions[section].setRegion((start - 0.5, end - 0.5))
+
+    sync_start = frame.sfd_start_sample - 2 * samples_per_symbol
+    packet_end = frame.payload_start_sample + len(frame.payload_symbols) * samples_per_symbol
+    relative_ms = lambda sample: (sample - frame.frame_start_sample) * 1000 / state['sample_rate']
+    for section, start, end in (
+        ('preamble', frame.frame_start_sample, sync_start),
+        ('sync', sync_start, frame.sfd_start_sample),
+        ('sfd', frame.sfd_start_sample, frame.header_start_sample),
+        ('header', frame.header_start_sample, frame.payload_start_sample),
+        ('payload', frame.payload_start_sample, packet_end),
+    ):
+        self.lora_waterfall_stage_regions[section].setRegion((relative_ms(start), relative_ms(end)))
+    self._lora_latest_frame = frame
+    self._refresh_lora_symbols_view()
+    self._lora_sync_word = frame.sync_word
+    self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
+
+    self.lora_header_length_value.setText(f'{len(frame.payload)} bytes')
+    self.lora_header_cr_value.setText(f'4/{4 + frame.coding_rate}')
+    self.lora_header_crc_flag_value.setText('Sí' if frame.has_crc else 'No')
+    self.lora_header_checksum_value.setText(
+        'Válido' if frame.header_checksum_ok else 'Inválido'
+    )
+    self.lora_payload_hex.setPlainText(frame.payload.hex(' ').upper())
+    decoded_text = frame.payload.decode('utf-8', errors='replace')
+    printable_text = ''.join(
+        char if char.isprintable() or char in '\n\t' else f'\\u{ord(char):04X}'
+        for char in decoded_text
+    )
+    self.lora_payload_text.setPlainText(printable_text)
+    crc_text = 'Válido' if frame.crc_ok else (
+        'Inválido' if frame.crc_ok is False else 'No presente'
+    )
+    self.lora_payload_crc_value.setText(crc_text)
 
 def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
     if self.is_paused:
@@ -101,6 +212,9 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     getattr(self, 'last_f_axis_audio', None), 
                     state.get('demod_mode')
                 )
+
+        if state.get('demod_mode') == 'lora':
+            render_lora(self, state, fm_metrics)
 
         # --- RENDERIZADO ESPECÍFICO DE WIFI A/G ---
         if state.get('demod_mode') == 'wifi_ag':

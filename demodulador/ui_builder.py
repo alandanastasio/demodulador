@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QSize, Qt, QLocale
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
 
 import pyqtgraph as pg
 import numpy as np
@@ -106,6 +106,8 @@ def build_ui(self, state):
     self.easter_egg_active = False
     
     def on_logo_clicked(event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
         if getattr(self, 'easter_egg_active', False):
             return
             
@@ -115,12 +117,11 @@ def build_ui(self, state):
                 self.easter_egg_active = True
                 from PyQt6.QtCore import QPropertyAnimation, QSequentialAnimationGroup, QPauseAnimation, QPoint, QEasingCurve
                 
-                # Force the label size to match the movie frames if possible, or give a fixed reasonable size
-                w = 200 # Approx width, adjust if needed
-                h = 200
-                if self.easter_egg_movie.currentImage():
-                    w = self.easter_egg_movie.currentImage().width()
-                    h = self.easter_egg_movie.currentImage().height()
+                if self.easter_egg_movie.currentImage().isNull():
+                    self.easter_egg_movie.jumpToFrame(0)
+                frame_size = self.easter_egg_movie.frameRect().size()
+                w = frame_size.width() if frame_size.width() > 0 else 200
+                h = frame_size.height() if frame_size.height() > 0 else 200
                 
                 self.easter_egg_label.resize(w, h)
                 
@@ -172,6 +173,7 @@ def build_ui(self, state):
             self.logo_clicks = 0
             
     self.logo_label.mousePressEvent = on_logo_clicked
+    self.logo_label.mouseDoubleClickEvent = on_logo_clicked
 
     # 1 Rec/Play
     self.rec_play_btn = QToolButton()
@@ -762,6 +764,194 @@ def build_ui(self, state):
     
     self.modes_stack.addWidget(self.page_btle)
 
+    # --- PÁGINA LORA ---
+    self.page_lora = QWidget()
+    self.layout_lora = QGridLayout(self.page_lora)
+    self.layout_lora.setContentsMargins(0, 0, 0, 0)
+
+    self.lora_waterfall_widget = pg.PlotWidget(title="Waterfall IQ del último paquete")
+    self.lora_waterfall_widget.setLabel('bottom', 'Tiempo [ms]')
+    self.lora_waterfall_widget.setLabel('left', 'Frecuencia [MHz]')
+    self.lora_waterfall_image = pg.ImageItem(axisOrder='row-major', autoDownsample=True)
+    self.lora_waterfall_image.setColorMap(pg.ColorMap(
+        [0.0, 0.25, 0.55, 0.8, 1.0],
+        [(0, 0, 0), (0, 25, 80), (0, 140, 210), (255, 213, 0), (255, 255, 235)],
+    ))
+    self.lora_waterfall_widget.addItem(self.lora_waterfall_image)
+    self.lora_waterfall_widget.setMouseEnabled(x=True, y=True)
+    stage_colors = (
+        ('preamble', 'Preámbulo', '#00C8FF'),
+        ('sync', 'Sync', '#FF9A3C'),
+        ('sfd', 'SFD', '#B57CFF'),
+        ('header', 'Header', '#FFD500'),
+        ('payload', 'Payload', '#54D86A'),
+    )
+
+    def add_stage_regions(plot, include_sfd, z_value):
+        regions = {}
+        legend_parts = []
+        for key, label, color in stage_colors:
+            if key == 'sfd' and not include_sfd:
+                continue
+            fill_color = QColor(color)
+            fill_color.setAlpha(42)
+            border_color = QColor(color)
+            border_color.setAlpha(120)
+            region = pg.LinearRegionItem(
+                values=(0, 1), movable=False,
+                brush=pg.mkBrush(fill_color), pen=pg.mkPen(border_color),
+            )
+            region.setZValue(z_value)
+            region.setToolTip(label)
+            plot.addItem(region)
+            region.hide()
+            regions[key] = region
+            legend_parts.append(f'<span style="color:{color}">■ {label}</span>')
+        legend = QLabel(' &nbsp; '.join(legend_parts), plot)
+        legend.setStyleSheet('background-color: rgba(0, 0, 0, 180); padding: 2px 4px;')
+        legend.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        legend.adjustSize()
+        legend.hide()
+        return regions, legend
+
+    self.lora_waterfall_stage_regions, self.lora_waterfall_stage_legend = (
+        add_stage_regions(self.lora_waterfall_widget, True, 5)
+    )
+    self.lora_waterfall_stages_toggle = QCheckBox('Etapas de trama', self.lora_waterfall_widget)
+    self.lora_waterfall_stages_toggle.setStyleSheet(
+        'QCheckBox { background-color: #333; color: white; padding: 4px 7px; '
+        'border: 1px solid #666; }'
+    )
+    self.lora_waterfall_stages_toggle.adjustSize()
+    self.lora_waterfall_stages_toggle.toggled.connect(self._refresh_lora_stage_overlays)
+    self.lora_waterfall_stages_toggle.hide()
+
+    self.lora_symbols_widget = pg.PlotWidget(title="Símbolos LoRa")
+    self.lora_symbols_widget.setLabel('bottom', 'Símbolo desde el preámbulo')
+    self.lora_symbols_widget.setLabel('left', 'Bin plegado')
+    self.lora_symbols_widget.addLegend(offset=(10, 10))
+    self.lora_symbol_marks = {}
+    for key, label, color in (
+        ('preamble', 'Preámbulo', '#00C8FF'),
+        ('sync', 'Sync', '#FF9A3C'),
+        ('header', 'Header', '#FFD500'),
+        ('payload', 'Payload', '#54D86A'),
+    ):
+        marks = self.lora_symbols_widget.plot(
+            [], pen=None, symbol='_', symbolSize=14,
+            symbolBrush=color, symbolPen=None, name=label,
+        )
+        self.lora_symbol_marks[key] = marks
+    self.lora_folded_image = pg.ImageItem(axisOrder='row-major', autoDownsample=True)
+    self.lora_folded_image.setColorMap(pg.ColorMap(
+        [0.0, 0.25, 0.55, 0.8, 1.0],
+        [(0, 0, 0), (0, 25, 80), (0, 140, 210), (255, 213, 0), (255, 255, 235)],
+    ))
+    self.lora_folded_image.setZValue(-10)
+    self.lora_symbols_widget.addItem(self.lora_folded_image)
+    self.lora_folded_image.hide()
+    self.lora_fft_section_lines = {}
+    for section, color in (
+        ('sync', '#FF9A3C'),
+        ('header', '#FFD500'),
+        ('payload', '#54D86A'),
+    ):
+        line = pg.InfiniteLine(angle=90, pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
+        self.lora_symbols_widget.addItem(line)
+        line.hide()
+        self.lora_fft_section_lines[section] = line
+    self.lora_symbols_view_combo = QComboBox(self.lora_symbols_widget)
+    self.lora_symbols_view_combo.addItems(['Símbolos', 'FFT dechirp + folding'])
+    self.lora_symbols_view_combo.setFixedWidth(190)
+    self.lora_symbols_view_combo.setStyleSheet(
+        'QComboBox { background-color: #333; color: white; border: 1px solid #666; '
+        'padding: 3px; } QComboBox QAbstractItemView { background-color: #333; color: white; }'
+    )
+    self.lora_symbols_view_combo.currentIndexChanged.connect(self._refresh_lora_symbols_view)
+    self.lora_symbols_view_combo.hide()
+    self.lora_fft_stage_regions, self.lora_fft_stage_legend = (
+        add_stage_regions(self.lora_symbols_widget, False, -5)
+    )
+    self.lora_fft_stages_toggle = QCheckBox('Etapas de trama', self.lora_symbols_widget)
+    self.lora_fft_stages_toggle.setStyleSheet(
+        'QCheckBox { background-color: #333; color: white; padding: 4px 7px; '
+        'border: 1px solid #666; }'
+    )
+    self.lora_fft_stages_toggle.adjustSize()
+    self.lora_fft_stages_toggle.toggled.connect(self._refresh_lora_stage_overlays)
+    self.lora_fft_stages_toggle.hide()
+
+    self.layout_lora.addWidget(self.lora_waterfall_widget, 0, 1)
+    self.layout_lora.addWidget(self.lora_symbols_widget, 1, 0)
+    self.lora_packet_info_widget = QFrame()
+    self.lora_packet_info_widget.setStyleSheet('background-color: black;')
+    packet_info_layout = QVBoxLayout(self.lora_packet_info_widget)
+    packet_info_layout.setContentsMargins(5, 5, 5, 5)
+    packet_info_layout.setSpacing(6)
+
+    group_style = (
+        'QGroupBox { color: #88c0d0; font-weight: bold; border: 1px solid #444; '
+        'border-radius: 3px; margin-top: 10px; background-color: black; }'
+        'QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 3px; }'
+    )
+    header_box = QGroupBox('Header')
+    header_box.setStyleSheet(group_style)
+    header_layout = QGridLayout(header_box)
+    header_layout.setContentsMargins(9, 7, 9, 6)
+    header_layout.setHorizontalSpacing(8)
+    header_layout.setVerticalSpacing(2)
+    self.lora_header_length_value = QLabel('—')
+    self.lora_header_cr_value = QLabel('—')
+    self.lora_header_crc_flag_value = QLabel('—')
+    self.lora_header_checksum_value = QLabel('—')
+    for row, col, label, value in (
+        (0, 0, 'Longitud:', self.lora_header_length_value),
+        (0, 2, 'CR:', self.lora_header_cr_value),
+        (1, 0, 'Flag CRC:', self.lora_header_crc_flag_value),
+        (1, 2, 'Checksum:', self.lora_header_checksum_value),
+    ):
+        header_layout.addWidget(QLabel(label), row, col)
+        header_layout.addWidget(value, row, col + 1)
+    header_layout.setColumnStretch(1, 1)
+    header_layout.setColumnStretch(3, 1)
+    packet_info_layout.addWidget(header_box)
+
+    payload_box = QGroupBox('Payload')
+    payload_box.setStyleSheet(group_style)
+    payload_layout = QVBoxLayout(payload_box)
+    payload_layout.setContentsMargins(9, 7, 9, 7)
+    payload_layout.setSpacing(4)
+    payload_columns = QHBoxLayout()
+    payload_columns.setSpacing(8)
+    self.lora_payload_hex = QPlainTextEdit()
+    self.lora_payload_text = QPlainTextEdit()
+    for label, editor in (
+        ('Hexadecimal', self.lora_payload_hex),
+        ('Texto', self.lora_payload_text),
+    ):
+        editor.setReadOnly(True)
+        editor.setStyleSheet('background-color: #101010; border: 1px solid #333; color: white;')
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)
+        column.addWidget(QLabel(label))
+        column.addWidget(editor)
+        payload_columns.addLayout(column, 1)
+    payload_layout.addLayout(payload_columns, 1)
+    crc_row = QHBoxLayout()
+    crc_row.addWidget(QLabel('CRC:'))
+    self.lora_payload_crc_value = QLabel('—')
+    crc_row.addWidget(self.lora_payload_crc_value)
+    crc_row.addStretch(1)
+    payload_layout.addLayout(crc_row)
+    packet_info_layout.addWidget(payload_box, 1)
+    self.layout_lora.addWidget(self.lora_packet_info_widget, 1, 1)
+    self.layout_lora.setRowStretch(0, 1)
+    self.layout_lora.setRowStretch(1, 1)
+    self.layout_lora.setColumnStretch(0, 1)
+    self.layout_lora.setColumnStretch(1, 1)
+    self.modes_stack.addWidget(self.page_lora)
+
 
     # --- CONTENEDOR PRINCIPAL ---
     self.plot_container = QWidget()
@@ -775,7 +965,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_evm_sym_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):
@@ -955,6 +1145,22 @@ def build_ui(self, state):
 
     self.digital_menu.addMenu(self.btle_menu)
 
+    self.lora_menu = QMenu("LoRa", self)
+    self.lora_menu.setStyleSheet(self.digital_menu.styleSheet())
+    self.lora_sf_actions = {}
+    for bw_khz in (125, 250, 500):
+        bw_menu = QMenu(f"{bw_khz} kHz", self.lora_menu)
+        bw_menu.setStyleSheet(self.lora_menu.styleSheet())
+        for sf in range(7, 13):
+            action = QAction(f"SF{sf}", self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked, bw=bw_khz, selected_sf=sf: self.set_lora_mode(bw, selected_sf))
+            self.demod_group.addAction(action)
+            bw_menu.addAction(action)
+            self.lora_sf_actions[(bw_khz, sf)] = action
+        self.lora_menu.addMenu(bw_menu)
+    self.digital_menu.addMenu(self.lora_menu)
+
 
     self.lte_menu = QMenu("LTE", self)
     self.lte_menu.setStyleSheet("""
@@ -970,6 +1176,8 @@ def build_ui(self, state):
     
     lte_bws = [("1.4 MHz (6 RB)", 1.4), ("3 MHz (15 RB)", 3), ("5 MHz (25 RB)", 5),
                ("10 MHz (50 RB)", 10), ("15 MHz (75 RB)", 15), ("20 MHz (100 RB)", 20)]
+    lte_sample_rates = {1.4: 1.92e6, 3: 3.84e6, 5: 7.68e6,
+                        10: 15.36e6, 15: 23.04e6, 20: 30.72e6}
     
     self.lte_bw_actions = []
     for label, bw in lte_bws:
@@ -987,6 +1195,13 @@ def build_ui(self, state):
         action_ul.triggered.connect(lambda checked, b=bw: self.set_lte_uplink_mode(b))
         self.demod_group.addAction(action_ul)
         self.lte_uplink_menu.addAction(action_ul)
+
+        try:
+            self.radio.validate_sample_rate(lte_sample_rates[bw])
+        except ValueError as exc:
+            for action in (action_dl, action_ul):
+                action.setEnabled(False)
+                action.setToolTip(str(exc))
         
     self.lte_menu.addMenu(self.lte_downlink_menu)
     self.lte_menu.addMenu(self.lte_uplink_menu)
@@ -1136,6 +1351,7 @@ def build_ui(self, state):
     self.easter_egg_label = QLabel(self)
     self.easter_egg_movie = QMovie(os.path.join(os.path.dirname(__file__), "easteregg.gif"))
     self.easter_egg_label.setMovie(self.easter_egg_movie)
+    self.easter_egg_movie.jumpToFrame(0)
     self.easter_egg_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     self.easter_egg_label.setStyleSheet("background-color: transparent;")
     self.easter_egg_label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1157,6 +1373,15 @@ def build_ui(self, state):
     line.setFrameShadow(QFrame.Shadow.Sunken)
     line.setStyleSheet("background-color: #555;")
     controls_layout.addWidget(line)
+
+    self.lora_config_label = QLabel()
+    self.lora_config_label.setTextFormat(Qt.TextFormat.RichText)
+    self.lora_config_label.setStyleSheet(
+        'background-color: #1e1e1e; padding: 10px; border-radius: 4px; '
+        'border: 1px solid #444; margin-top: 10px;'
+    )
+    self.lora_config_label.hide()
+    controls_layout.addWidget(self.lora_config_label)
 
     # --- SECCIÓN ESPECTROGRAMA ---
     self.waterfall_label = QLabel("ESPECTROGRAMA")
@@ -1322,4 +1547,3 @@ def build_ui(self, state):
     central_widget = QWidget()
     central_widget.setLayout(main_layout)
     self.setCentralWidget(central_widget)
-
