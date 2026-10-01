@@ -219,7 +219,15 @@ class StartupWindow(QMainWindow):
     def on_device_initialized(self, radio_handler):
         self.dot_timer.stop()
         if radio_handler:
-            self.main_app_window = MainWindow(radio_handler)
+            try:
+                self.main_app_window = MainWindow(radio_handler)
+            except Exception as exc:
+                try:
+                    radio_handler.close()
+                except Exception as close_exc:
+                    print(f"Error al liberar la SDR tras fallar el inicio: {close_exc}")
+                self.on_device_error(str(exc))
+                return
             self.main_app_window.show()
             self.close()
         else:

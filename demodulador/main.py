@@ -4,6 +4,7 @@ import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.exporters
 import datetime
+import logging
 import pyqtgraph as pg
 
 # --- MONKEYPATCH PYQTGRAPH GRIDS ---
@@ -56,6 +57,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
 from hardware.hackrf_handler import HackRFHandler
+from hardware.stream_transition import receiver_transition
 from hardware.rtlsdr_handler import RtlSdrHandler
 from hardware.nuand_bladerf_handler import BladeRFHandler
 from hardware.ettus_usrpb200_handler import USRPB200Handler
@@ -68,6 +70,7 @@ from dsp.demoduladores.lte_downlink import DemoduladorLTEDownlink
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
 from dsp.demoduladores.btle import DemoduladorBTLE
 from dsp.demoduladores.lora import DemoduladorLoRa
+from dsp.stream_reset import reset_demodulator_stream
 # Managers
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
@@ -146,8 +149,10 @@ class MainWindow(QMainWindow):
 
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
-            if isinstance(self.demodulador_actual, DemoduladorLoRa):
-                self.demodulador_actual.reset_stream()
+            if self.demodulador_actual is not None:
+                self.demodulador_actual = reset_demodulator_stream(
+                    self.demodulador_actual
+                )
             return
             
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
@@ -256,6 +261,7 @@ class MainWindow(QMainWindow):
 
     # ==========================================
 
+    @receiver_transition
     def set_wbfm_mode(self):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -322,6 +328,7 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     
+    @receiver_transition
     def set_btle_mode(self, bw_mhz=1):
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
@@ -402,6 +409,7 @@ class MainWindow(QMainWindow):
         
         self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
 
+    @receiver_transition
     def set_wifi_ag_mode(self):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -480,6 +488,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
         self.freq_plot.show()
 
+    @receiver_transition
     def set_lte_mode(self, bw_mhz=5):
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
@@ -494,6 +503,7 @@ class MainWindow(QMainWindow):
             20:  (30.72e6, 2048),
         }
         sample_rate, fft_size = bw_to_config.get(bw_mhz, (7.68e6, 512))
+        self.radio.validate_sample_rate(sample_rate)
         
         # Insertamos el espectro en el stack del cuadrante 1 (reemplazando el widget temporal si existe)
         current_w = self.lte_q1_stack.widget(0)
@@ -646,6 +656,7 @@ class MainWindow(QMainWindow):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.lte_frame_summary.setItem(row, col + 1, item)
 
+    @receiver_transition
     def set_lte_uplink_mode(self, bw_mhz=5):
         self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
@@ -702,6 +713,7 @@ class MainWindow(QMainWindow):
             20:  (30.72e6, 2048, 100),
         }
         sample_rate, fft_size, rb_count = bw_to_config.get(bw_mhz, (7.68e6, 512, 25))
+        self.radio.validate_sample_rate(sample_rate)
         
         current_w = self.lte_q1_stack.widget(0)
         if current_w != self.freq_plot:
@@ -816,6 +828,7 @@ class MainWindow(QMainWindow):
         # (El sniffer ahora notifica directamente a través del diccionario de resultados
         # en procesar_muestras_iq, por lo que ya no usamos un QTimer para hacer polling)
         
+    @receiver_transition
     def _force_switch_to_ul(self):
         if hasattr(self, '_ul_sniff_timer'):
             self._ul_sniff_timer.stop()
@@ -838,6 +851,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'update_x_axis'):
                 self.update_x_axis()
 
+    @receiver_transition
     def set_wbfm_audio_mode(self):
         self.set_wbfm_mode() 
         self.audio_container.show()
@@ -964,6 +978,7 @@ class MainWindow(QMainWindow):
             )
         self._refresh_lora_stage_overlays()
 
+    @receiver_transition
     def set_lora_mode(self, bw_khz, sf):
         if bw_khz not in (125, 250, 500):
             raise ValueError(f"Ancho de banda LoRa no soportado: {bw_khz} kHz")
@@ -1024,6 +1039,7 @@ class MainWindow(QMainWindow):
         )
         self.lora_config_label.show()
 
+    @receiver_transition
     def set_normal_mode(self):
         if isinstance(self.demodulador_actual, DemoduladorLoRa):
             self.demodulador_actual.close()
@@ -1105,10 +1121,31 @@ class MainWindow(QMainWindow):
         self.update_x_axis()
 
     def on_freq_changed(self, val):
-        state['center_freq'] = val * self.current_freq_multiplier
-        self.radio.set_freq(state['center_freq'])
-        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+        center_freq = val * self.current_freq_multiplier
+        if isinstance(self.radio, HackRFHandler):
+            try:
+                self.radio.validate_frequency(center_freq)
+            except ValueError as exc:
+                self.statusBar().showMessage(str(exc), 5000)
+                return
+        try:
+            self._apply_freq_change(center_freq)
+        except Exception as exc:
+            logging.exception("No se pudo sintonizar la SDR")
+            self.statusBar().showMessage(f"Error al sintonizar: {exc}", 0)
+            self.freq_input.blockSignals(True)
+            self.freq_input.setValue(state['center_freq'] / self.current_freq_multiplier)
+            self.freq_input.blockSignals(False)
+
+    @receiver_transition
+    def _apply_freq_change(self, center_freq):
+        self.radio.set_freq(center_freq)
+        state['center_freq'] = center_freq
+        if not isinstance(self.radio, HackRFHandler) and isinstance(
+            self.demodulador_actual, DemoduladorLoRa
+        ):
             self.demodulador_actual.reset_stream()
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
             self._clear_lora_plots()
         self.trace_manager.reset()
         if hasattr(self, '_btle_power_stats'):
@@ -1117,14 +1154,32 @@ class MainWindow(QMainWindow):
 
     def on_sr_changed(self, text):
         if not text: return
-        
+        val_mhz = float(text.replace(" MHz", ""))
+        try:
+            self.radio.validate_sample_rate(val_mhz * 1e6)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        previous_rate = state['sample_rate']
+        try:
+            self._apply_sample_rate_change(text, val_mhz * 1e6)
+        except Exception as exc:
+            logging.exception("No se pudo cambiar la tasa de muestreo")
+            self.statusBar().showMessage(f"Error al cambiar la tasa: {exc}", 0)
+            if state['sample_rate'] == previous_rate:
+                previous_text = getattr(
+                    self, 'sa_sample_rate_text', f"{previous_rate / 1e6:g} MHz"
+                )
+                self.sr_combo.blockSignals(True)
+                self.sr_combo.setCurrentText(previous_text)
+                self.sr_combo.blockSignals(False)
+
+    @receiver_transition
+    def _apply_sample_rate_change(self, text, sample_rate):
+        self.radio.set_sample_rate(sample_rate)
+        state['sample_rate'] = sample_rate
         if state.get('demod_mode', 'none') == 'none':
             self.sa_sample_rate_text = text
-            
-        val_mhz = float(text.replace(" MHz", ""))
-        state['sample_rate'] = val_mhz * 1e6
-        
-        self.radio.set_sample_rate(state['sample_rate'])
         
         # Si hay un plugin activo, le avisamos que cambió el sample rate
         if self.demodulador_actual is not None:

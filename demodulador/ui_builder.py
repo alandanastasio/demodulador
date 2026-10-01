@@ -1176,6 +1176,8 @@ def build_ui(self, state):
     
     lte_bws = [("1.4 MHz (6 RB)", 1.4), ("3 MHz (15 RB)", 3), ("5 MHz (25 RB)", 5),
                ("10 MHz (50 RB)", 10), ("15 MHz (75 RB)", 15), ("20 MHz (100 RB)", 20)]
+    lte_sample_rates = {1.4: 1.92e6, 3: 3.84e6, 5: 7.68e6,
+                        10: 15.36e6, 15: 23.04e6, 20: 30.72e6}
     
     self.lte_bw_actions = []
     for label, bw in lte_bws:
@@ -1193,6 +1195,13 @@ def build_ui(self, state):
         action_ul.triggered.connect(lambda checked, b=bw: self.set_lte_uplink_mode(b))
         self.demod_group.addAction(action_ul)
         self.lte_uplink_menu.addAction(action_ul)
+
+        try:
+            self.radio.validate_sample_rate(lte_sample_rates[bw])
+        except ValueError as exc:
+            for action in (action_dl, action_ul):
+                action.setEnabled(False)
+                action.setToolTip(str(exc))
         
     self.lte_menu.addMenu(self.lte_downlink_menu)
     self.lte_menu.addMenu(self.lte_uplink_menu)

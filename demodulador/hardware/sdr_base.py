@@ -3,13 +3,17 @@ from typing import Callable
 import numpy as np
 
 class SDRBase(ABC):
-    def __init__(self, rx_callback: Callable[[np.ndarray], None]):
+    def __init__(self, rx_callback: Callable[[np.ndarray | None], None] | None):
         """
         rx_callback es la función a la que la radio le va a "escupir" 
-        los chunks de datos IQ limpios (en formato np.complex128).
+        los chunks IQ. None marca una discontinuidad y exige descartar
+        cualquier estado de muestras anterior.
         """
         self.rx_callback = rx_callback
         self.is_running = False
+
+    def validate_sample_rate(self, sr_hz: float):
+        """Permite que cada SDR rechace una tasa antes de alterar el flujo."""
 
     @property
     @abstractmethod
