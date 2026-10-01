@@ -133,6 +133,21 @@ def pilot_polarities(n_symbols):
         reg = [bit] + reg[:-1]
     return sequence
 
+
+def channel_equalizer(H, active_bins):
+    """Devuelve ganancias finitas aun si alguna subportadora está en un nulo."""
+    channel = H[active_bins]
+    power = np.abs(channel) ** 2
+    if not np.all(np.isfinite(power)):
+        return None, None
+    typical_power = np.median(power)
+    if typical_power <= 1e-12:
+        return None, None
+    power_floor = typical_power * 1e-6
+    weights = np.zeros_like(H)
+    weights[active_bins] = np.conj(channel) / (power + power_floor)
+    return weights, power_floor
+
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 20e6 
@@ -356,8 +371,8 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             cfo_hz = cfo_rad * self.sample_rate / (2 * np.pi)
                             wifi_metrics['cfo'] = cfo_hz
 
-                            # Validar que tengamos al menos las muestras del STS (160)
-                            if len(frame) < 160:
+                            # El SIGNAL termina en la muestra 400 del paquete.
+                            if len(frame) < 400:
                                 continue
 
                             # Correccion del CFO en el frame completo
@@ -375,11 +390,15 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             P_senal = np.mean(np.abs(s_ref) ** 2)
                             P_ruido  = np.mean(np.abs(ruido) ** 2)
 
-                            snr_lineal = P_senal / P_ruido
+                            if not np.isfinite(P_senal) or P_senal <= 0 or not np.isfinite(P_ruido):
+                                continue
+                            snr_lineal = P_senal / max(P_ruido, P_senal * 1e-12)
                             snr_db     = 10 * np.log10(snr_lineal)
                             wifi_metrics['snr'] = snr_db
 
                             P_frame = np.mean(np.abs(frame_corr) ** 2)
+                            if not np.isfinite(P_frame) or P_frame <= 0:
+                                continue
                             gain_agc = 1.0 / np.sqrt(P_frame)
                             frame_norm = frame_corr * gain_agc
 
@@ -438,6 +457,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             LTS_rx  = (LTS1_rx + LTS2_rx) / 2
                             H = np.zeros(N_LTS, dtype=complex)
                             H[activas_lts] = LTS_rx[activas_lts] / LTS_FREQ[activas_lts]
+                            equalizer, channel_power_floor = channel_equalizer(H, activas_lts)
+                            if equalizer is None:
+                                continue
 
                             # Demodulacion del campo SIGNAL
                             # Ubicacion: justo despues de STS + GI2 + 2*LTS
@@ -450,7 +472,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             # FFT y ecualizacion
                             S = np.fft.fft(signal_sym, N_FFT)
                             S_eq = np.zeros(N_FFT, dtype=complex)
-                            S_eq[activas_lts] = S[activas_lts] / H[activas_lts]
+                            S_eq[activas_lts] = S[activas_lts] * equalizer[activas_lts]
 
                             data_idx  = list(range(38, 64)) + list(range(1, 27))
                             pilot_idx = [43, 57, 7, 21]
@@ -574,11 +596,11 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 S_eq = S.copy()
 
                                 # Ecualizar datos
-                                S_eq[data_idx] = S[data_idx] / H[data_idx]
+                                S_eq[data_idx] = S[data_idx] * equalizer[data_idx]
 
                                 # Estimar fase residual con los pilotos
                                 pn_k = pn[k + 1]  # SIGNAL ocupa el símbolo 0
-                                pilots_rx  = S[pilot_idx_ordered] / H[pilot_idx_ordered]
+                                pilots_rx = S[pilot_idx_ordered] * equalizer[pilot_idx_ordered]
                                 pilots_exp = pilot_ref * pn_k
                                 rot = pilots_rx * np.conj(pilots_exp)
                                 fase_residual = np.angle(np.mean(rot))
@@ -598,7 +620,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
                             # --- CÁLCULO DE EVM ---
                             H_datos = H[data_idx]
-                            mask_validas = np.abs(H_datos) > 1e-6
+                            mask_validas = np.abs(H_datos) ** 2 > channel_power_floor
                             
                             NIVELES_MODULACION = {
                                 'BPSK':   np.array([-1, 1]),

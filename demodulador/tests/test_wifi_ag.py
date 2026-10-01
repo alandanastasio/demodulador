@@ -2,6 +2,7 @@
 
 import threading
 import time
+import warnings
 
 import numpy as np
 
@@ -26,6 +27,35 @@ def test_pilot_polarities_match_80211_ag_and_repeat_after_127_symbols():
     )
     assert polarities[127] == polarities[0]
     assert polarities[1] == 1  # Primer símbolo DATA, después de SIGNAL.
+
+
+def test_channel_equalizer_rejects_invalid_lts_and_handles_a_notched_tone():
+    active = np.r_[1:27, 38:64]
+    channel = np.zeros(64, dtype=complex)
+    assert wifi_ag.channel_equalizer(channel, active) == (None, None)
+
+    channel[active] = 2 + 1j
+    channel[7] = 0
+    weights, floor = wifi_ag.channel_equalizer(channel, active)
+    assert floor > 0
+    assert np.all(np.isfinite(weights))
+    assert weights[7] == 0
+    np.testing.assert_allclose(channel[8] * weights[8], 1, rtol=2e-6)
+
+
+def test_false_preamble_with_zero_lts_does_not_divide_by_zero():
+    demod = wifi_ag.DemoduladorWiFiAG()
+    demod.configurar(20e6, 4096)
+    iq = np.zeros(65_536, dtype=np.complex64)
+    iq[500:6500] = 1
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always', RuntimeWarning)
+        demod._procesar_fondo(iq)
+
+    assert not [warning for warning in caught if issubclass(warning.category, RuntimeWarning)]
+    assert demod.ultimo_wifi_metrics == {}
+    assert len(demod.last_heavy_results['psd_rf']) == 4096
 
 
 def test_single_first_burst_is_sent_to_preamble_detector(monkeypatch):
