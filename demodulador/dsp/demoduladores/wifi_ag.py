@@ -10,25 +10,64 @@ from .base import DemoduladorBase
 _SC_N = 16   # Desplazamiento de la correlación S&C (mitad del STS period = 16 muestras)
 _SC_W = 16   # Ventana de integración S&C
 
+# Secuencia larga de entrenamiento 802.11a/g, en orden de bins FFT.
+LTS_FREQ = np.array([
+     0,  1, -1, -1,  1,  1, -1,  1, -1,  1, -1, -1, -1, -1, -1,  1,
+     1, -1, -1,  1, -1,  1, -1,  1,  1,  1,  1,  0,  0,  0,  0,  0,
+     0,  0,  0,  0,  0,  0,  1,  1, -1, -1,  1,  1, -1,  1, -1,  1,
+     1,  1,  1,  1,  1, -1, -1,  1,  1, -1,  1, -1,  1,  1,  1,  1,
+], dtype=np.complex128)
+LTS_TIME = np.fft.ifft(LTS_FREQ)
+
+
+def find_lts_start(segment, cfo_hz, sample_rate, plateau_start, plateau_end):
+    """Ubica el primer LTS correlacionando los dos LTS consecutivos.
+
+    Los bordes STS sólo delimitan la búsqueda; el máximo LTS fija el tiempo.
+    Devuelve el índice del primer LTS dentro de ``segment`` o None.
+    """
+    # Un STS ocupa 160 muestras y GI2 otras 32. La meseta S&C suele
+    # terminar ~30 muestras antes del final del STS.
+    lo = max(0, plateau_start + 135, plateau_end + 20)
+    hi = min(len(segment) - 128, plateau_end + 120)
+    if hi < lo:
+        return None
+
+    search_end = hi + 128
+    t = np.arange(search_end) / sample_rate
+    corrected = segment[:search_end] * np.exp(-2j * np.pi * cfo_hz * t)
+    corr = np.abs(np.correlate(corrected, LTS_TIME, mode='valid')) ** 2
+    energy = np.convolve(np.abs(corrected) ** 2, np.ones(64), mode='valid')
+    ref_energy = np.vdot(LTS_TIME, LTS_TIME).real
+    quality = corr / np.maximum(energy * ref_energy, 1e-20)
+    pair_quality = np.minimum(quality[lo:hi + 1], quality[lo + 64:hi + 65])
+    best = int(np.argmax(pair_quality))
+    if pair_quality[best] < 0.15:
+        return None
+    return lo + best
+
 # --- SCHMIDL & COX ---
 def schmidl_cox_metric(iq_signal, N=_SC_N, W=_SC_W):
     L = len(iq_signal)
     
     # 1. Productos cruzados y energía (directamente sobre la señal cruda)
     prod = np.conj(iq_signal[:-N]) * iq_signal[N:]
-    energy = np.abs(iq_signal[N:]) ** 2
+    energy_before = np.abs(iq_signal[:-N]) ** 2
+    energy_after = np.abs(iq_signal[N:]) ** 2
     
     # 2. Integración
     ventana = np.ones(W)
     P = np.convolve(prod, ventana, mode='valid')
-    R = np.convolve(energy, ventana, mode='valid')
+    R_before = np.convolve(energy_before, ventana, mode='valid')
+    R = np.convolve(energy_after, ventana, mode='valid')
     
     # 3. Recorte
     P = P[:L - 2 * N]
+    R_before = R_before[:L - 2 * N]
     R = R[:L - 2 * N]
     
     # 4. Métrica final
-    M = np.abs(P) ** 2 / (R ** 2 + 1e-10)
+    M = np.abs(P) ** 2 / np.maximum(R_before * R, 1e-20)
     
     return M, P, R
 
@@ -147,6 +186,55 @@ def channel_equalizer(H, active_bins):
     weights = np.zeros_like(H)
     weights[active_bins] = np.conj(channel) / (power + power_floor)
     return weights, power_floor
+
+
+def calculate_evm(data_rx, pilots_rx, pilots_ref, modulation, data_bins,
+                  pilot_bins, valid_data, valid_pilots):
+    """EVM de símbolos OFDM completos, referida a potencia ideal unitaria.
+
+    Es una estimación por decisiones duras, no una medición de conformidad:
+    una decisión errónea puede subestimar el error real.
+    """
+    levels_by_mod = {
+        'BPSK': np.array([-1, 1]),
+        'QPSK': np.array([-1, 1]),
+        '16-QAM': np.array([-3, -1, 1, 3]),
+        '64-QAM': np.array([-7, -5, -3, -1, 1, 3, 5, 7]),
+    }
+    if modulation not in levels_by_mod or not np.any(valid_data):
+        return None
+    base = levels_by_mod[modulation]
+    power = np.mean(base ** 2) * (1 if modulation == 'BPSK' else 2)
+    levels = base / np.sqrt(power)
+    received = data_rx[:, valid_data]
+    ideal_i = levels[np.argmin(np.abs(received.real[..., None] - levels), axis=-1)]
+    if modulation == 'BPSK':
+        ideal_q = 0
+    else:
+        ideal_q = levels[np.argmin(np.abs(received.imag[..., None] - levels), axis=-1)]
+    ideal = ideal_i + 1j * ideal_q
+
+    # Las constelaciones 802.11 tienen potencia nominal 1 (los pilotos ±1).
+    # Escalar con la potencia recibida reduciría artificialmente el EVM con ruido.
+    data_error = np.abs(received - ideal)
+    pilot_error = np.abs(pilots_rx[:, valid_pilots] - pilots_ref[:, valid_pilots])
+    all_error = np.concatenate((data_error, pilot_error), axis=1)
+    if not np.all(np.isfinite(all_error)):
+        return None
+
+    to_db = lambda error: 20 * np.log10(np.maximum(error, 1e-10))
+    subc_rms = np.sqrt(np.mean(all_error ** 2, axis=0))
+    subc_peak = np.max(all_error, axis=0)
+    bins = np.r_[np.asarray(data_bins)[valid_data], np.asarray(pilot_bins)[valid_pilots]]
+    signed_bins = np.where(bins < 32, bins, bins - 64)
+    order = np.argsort(signed_bins)
+    return {
+        'subc_x': signed_bins[order],
+        'subc_rms': to_db(subc_rms[order]),
+        'subc_peak': to_db(subc_peak[order]),
+        'sym_rms': to_db(np.sqrt(np.mean(all_error ** 2, axis=1))),
+        'sym_peak': to_db(np.max(all_error, axis=1)),
+    }
 
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
@@ -313,7 +401,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     inicio_recorte = max(0, ini - margen_muestras)
                     fin_recorte = min(len(energia_norm), fin + margen_muestras)
                     chunk_norm = energia_norm[inicio_recorte:fin_recorte]
-                    ini_ext = max(0, ini - int(0.5e-6 * self.sample_rate))
+                    ini_ext = max(0, ini - int(4e-6 * self.sample_rate))
                     segmento = bloque_iq[ini_ext:fin]
                     
                     if len(segmento) < (_SC_N + _SC_W):
@@ -323,52 +411,39 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     M, P, R = schmidl_cox_metric(segmento)
                     if len(M) == 0:
                         continue
-                    pico_metrica = np.max(M)
-                    if pico_metrica <= 0:
+                    max_energy = np.max(R)
+                    if max_energy <= 0:
                         continue
-                    M_norm = M / pico_metrica
+                    # La forma simétrica está acotada por 1; en silencio un
+                    # pico de correlación aleatorio no debe fijar la escala.
+                    M_norm = np.where(R > 0.1 * max_energy, M, 0)
 
-                    # Buscamos el primer índice donde la correlación normalizada supera 0.7
-                    indices_sts = np.where(M_norm > 0.7)[0]
-                    
-                    # Validación de Meseta (Plateau Check): 
-                    # El STS real dura ~160 muestras, la correlación debe mantenerse alta. 
-                    if len(indices_sts) > 32:
-                        # --- DETECTOR DE CAÍDA DE MESETA (Al estilo del max_counter de VHDL) ---
-                        # En vez de usar la subida de la meseta (que depende de transitorios),
-                        # buscamos exactamente dónde se termina la meseta (el falling edge).
-                        saltos = np.where(np.diff(indices_sts) > 1)[0]
-                        if len(saltos) > 0:
-                            fin_meseta = indices_sts[saltos[0]]
-                        else:
-                            fin_meseta = indices_sts[-1]
-                            
-                        # La métrica empieza a caer teóricamente en la muestra 128 del STS, 
-                        # y cruza el 0.7 aproximadamente en la muestra 132.
-                        # Retrocedemos 132 muestras para encontrar el inicio exacto del STS.
-                        muestra_local = fin_meseta - 132
-                        
-                        if muestra_local < 0:
-                            muestra_local = indices_sts[0] # Fallback por si el bloque se recortó muy justo
-                        muestra_abs = ini_ext + muestra_local
+                    # Una meseta STS debe ser continua; picos aislados de ruido
+                    # no constituyen un preámbulo. La posición fina sale del LTS.
+                    indices_sts = np.flatnonzero(M_norm > 0.7)
+                    runs = np.split(indices_sts, np.flatnonzero(np.diff(indices_sts) > 1) + 1)
+                    runs = [run for run in runs if len(run) >= 32]
+                    if runs:
+                        plateau = max(runs, key=len)
+                        cfo_rad = np.angle(np.mean(P[plateau])) / _SC_N
+                        cfo_hz = cfo_rad * self.sample_rate / (2 * np.pi)
+                        lts_local = find_lts_start(
+                            segmento, cfo_hz, self.sample_rate,
+                            int(plateau[0]), int(plateau[-1]),
+                        )
+                        if lts_local is None or lts_local < 192:
+                            continue
+                        muestra_abs = ini_ext + lts_local - 192
                         
                         margen_visual = 150
                         inicio_visual = max(0, muestra_abs - margen_visual)
                         
-                        if inicio_visual + fs <= len(bloque_iq):
+                        if fin - muestra_abs >= 400:
                             chunk_trigger = bloque_iq[inicio_visual : inicio_visual + fs].copy()
-                            frame = bloque_iq[muestra_abs : fin]
-
-                            # CFO estimation using STS
-                            # La STS tiene 10 simbolos cortos de N=16 muestras
-                            # El angulo de P(d) en la meseta es proporcional al CFO
-
-                            # Tomar P en la zona de la meseta (donde M_norm > umbral)
-                            P_meseta = P[indices_sts]
-                            # CFO normalizado (en radianes por muestra)
-                            cfo_rad = np.angle(np.mean(P_meseta)) / _SC_N
-
-                            cfo_hz = cfo_rad * self.sample_rate / (2 * np.pi)
+                            # El umbral de energía puede caer dentro del último
+                            # símbolo OFDM; conservar un margen para completarlo.
+                            frame_end = min(len(bloque_iq), fin + 80)
+                            frame = bloque_iq[muestra_abs : frame_end]
                             wifi_metrics['cfo'] = cfo_hz
 
                             # El SIGNAL termina en la muestra 400 del paquete.
@@ -407,22 +482,6 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             if len(frame_norm) >= 400:
                                 envolvente_preambulo = np.abs(frame_norm[:400])
                             
-                            # LTS correcto según IEEE 802.11-2007, Ecuación (17-3)
-                            # Orden de bins FFT: bin 0=DC, bin 1=+1, ..., bin 26=+26,
-                            # bins 27-37=guard, bin 38=-26, ..., bin 63=-1
-                            LTS_FREQ = np.array([
-                            #    DC   +1   +2   +3   +4   +5   +6   +7   +8   +9  +10  +11  +12  +13  +14  +15
-                                 0,   1,  -1,  -1,   1,   1,  -1,   1,  -1,   1,  -1,  -1,  -1,  -1,  -1,   1,
-                            #  +16  +17  +18  +19  +20  +21  +22  +23  +24  +25  +26  guard...
-                                 1,  -1,  -1,   1,  -1,   1,  -1,   1,   1,   1,   1,   0,   0,   0,   0,   0,
-                            #  guard...                                            -26  -25  -24  -23  -22  -21
-                                 0,   0,   0,   0,   0,   0,   1,   1,  -1,  -1,   1,   1,
-                            #  -20  -19  -18  -17  -16  -15  -14  -13  -12  -11  -10   -9   -8   -7   -6   -5
-                                -1,   1,  -1,   1,   1,   1,   1,   1,   1,  -1,  -1,   1,   1,  -1,   1,  -1,
-                            #   -4   -3   -2   -1
-                                 1,   1,   1,   1
-                            ], dtype=complex)
-
                             # Extraer el LTS del frame normalizado
                             N_STS = 10 * 16
                             N_GI2 = 32
@@ -571,9 +630,11 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             muestras_disponibles = len(frame_norm) - inicio_datos
                             N_simbolos_max = muestras_disponibles // (N_CP + N_FFT)
                             
-                            N_simbolos = min(N_simbolos_exacto, N_simbolos_max)
-                            if N_simbolos < 1:
+                            # Un burst truncado no debe publicarse como una
+                            # medición EVM de la trama completa.
+                            if N_simbolos_max < N_simbolos_exacto:
                                 continue
+                            N_simbolos = N_simbolos_exacto
 
                             # Correccion de fase simbolo a simbolo usando pilotos
                             # Pilotos en indices FFT: 7, 21, 43, 57 (+7, +21, -21, -7)
@@ -585,6 +646,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             pilot_ref = np.array([1, -1, 1, 1])  # subportadoras +7,+21,-21,-7
 
                             pilot_idx_ordered = [7, 21, 43, 57]  # orden en FFT
+                            valid_pilots = np.abs(H[pilot_idx_ordered]) ** 2 > channel_power_floor
+                            if not np.any(valid_pilots):
+                                continue
 
                             constelacion_corr = []
                             pilots_corr = []
@@ -603,7 +667,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 pilots_rx = S[pilot_idx_ordered] * equalizer[pilot_idx_ordered]
                                 pilots_exp = pilot_ref * pn_k
                                 rot = pilots_rx * np.conj(pilots_exp)
-                                fase_residual = np.angle(np.mean(rot))
+                                fase_residual = np.angle(np.mean(rot[valid_pilots]))
 
                                 # Corregir fase en las subportadoras de datos y pilotos
                                 S_eq[data_idx] *= np.exp(-1j * fase_residual)
@@ -619,85 +683,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             pilots_ideales = np.array(pilots_ideales)
 
                             # --- CÁLCULO DE EVM ---
-                            H_datos = H[data_idx]
-                            mask_validas = np.abs(H_datos) ** 2 > channel_power_floor
-                            
-                            NIVELES_MODULACION = {
-                                'BPSK':   np.array([-1, 1]),
-                                'QPSK':   np.array([-1, 1]),
-                                '16-QAM': np.array([-3, -1, 1, 3]),
-                                '64-QAM': np.array([-7, -5, -3, -1, 1, 3, 5, 7])
-                            }
-                            
-                            niveles_base = NIVELES_MODULACION.get(mod, np.array([-1, 1]))
-                            multiplicador_2d = 1 if mod == 'BPSK' else 2
-                            P_teorica = np.mean(niveles_base**2) * multiplicador_2d
-                            
-                            puntos_validos = constelacion_corr[:, mask_validas]
-                            
-                            if len(puntos_validos) > 0:
-                                P_rx = np.mean(np.abs(puntos_validos)**2)
-                                escala = np.sqrt(P_rx / P_teorica)
-                                niveles_norm = niveles_base * escala
-                                
-                                def decisor_gen(puntos_1d, niveles, es_bpsk):
-                                    I_dec = niveles[np.argmin(np.abs(puntos_1d.real[:,None] - niveles), axis=1)]
-                                    if es_bpsk:
-                                        Q_dec = np.zeros_like(I_dec)
-                                    else:
-                                        Q_dec = niveles[np.argmin(np.abs(puntos_1d.imag[:,None] - niveles), axis=1)]
-                                    return I_dec + 1j * Q_dec
-
-                                ideales_matrix = np.zeros_like(puntos_validos)
-                                for k in range(N_simbolos):
-                                    ideales_matrix[k] = decisor_gen(puntos_validos[k], niveles_norm, mod == 'BPSK')
-                                    
-                                P_ref = np.mean(np.abs(ideales_matrix)**2)
-                                if P_ref == 0: P_ref = 1e-10
-                                
-                                evm_matrix_pct = np.abs(puntos_validos - ideales_matrix) / np.sqrt(P_ref) * 100
-                                evm_pilots_pct = np.abs(pilots_corr - pilots_ideales) / np.sqrt(P_ref) * 100
-                                
-                                # Combinar datos y pilotos para EVM global (por símbolo)
-                                evm_all_pct = np.concatenate((evm_matrix_pct, evm_pilots_pct), axis=1)
-                                
-                                # Por simbolo
-                                evm_rms_sym  = np.sqrt(np.mean(evm_all_pct**2, axis=1))
-                                evm_peak_sym = np.max(evm_all_pct, axis=1)
-                                
-                                # Por portadora (datos y pilotos)
-                                evm_rms_subc_data = np.sqrt(np.mean(evm_matrix_pct**2, axis=0))
-                                evm_peak_subc_data = np.max(evm_matrix_pct, axis=0)
-                                evm_rms_subc_pilots = np.sqrt(np.mean(evm_pilots_pct**2, axis=0))
-                                evm_peak_subc_pilots = np.max(evm_pilots_pct, axis=0)
-                                
-                                evm_rms_subc = np.concatenate((evm_rms_subc_data, evm_rms_subc_pilots))
-                                evm_peak_subc = np.concatenate((evm_peak_subc_data, evm_peak_subc_pilots))
-                                
-                                def to_db(pct): return 20 * np.log10(np.maximum(pct, 1e-10) / 100)
-                                
-                                evm_rms_sym_db = to_db(evm_rms_sym)
-                                evm_peak_sym_db = to_db(evm_peak_sym)
-                                
-                                # Reordenar subportadoras de -26 a +26
-                                data_idx_validos = np.array(data_idx)[mask_validas]
-                                # Concatenar indices de datos y pilotos
-                                all_idx_validos = np.concatenate((data_idx_validos, pilot_idx_ordered))
-                                subp_num = np.where(all_idx_validos < 32, all_idx_validos, all_idx_validos - 64)
-                                orden = np.argsort(subp_num)
-                                
-                                evm_rms_subc_db = to_db(evm_rms_subc[orden])
-                                evm_peak_subc_db = to_db(evm_peak_subc[orden])
-                                subp_ordenadas = subp_num[orden]
-                                
-                                evm_data = {
-                                    'subc_x': subp_ordenadas,
-                                    'subc_rms': evm_rms_subc_db,
-                                    'subc_peak': evm_peak_subc_db,
-                                    'sym_rms': evm_rms_sym_db,
-                                    'sym_peak': evm_peak_sym_db
-                                }
-                                
+                            valid_data = np.abs(H[data_idx]) ** 2 > channel_power_floor
+                            evm_data = calculate_evm(
+                                constelacion_corr, pilots_corr, pilots_ideales, mod,
+                                data_idx, pilot_idx_ordered, valid_data, valid_pilots,
+                            )
+                            if evm_data is not None:
                                 with self._lock:
                                     if generation is None or generation == self._generation:
                                         self.ultimo_puntos_corr = puntos_corr
