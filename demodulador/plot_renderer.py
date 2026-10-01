@@ -398,11 +398,14 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     cfo = wifi.get('cfo', 0.0)
                     cfo_fino = wifi.get('cfo_fino', 0.0)
                     snr = wifi.get('snr', 0.0)
+                    dropped = fm_metrics.get('dropped_iq_blocks', 0)
+                    dropped_color = '#FF5555' if dropped else '#55FF55'
                     html_hw = (
                         f"<div style='line-height: 1.5;'>"
                         f"<span style='color: #FFFFFF'><b>CFO Grueso:</b></span> <span style='color: #FF5555;'>{cfo:+.1f} Hz</span><br>"
                         f"<span style='color: #FFFFFF'><b>CFO Fino:</b></span> <span style='color: #FF5555;'>{cfo_fino:+.1f} Hz</span><br>"
-                        f"<span style='color: #FFFFFF'><b>SNR:</b></span> <span style='color: #55FF55;'>{snr:.1f} dB</span>"
+                        f"<span style='color: #FFFFFF'><b>SNR:</b></span> <span style='color: #55FF55;'>{snr:.1f} dB</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Bloques IQ descartados por DSP:</b></span> <span style='color: {dropped_color};'>{dropped}</span>"
                         f"</div>"
                     )
                     self.wifi_hw_metrics_label.setText(html_hw)

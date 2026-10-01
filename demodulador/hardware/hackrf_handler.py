@@ -15,6 +15,12 @@ class HackRFHandler(SDRBase):
     MAX_SAMPLE_RATE = 20_000_000
     MIN_FREQUENCY = 1_000_000
     MAX_FREQUENCY = 6_000_000_000
+    VALID_FILTER_BANDWIDTHS = frozenset(
+        (1_750_000, 2_500_000, 3_500_000, 5_000_000, 5_500_000,
+         6_000_000, 7_000_000, 8_000_000, 9_000_000, 10_000_000,
+         12_000_000, 14_000_000, 15_000_000, 20_000_000, 24_000_000,
+         28_000_000)
+    )
 
     def __init__(self, rx_callback):
         super().__init__(rx_callback)
@@ -24,6 +30,7 @@ class HackRFHandler(SDRBase):
         self._has_started = False
         self._sample_rate = None
         self._baseband_bandwidth = None
+        self._bandwidth_override = None
         self._center_freq = None
         pyhackrf.pyhackrf_init()
         try:
@@ -161,22 +168,62 @@ class HackRFHandler(SDRBase):
             self._require_open()
             if sr_hz == self._sample_rate:
                 return
-            bandwidth = pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(
-                int(sr_hz * 0.75)
+            override = self._bandwidth_override
+            if override is not None and override > sr_hz:
+                override = None
+            bandwidth = override if override is not None else (
+                pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(
+                    int(sr_hz * 0.75)
+                )
             )
             previous_rate = self._sample_rate
             previous_bandwidth = self._baseband_bandwidth
+            previous_override = self._bandwidth_override
 
             def apply():
                 self.sdr.pyhackrf_set_sample_rate(sr_hz)
                 self.sdr.pyhackrf_set_baseband_filter_bandwidth(bandwidth)
                 self._sample_rate = sr_hz
                 self._baseband_bandwidth = bandwidth
+                self._bandwidth_override = override
 
             def restore():
                 if previous_rate is not None:
                     self.sdr.pyhackrf_set_sample_rate(previous_rate)
                     self.sdr.pyhackrf_set_baseband_filter_bandwidth(previous_bandwidth)
+                self._bandwidth_override = previous_override
+
+            self._reconfigure(apply, restore)
+
+    def set_baseband_filter_bandwidth(self, bandwidth_hz: int | None):
+        """Selecciona un filtro explícito o restaura el automático del handler."""
+        if bandwidth_hz is not None and bandwidth_hz not in self.VALID_FILTER_BANDWIDTHS:
+            raise ValueError("Ancho de filtro HackRF no admitido.")
+        with self._lock:
+            self._require_open()
+            if self._sample_rate is None:
+                if bandwidth_hz is None:
+                    return
+                raise RuntimeError("Configurá primero la tasa de muestreo de HackRF.")
+            if bandwidth_hz is not None and bandwidth_hz > self._sample_rate:
+                raise ValueError("El filtro HackRF no puede superar la tasa de muestreo.")
+            target = bandwidth_hz if bandwidth_hz is not None else (
+                pyhackrf.pyhackrf_compute_baseband_filter_bw_round_down_lt(
+                    int(self._sample_rate * 0.75)
+                )
+            )
+            if target == self._baseband_bandwidth:
+                self._bandwidth_override = bandwidth_hz
+                return
+            previous = self._baseband_bandwidth
+
+            def apply():
+                self.sdr.pyhackrf_set_baseband_filter_bandwidth(target)
+                self._baseband_bandwidth = target
+                self._bandwidth_override = bandwidth_hz
+
+            def restore():
+                self.sdr.pyhackrf_set_baseband_filter_bandwidth(previous)
 
             self._reconfigure(apply, restore)
 

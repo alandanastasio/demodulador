@@ -1,8 +1,10 @@
 import numpy as np
 import threading
-from scipy.ndimage import uniform_filter1d, binary_closing
-from .base import DemoduladorBase
+import logging
 import time
+from collections import deque
+from scipy.ndimage import uniform_filter1d, maximum_filter1d, minimum_filter1d
+from .base import DemoduladorBase
 
 # Constantes del preámbulo 802.11a/g (en muestras a 20 MHz)
 _SC_N = 16   # Desplazamiento de la correlación S&C (mitad del STS period = 16 muestras)
@@ -120,6 +122,17 @@ def deinterleave_signal(bits, NCBPS=48, NBPSC=1):
     
     return result
 
+
+def pilot_polarities(n_symbols):
+    """Polaridad de pilotos 802.11a/g, desde SIGNAL (símbolo 0)."""
+    reg = [1] * 7
+    sequence = np.empty(n_symbols, dtype=np.int8)
+    for n in range(n_symbols):
+        bit = reg[3] ^ reg[6]
+        sequence[n] = 1 - 2 * bit
+        reg = [bit] + reg[:-1]
+    return sequence
+
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
         self.sample_rate = 20e6 
@@ -130,8 +143,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
         self.last_heavy_results = {}
         self.nuevos_datos_listos = False
         self._lock = threading.Lock()  # Protege last_heavy_results y nuevos_datos_listos
-        self.pausa_entre_snapshots = 0.05
-        self.proxima_captura = 0.0
+        self._generation = 0
+        self._pending_blocks = deque(maxlen=32)
+        self._completed_results = deque(maxlen=8)
+        self._tail_iq = np.empty(0, dtype=np.complex64)
+        self.dropped_blocks = 0
+        self._next_display_at = 0.0
         self.ultimo_puntos_corr = None
         self.ultimo_wifi_metrics = {}
         self.ultimo_evm_data = None
@@ -150,10 +167,15 @@ class DemoduladorWiFiAG(DemoduladorBase):
         self.fft_size = fft_size
         self.buffer_medicion = []
         self.muestras_acumuladas = 0
-        self.is_processing = False
         # Descartamos cualquier resultado anterior para no mostrar datos de otra
         # configuración/sesión al arrancar.
         with self._lock:
+            self._generation += 1
+            self._pending_blocks.clear()
+            self._completed_results.clear()
+            self._tail_iq = np.empty(0, dtype=np.complex64)
+            self.dropped_blocks = 0
+            self._next_display_at = 0.0
             self.nuevos_datos_listos = False
             self.last_heavy_results = {}
             self.ultimo_puntos_corr = None
@@ -164,32 +186,56 @@ class DemoduladorWiFiAG(DemoduladorBase):
             self.ultimo_M_norm = None
 
     def procesar(self, muestras_iq):
-        if muestras_iq is None:
-            self.buffer_medicion = []
-            return None
         with self._lock:
-            if self.nuevos_datos_listos:
+            if muestras_iq is None:
+                self._generation += 1
+                self._pending_blocks.clear()
+                self._completed_results.clear()
+                self._tail_iq = np.empty(0, dtype=np.complex64)
                 self.nuevos_datos_listos = False
-                return self.last_heavy_results
+                self._next_display_at = 0.0
+                return None
 
-        ahora = time.time()
-        
-        # Si estamos procesando o en pausa, descartamos este súper-bloque entero
-        if self.is_processing or ahora < self.proxima_captura:
+            if len(muestras_iq):
+                current = np.asarray(muestras_iq).copy()
+                previous = self._tail_iq
+                tail_size = int(self.sample_rate * 0.004)
+                self._tail_iq = np.concatenate((previous, current))[-tail_size:].copy()
+                if len(self._pending_blocks) == self._pending_blocks.maxlen:
+                    self.dropped_blocks += 1
+                self._pending_blocks.append((previous, current, self._generation))
+                if not self.is_processing:
+                    self._start_next_locked()
+
+            if self._completed_results:
+                result = self._completed_results.popleft()
+                self.nuevos_datos_listos = bool(self._completed_results)
+                return result
             return None
 
-        # Si llegamos acá, muestras_iq YA ES el bloque de 4ms entero.
+    def _start_next_locked(self):
+        if not self._pending_blocks:
+            return
+        previous, current, generation = self._pending_blocks.popleft()
         self.is_processing = True
-
         threading.Thread(
-            target=self._procesar_fondo,
-            args=(muestras_iq.copy(),), # Le pasamos el paquete directo
-            daemon=True
+            target=self._process_queued_block,
+            args=(previous, current, generation),
+            daemon=True,
         ).start()
 
-        return None
+    def _process_queued_block(self, previous, current, generation):
+        try:
+            block = np.concatenate((previous, current))
+            self._procesar_fondo(block, len(previous), generation)
+        except Exception:
+            logging.exception("Error al procesar un bloque WiFi")
+        finally:
+            with self._lock:
+                self.is_processing = False
+                self._start_next_locked()
 
-    def _procesar_fondo(self, bloque_iq: np.ndarray):
+    def _procesar_fondo(self, bloque_iq: np.ndarray, min_new_end=0, generation=None):
         try:
             fs = self.fft_size
             puntos_corr = None
@@ -206,32 +252,35 @@ class DemoduladorWiFiAG(DemoduladorBase):
             # 1. BÚSQUEDA GRUESA (Energía)
             energia = np.abs(bloque_iq) ** 2
             energia_suave = uniform_filter1d(energia, size=50)
-            max_energia = np.max(energia_suave)
+            max_energia = np.max(energia_suave) if len(energia_suave) else 0
             
             chunk_trigger = None
             envolvente_preambulo = None  # |preámbulo| para visualizar estructura STS/LTS en Q3
             wifi_metrics = {}
             
 
-            energia_norm = energia_suave / max_energia
+            energia_norm = energia_suave / max_energia if max_energia > 0 else np.zeros_like(energia_suave)
             en_burst_raw = energia_norm > 0.3
             
             # --- PROTECCIÓN CONTRA FALSO FIN DE BURST ---
             # Aplicamos cierre morfológico: Si hay una caída de energía menor a 100 muestras (5us)
             # producida por fading o ruido, se "rellena" conectando el burst.
-            en_burst = binary_closing(en_burst_raw, structure=np.ones(100))
+            margen_cierre = 101
+            mascara_extendida = np.pad(en_burst_raw, margen_cierre)
+            en_burst = minimum_filter1d(
+                maximum_filter1d(mascara_extendida, size=margen_cierre),
+                size=margen_cierre,
+            )[margen_cierre:-margen_cierre]
             
-            cambios = np.diff(en_burst.astype(int))
-            inicios_burst = np.where(cambios == 1)[0]
-            fines_burst   = np.where(cambios == -1)[0]
-
-            # Si la senal empieza ya dentro de un burst, agregar inicio en 0
-            if en_burst[0]:
-                inicios_burst = np.concatenate(([0], inicios_burst))
-
-            n_bursts = min(len(inicios_burst), len(fines_burst))
-            inicios_burst = inicios_burst[:n_bursts]
-            fines_burst   = fines_burst[:n_bursts]
+            cambios = np.diff(np.pad(en_burst.astype(np.int8), 1))
+            inicios_burst = np.flatnonzero(cambios == 1)
+            fines_burst = np.flatnonzero(cambios == -1)
+            # El burst abierto al final se volverá a ver completo en el bloque
+            # siguiente, gracias al solapamiento de muestras.
+            bursts = [
+                (ini, fin) for ini, fin in zip(inicios_burst, fines_burst)
+                if fin > min_new_end and (fin < len(bloque_iq) or not en_burst[-1])
+            ]
 
             # ---  RECORTE DEL BURST (chunk_norm) ---
             margen_muestras = int(10e-6 * self.sample_rate) # 10 us de margen (200 muestras a 20MHz)
@@ -239,19 +288,16 @@ class DemoduladorWiFiAG(DemoduladorBase):
 
             inicio_recorte = 0
             
-            if n_bursts >= 2:
-                # Agarramos el segundo burst (índice 1)
-                inicio_recorte = max(0, inicios_burst[1] - margen_muestras)
-                fin_recorte = min(len(energia_norm), fines_burst[1] + margen_muestras)
-                chunk_norm = energia_norm[inicio_recorte:fin_recorte]
-            elif n_bursts == 1:
-                # Fallback: Si solo detectó 1 burst, agarramos el primero (índice 0)
-                inicio_recorte = max(0, inicios_burst[0] - margen_muestras)
-                fin_recorte = min(len(energia_norm), fines_burst[0] + margen_muestras)
+            if bursts:
+                inicio_recorte = max(0, bursts[0][0] - margen_muestras)
+                fin_recorte = min(len(energia_norm), bursts[0][1] + margen_muestras)
                 chunk_norm = energia_norm[inicio_recorte:fin_recorte]
 
-            if n_bursts >= 2:
-                for i, (ini, fin) in enumerate(zip(inicios_burst[1:], fines_burst[1:]), start=1):
+            if bursts:
+                for ini, fin in bursts:
+                    inicio_recorte = max(0, ini - margen_muestras)
+                    fin_recorte = min(len(energia_norm), fin + margen_muestras)
+                    chunk_norm = energia_norm[inicio_recorte:fin_recorte]
                     ini_ext = max(0, ini - int(0.5e-6 * self.sample_rate))
                     segmento = bloque_iq[ini_ext:fin]
                     
@@ -262,7 +308,10 @@ class DemoduladorWiFiAG(DemoduladorBase):
                     M, P, R = schmidl_cox_metric(segmento)
                     if len(M) == 0:
                         continue
-                    M_norm = M / np.max(M)
+                    pico_metrica = np.max(M)
+                    if pico_metrica <= 0:
+                        continue
+                    M_norm = M / pico_metrica
 
                     # Buscamos el primer índice donde la correlación normalizada supera 0.7
                     indices_sts = np.where(M_norm > 0.7)[0]
@@ -501,38 +550,14 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             N_simbolos_max = muestras_disponibles // (N_CP + N_FFT)
                             
                             N_simbolos = min(N_simbolos_exacto, N_simbolos_max)
-
-                            # Demodular cada simbolo
-                            constelacion = []
-                            for k in range(N_simbolos):
-                                offset = inicio_datos + k * (N_CP + N_FFT)
-                                simbolo = frame_norm[offset + N_CP : offset + N_CP + N_FFT]
-                                S = np.fft.fft(simbolo, N_FFT)
-                                # Ecualizar
-                                S_eq = np.zeros(N_FFT, dtype=complex)
-                                S_eq[data_idx] = S[data_idx] / H[data_idx]
-                                constelacion.append(S_eq[data_idx])
-
-                            constelacion = np.array(constelacion)
-                            puntos = constelacion.flatten()
+                            if N_simbolos < 1:
+                                continue
 
                             # Correccion de fase simbolo a simbolo usando pilotos
                             # Pilotos en indices FFT: 7, 21, 43, 57 (+7, +21, -21, -7)
                             # Valores de referencia: [+1, +1, +1, -1] * secuencia_pn
 
-                            # Secuencia PN de los pilotos (127 bits, polinomio x^7+x^4+1)
-                            def pilot_pn_sequence(length):
-                                reg = np.ones(7, dtype=int)
-                                seq = []
-                                for _ in range(length):
-                                    seq.append(reg[6])
-                                    feedback = reg[6] ^ reg[3]
-                                    reg = np.roll(reg, 1)
-                                    reg[0] = feedback
-                                return np.array(seq)
-
-                            pn = pilot_pn_sequence(N_simbolos + 1)
-                            # Valor del piloto: 1 - 2*pn (mapeo 0->+1, 1->-1)
+                            pn = pilot_polarities(N_simbolos + 1)
                             # Según IEEE 802.11, P_{-21, -7, 7, 21} = {1, 1, 1, -1}
                             # En orden de FFT (+7, +21, -21, -7) esto es [1, -1, 1, 1]
                             pilot_ref = np.array([1, -1, 1, 1])  # subportadoras +7,+21,-21,-7
@@ -552,7 +577,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 S_eq[data_idx] = S[data_idx] / H[data_idx]
 
                                 # Estimar fase residual con los pilotos
-                                pn_k = 1 - 2 * pn[k]  # signo comun para este simbolo
+                                pn_k = pn[k + 1]  # SIGNAL ocupa el símbolo 0
                                 pilots_rx  = S[pilot_idx_ordered] / H[pilot_idx_ordered]
                                 pilots_exp = pilot_ref * pn_k
                                 rot = pilots_rx * np.conj(pilots_exp)
@@ -651,12 +676,14 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                     'sym_peak': evm_peak_sym_db
                                 }
                                 
-                                self.ultimo_puntos_corr = puntos_corr
-                                self.ultimo_wifi_metrics = wifi_metrics
-                                self.ultimo_evm_data = evm_data
-                                self.ultimo_S_data = S_data
-                                self.ultimo_chunk_norm = chunk_norm
-                                self.ultimo_M_norm = M_norm
+                                with self._lock:
+                                    if generation is None or generation == self._generation:
+                                        self.ultimo_puntos_corr = puntos_corr
+                                        self.ultimo_wifi_metrics = wifi_metrics
+                                        self.ultimo_evm_data = evm_data
+                                        self.ultimo_S_data = S_data
+                                        self.ultimo_chunk_norm = chunk_norm
+                                        self.ultimo_M_norm = M_norm
 
                             break
 
@@ -665,39 +692,43 @@ class DemoduladorWiFiAG(DemoduladorBase):
             # Si no, usamos el inicio del bloque para seguir mostrando algo.
             chunk_psd = chunk_trigger if chunk_trigger is not None else bloque_iq[:fs].copy()
             chunk_psd = chunk_psd - np.mean(chunk_psd)
-            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_psd)))**2 / fs
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_psd, n=fs)))**2 / fs
             PSD = 10.0 * np.log10(np.maximum(potencia, 1e-12))
             
             # Interpolamos el bin DC para tapar el spike de hardware
             centro = fs // 2
             PSD[centro] = (PSD[centro - 1] + PSD[centro + 1]) / 2.0
             
-            # ENVIAMOS LA ÚLTIMA CONSTELACIÓN VÁLIDA Y BURST (FREEZE) PARA QUE NO TITILE
-            p_corr = self.ultimo_puntos_corr
-            s_dat = self.ultimo_S_data
-            
-            audio_L_out = p_corr.real if p_corr is not None else np.array([])
-            audio_R_out = p_corr.imag if p_corr is not None else np.array([])
-            
-            resultados = {
-                'psd_rf': PSD,
-                'rf_chunk': self.ultimo_chunk_norm if self.ultimo_chunk_norm is not None else chunk_norm,
-                'mpx_time': self.ultimo_M_norm if self.ultimo_M_norm is not None else M_norm,  
-                'audio_time_L': audio_L_out,
-                'audio_time_R': audio_R_out,
-                'psd_mpx': s_dat.real if s_dat is not None else np.array([]),
-                'f_axis_mpx': s_dat.imag if s_dat is not None else np.array([]),
-                'metricas': {'inicio_recorte': inicio_recorte, 'wifi_metrics': self.ultimo_wifi_metrics},
-                'evm_data': self.ultimo_evm_data
-            }
-
             with self._lock:
+                if generation is not None and generation != self._generation:
+                    return
+                # Mantener la última constelación válida hasta encontrar otra.
+                p_corr = self.ultimo_puntos_corr
+                s_dat = self.ultimo_S_data
+                audio_L_out = p_corr.real if p_corr is not None else np.array([])
+                audio_R_out = p_corr.imag if p_corr is not None else np.array([])
+
+                resultados = {
+                    'psd_rf': PSD,
+                    'rf_chunk': self.ultimo_chunk_norm if self.ultimo_chunk_norm is not None else chunk_norm,
+                    'mpx_time': self.ultimo_M_norm if self.ultimo_M_norm is not None else M_norm,
+                    'audio_time_L': audio_L_out,
+                    'audio_time_R': audio_R_out,
+                    'psd_mpx': s_dat.real if s_dat is not None else np.array([]),
+                    'f_axis_mpx': s_dat.imag if s_dat is not None else np.array([]),
+                    'metricas': {
+                        'inicio_recorte': inicio_recorte,
+                        'wifi_metrics': self.ultimo_wifi_metrics,
+                        'dropped_iq_blocks': self.dropped_blocks,
+                    },
+                    'evm_data': self.ultimo_evm_data,
+                }
                 self.last_heavy_results = resultados
-                self.nuevos_datos_listos = True
+                now = time.monotonic()
+                if now >= self._next_display_at:
+                    self._completed_results.append(resultados)
+                    self.nuevos_datos_listos = True
+                    self._next_display_at = now + 0.05
             
-        finally:
-            self.is_processing = False
-            self.proxima_captura = (
-                time.time() +
-                self.pausa_entre_snapshots
-            )
+        except Exception:
+            logging.exception("Error en el análisis de una trama WiFi")
