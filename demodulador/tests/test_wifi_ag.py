@@ -79,20 +79,11 @@ def test_evm_recognizes_unit_power_16qam_constellation():
     assert np.max(evm['sym_rms']) < -190
 
 
-def test_complete_synthetic_6mbps_packet_decodes_with_cfo():
-    rng = np.random.default_rng(23)
-    short = (rng.choice([-1, 1], 16) + 1j * rng.choice([-1, 1], 16)) * 0.07
-    preamble = np.r_[np.tile(short, 10), wifi_ag.LTS_TIME[-32:],
-                     wifi_ag.LTS_TIME, wifi_ag.LTS_TIME]
-    data_bins = [i for i in list(range(38, 64)) + list(range(1, 27))
-                 if i not in (43, 57, 7, 21)]
-    pilot_bins = [7, 21, 43, 57]
-    pilot_ref = np.array([1, -1, 1, 1])
-    pn = wifi_ag.pilot_polarities(3)
-
-    # SIGNAL: RATE=1101 (6 Mbit/s), LENGTH=1, paridad par y tail=0.
+def encode_signal_bits(reserved=0):
+    """Construye un SIGNAL de 6 Mbit/s y LENGTH=1, con paridad correcta."""
     info = np.zeros(24, dtype=np.int8)
     info[:4] = [1, 1, 0, 1]
+    info[4] = reserved
     info[5] = 1
     info[17] = np.sum(info[:17]) % 2
     coded = np.empty(48, dtype=np.int8)
@@ -105,6 +96,36 @@ def test_complete_synthetic_6mbps_packet_decodes_with_cfo():
     interleaved = np.empty(48, dtype=np.int8)
     for k in range(48):
         interleaved[3 * (k % 16) + k // 16] = coded[k]
+    return info, coded, interleaved
+
+
+def test_soft_signal_viterbi_recovers_weak_wrong_signs():
+    info, coded, _ = encode_signal_bits()
+    soft_coded = (2 * coded - 1).astype(float)
+    soft_coded[[11, 44, 46]] *= -0.05
+    soft_interleaved = np.empty(48, dtype=float)
+    for k in range(48):
+        soft_interleaved[3 * (k % 16) + k // 16] = soft_coded[k]
+    received = wifi_ag.deinterleave_signal(soft_interleaved)
+
+    assert received.dtype.kind == 'f'
+    assert not np.array_equal(wifi_ag.viterbi_decode((received > 0).astype(int)), info)
+    np.testing.assert_array_equal(wifi_ag.viterbi_decode(received, soft=True), info)
+
+
+def synthetic_6mbps_packet(signal_phase=0.0, reserved=0,
+                           weak_signal_bits=False, ht_sig=False):
+    rng = np.random.default_rng(23)
+    short = (rng.choice([-1, 1], 16) + 1j * rng.choice([-1, 1], 16)) * 0.07
+    preamble = np.r_[np.tile(short, 10), wifi_ag.LTS_TIME[-32:],
+                     wifi_ag.LTS_TIME, wifi_ag.LTS_TIME]
+    data_bins = [i for i in list(range(38, 64)) + list(range(1, 27))
+                 if i not in (43, 57, 7, 21)]
+    pilot_bins = [7, 21, 43, 57]
+    pilot_ref = np.array([1, -1, 1, 1])
+    pn = wifi_ag.pilot_polarities(3)
+
+    _, _, interleaved = encode_signal_bits(reserved)
 
     def ofdm_symbol(data, symbol_no):
         freq = np.zeros(64, dtype=complex)
@@ -113,23 +134,60 @@ def test_complete_synthetic_6mbps_packet_decodes_with_cfo():
         samples = np.fft.ifft(freq)
         return np.r_[samples[-16:], samples]
 
-    signal_symbol = ofdm_symbol(2 * interleaved - 1, 0)
-    data_symbols = [ofdm_symbol(rng.choice([-1, 1], 48), n) for n in (1, 2)]
+    signal_data = (2 * interleaved - 1).astype(float)
+    if weak_signal_bits:
+        for k in (11, 44, 46):
+            signal_data[3 * (k % 16) + k // 16] *= -0.05
+    signal_symbol = ofdm_symbol(signal_data, 0) * np.exp(1j * signal_phase)
+    data_symbols = [ofdm_symbol(rng.choice([-1, 1], 48) * (1j if ht_sig else 1), n)
+                    for n in (1, 2)]
     packet = np.r_[preamble, signal_symbol, *data_symbols]
     iq = np.r_[np.zeros(400), packet, np.zeros(120)]
     iq *= np.exp(2j * np.pi * 40_000 * np.arange(len(iq)) / 20e6)
     iq += (rng.normal(size=len(iq)) + 1j * rng.normal(size=len(iq))) * 0.0003
+    return iq.astype(np.complex64)
 
+
+def test_complete_synthetic_6mbps_packet_decodes_with_cfo_and_signal_phase():
+    for phase, weak_bits in ((0.0, False), (1.7, False), (0.0, True)):
+        demod = wifi_ag.DemoduladorWiFiAG()
+        demod.configurar(20e6, 4096)
+        demod._procesar_fondo(synthetic_6mbps_packet(
+            signal_phase=phase, weak_signal_bits=weak_bits,
+        ))
+
+        metrics = demod.ultimo_wifi_metrics
+        assert metrics['mbps'] == 6
+        assert metrics['length'] == 1
+        assert metrics['paridad_ok'] and metrics['tail_ok'] and metrics['reservado_ok']
+        assert len(demod.ultimo_evm_data['sym_rms']) == 2
+        assert max(demod.ultimo_evm_data['sym_rms']) < -25
+
+
+def test_signal_reserved_bit_is_rejected_even_with_valid_parity():
     demod = wifi_ag.DemoduladorWiFiAG()
     demod.configurar(20e6, 4096)
-    demod._procesar_fondo(iq.astype(np.complex64))
+    demod._procesar_fondo(synthetic_6mbps_packet(reserved=1))
+    assert demod.ultimo_wifi_metrics == {}
 
-    metrics = demod.ultimo_wifi_metrics
-    assert metrics['mbps'] == 6
-    assert metrics['length'] == 1
-    assert metrics['paridad_ok'] and metrics['tail_ok']
-    assert len(demod.ultimo_evm_data['sym_rms']) == 2
-    assert max(demod.ultimo_evm_data['sym_rms']) < -25
+
+def test_ht_mixed_signal_is_discarded_and_next_legacy_burst_is_processed():
+    ht = synthetic_6mbps_packet(ht_sig=True)
+    demod = wifi_ag.DemoduladorWiFiAG()
+    demod.configurar(20e6, 4096)
+    demod._procesar_fondo(ht)
+
+    assert demod.ultimo_wifi_metrics == {}
+    assert demod.ultimo_evm_data is None
+    assert demod.ultimo_puntos_corr is None
+    assert demod.ultimo_S_data is None
+
+    legacy = synthetic_6mbps_packet()
+    demod._procesar_fondo(np.r_[ht, np.zeros(300), legacy])
+
+    assert demod.ultimo_wifi_metrics['mbps'] == 6
+    assert demod.ultimo_wifi_metrics['length'] == 1
+    assert demod.ultimo_evm_data is not None
 
 
 def test_channel_equalizer_rejects_invalid_lts_and_handles_a_notched_tone():

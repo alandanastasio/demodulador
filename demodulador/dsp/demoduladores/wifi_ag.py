@@ -75,10 +75,11 @@ def schmidl_cox_metric(iq_signal, N=_SC_N, W=_SC_W):
 # Polinomios generadores: g0=133, g1=171 (octal) = 0b1011011, 0b1111001
 # Constraint length K=7, memoria=6
 
-def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001):
+def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001, soft=False):
     """
     Decodificador Viterbi para codigo convolucional rate 1/2.
-    Entrada: bits entrelazados como pares [b0, b1, b0, b1, ...]
+    Entrada: pares [b0, b1, ...]. En modo soft, valores reales con
+    signo positivo para 1 y negativo para 0; la magnitud expresa confianza.
     Salida: bits de informacion decodificados
     """
     n_states = 2 ** (K - 1)  # 64 estados
@@ -109,8 +110,12 @@ def viterbi_decode(bits, K=7, g0=0b1011011, g1=0b1111001):
                 continue
             for inp in [0, 1]:
                 next_s, b0, b1 = conv_output(state, inp)
-                # Distancia de Hamming
-                dist = (b0 ^ rx0) + (b1 ^ rx1)
+                if soft:
+                    # Término de la distancia euclídea que depende de la
+                    # hipótesis; los términos constantes se cancelan.
+                    dist = -(2 * b0 - 1) * rx0 - (2 * b1 - 1) * rx1
+                else:
+                    dist = (b0 ^ rx0) + (b1 ^ rx1)
                 m = metrics[state] + dist
                 if m < new_metrics[next_s]:
                     new_metrics[next_s] = m
@@ -138,6 +143,7 @@ def deinterleave_signal(bits, NCBPS=48, NBPSC=1):
     
     RX debe invertir en orden inverso: primero deshacer la 2ª, luego la 1ª.
     """
+    bits = np.asarray(bits)
     s = max(NBPSC // 2, 1)
     
     # --- Invertir la 2ª permutación (j → i) ---
@@ -154,7 +160,7 @@ def deinterleave_signal(bits, NCBPS=48, NBPSC=1):
     # --- Invertir la 1ª permutación (i → k) ---
     # Forward: i = (NCBPS/16)*(k mod 16) + floor(k/16)
     # Invertimos: coded[k] = step1[fwd1[k]]
-    result = np.zeros(NCBPS, dtype=int)
+    result = np.empty(NCBPS, dtype=bits.dtype)
     for k in range(NCBPS):
         i = (NCBPS // 16) * (k % 16) + k // 16
         result[k] = bits_step1[i]
@@ -235,6 +241,16 @@ def calculate_evm(data_rx, pilots_rx, pilots_ref, modulation, data_bins,
         'sym_rms': to_db(np.sqrt(np.mean(all_error ** 2, axis=1))),
         'sym_peak': to_db(np.max(all_error, axis=1)),
     }
+
+
+def is_ht_mixed_signal(data_symbols, valid_data):
+    """Reconoce los dos HT-SIG en Q-BPSK que siguen al L-SIG de 6 Mb/s."""
+    if len(data_symbols) < 2 or np.count_nonzero(valid_data) < 24:
+        return False
+    points = data_symbols[:2, valid_data]
+    q_dominant = np.mean(np.abs(points.imag) > np.abs(points.real), axis=1)
+    q_power = np.mean(points.imag ** 2, axis=1)
+    return bool(np.all(q_dominant >= 0.75) and np.all(q_power > 0.2))
 
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
@@ -533,26 +549,30 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             S_eq = np.zeros(N_FFT, dtype=complex)
                             S_eq[activas_lts] = S[activas_lts] * equalizer[activas_lts]
 
+                            # SIGNAL también lleva pilotos (polaridad p_0).
+                            # Compensar su fase común antes de decidir RATE/LENGTH.
+                            pilot_idx_ordered = [7, 21, 43, 57]
+                            pilot_ref = np.array([1, -1, 1, 1])
+                            valid_pilots = np.abs(H[pilot_idx_ordered]) ** 2 > channel_power_floor
+                            if not np.any(valid_pilots):
+                                continue
+                            signal_rotation = S_eq[pilot_idx_ordered] * np.conj(pilot_ref)
+                            signal_phase = np.angle(np.mean(signal_rotation[valid_pilots]))
+                            S_eq[activas_lts] *= np.exp(-1j * signal_phase)
+
                             data_idx  = list(range(38, 64)) + list(range(1, 27))
                             pilot_idx = [43, 57, 7, 21]
                             data_idx  = [i for i in data_idx if i not in pilot_idx]
 
                             S_data = S_eq[data_idx]
 
-                            # El campo SIGNAL usa BPSK: decidir por signo de la parte real
-                            # Con el LTS corregido, la convención es: real>0 → bit 1, real<0 → bit 0
-                            bits_raw = (S_data.real > 0).astype(int)
-                            # Desentrelazado del campo SIGNAL (BPSK, NCBPS=48, NBPSC=1)
-                            # Segun IEEE 802.11-2007 seccion 17.3.5.6
-
-                            NCBPS = 48   # bits por simbolo OFDM para BPSK
-                            NBPSC = 1    # bits por subportadora para BPSK
-                            s = max(NBPSC // 2, 1)  # s=1 para BPSK
-
-                            # Primera permutacion inversa: i -> k
-                            # k = (NCBPS/16) * (i % 16) + floor(i/16)
-                            bits_deint = deinterleave_signal(bits_raw)
-                            bits_decoded = viterbi_decode(bits_deint)
+                            # El L-SIG usa BPSK. El signo indica el bit y la
+                            # magnitud, ponderada por |H|², su confiabilidad.
+                            signal_power = np.abs(H[data_idx]) ** 2
+                            typical_power = np.median(np.abs(H[activas_lts]) ** 2)
+                            reliability = np.clip(signal_power / typical_power, 0, 4)
+                            soft_symbols = deinterleave_signal(S_data.real * reliability)
+                            bits_decoded = viterbi_decode(soft_symbols, soft=True)
 
                             # Parseo del campo SIGNAL
                             # bits 0-3:  RATE
@@ -589,6 +609,7 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             paridad_calc = np.sum(info_bits[0:17]) % 2
                             paridad_rx   = info_bits[17]
                             paridad_ok   = (paridad_calc == paridad_rx)
+                            reservado_ok = (info_bits[4] == 0)
 
                             # TAIL (bits 18-23): Deben ser obligatoriamente ceros
                             tail_bits = bits_decoded[18:24]
@@ -601,12 +622,13 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 'mbps': mbps,
                                 'length': length,
                                 'paridad_ok': paridad_ok,
+                                'reservado_ok': reservado_ok,
                                 'tail_ok': tail_ok
                             })
 
                             # --- VALIDACIÓN ESTRICTA L-SIG (Rechazo de Falsos Positivos) ---
-                            # Si la modulación no existe, la paridad falla, o el tail no es cero, NO es un paquete válido.
-                            if mod == "?" or not paridad_ok or not tail_ok:
+                            # RATE, paridad, bit reservado y tail deben ser válidos.
+                            if mod == "?" or not paridad_ok or not reservado_ok or not tail_ok:
                                 S_data = None
                                 continue
 
@@ -649,10 +671,12 @@ class DemoduladorWiFiAG(DemoduladorBase):
                             valid_pilots = np.abs(H[pilot_idx_ordered]) ** 2 > channel_power_floor
                             if not np.any(valid_pilots):
                                 continue
+                            valid_data = np.abs(H[data_idx]) ** 2 > channel_power_floor
 
                             constelacion_corr = []
                             pilots_corr = []
                             pilots_ideales = []
+                            ht_detected = False
                             for k in range(N_simbolos):
                                 offset = inicio_datos + k * (N_CP + N_FFT)
                                 simbolo = frame_norm[offset + N_CP : offset + N_CP + N_FFT]
@@ -677,13 +701,30 @@ class DemoduladorWiFiAG(DemoduladorBase):
                                 pilots_corr.append(pilots_rx_corr)
                                 pilots_ideales.append(pilots_exp)
 
+                                if mbps == 6 and k == 1 and is_ht_mixed_signal(
+                                    np.asarray(constelacion_corr), valid_data,
+                                ):
+                                    ht_detected = True
+                                    break
+
+                            if ht_detected:
+                                # El L-SIG HT imita 6 Mb/s; ignorar esta trama
+                                # y seguir buscando otra a/g dentro del bloque.
+                                wifi_metrics = {}
+                                puntos_corr = None
+                                S_data = None
+                                M_norm = np.array([])
+                                chunk_norm = energia_norm
+                                chunk_trigger = None
+                                inicio_recorte = 0
+                                continue
+
                             constelacion_corr = np.array(constelacion_corr)
                             puntos_corr = constelacion_corr.flatten()
                             pilots_corr = np.array(pilots_corr)
                             pilots_ideales = np.array(pilots_ideales)
 
                             # --- CÁLCULO DE EVM ---
-                            valid_data = np.abs(H[data_idx]) ** 2 > channel_power_floor
                             evm_data = calculate_evm(
                                 constelacion_corr, pilots_corr, pilots_ideales, mod,
                                 data_idx, pilot_idx_ordered, valid_data, valid_pilots,
