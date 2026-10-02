@@ -1089,6 +1089,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.lora_config_label.hide()
+        self.lora_sync_words_panel.close_histories()
         self.lora_sync_words_panel.hide()
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()

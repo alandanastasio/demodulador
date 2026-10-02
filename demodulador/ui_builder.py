@@ -1,10 +1,14 @@
+from dataclasses import dataclass
+from datetime import datetime
+
 from PyQt6.QtCore import QSize, Qt, QLocale, QTimer
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction, QScrollArea
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction, QScrollArea, QSizePolicy, QDialog
 
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
+from plot_renderer import format_lora_payload_text
 
 class FlexibleDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
@@ -21,16 +25,104 @@ class FlexibleDoubleSpinBox(QDoubleSpinBox):
         return super().valueFromText(text.replace(',', '.'))
 
 
+@dataclass(frozen=True)
+class LoRaPacketRecord:
+    received_at: str
+    payload: bytes
+    crc_ok: bool | None
+
+
+class LoRaPacketHistoryDialog(QDialog):
+    """Historial de tramas recibidas con un sync word concreto."""
+
+    def __init__(self, sync_word, packets, parent=None):
+        super().__init__(parent)
+        self.packets = packets
+        self.setWindowTitle(f'Paquetes LoRa · sync word 0x{sync_word:02X}')
+        self.resize(760, 510)
+
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(('#', 'Hora', 'Bytes', 'CRC', 'Texto'))
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().hide()
+        header = self.table.horizontalHeader()
+        for column in range(4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.itemSelectionChanged.connect(self._show_selected_packet)
+        layout.addWidget(self.table, stretch=2)
+
+        details = QHBoxLayout()
+        for title, attribute in (
+            ('Payload hexadecimal', 'hex_payload'),
+            ('Texto legible', 'text_payload'),
+        ):
+            column = QVBoxLayout()
+            if attribute == 'text_payload':
+                heading = QHBoxLayout()
+                heading.addWidget(QLabel(title))
+                heading.addStretch()
+                self.full_text_checkbox = QCheckBox('Completo')
+                self.full_text_checkbox.toggled.connect(self._show_selected_packet)
+                heading.addWidget(self.full_text_checkbox)
+                column.addLayout(heading)
+            else:
+                column.addWidget(QLabel(title))
+            editor = QPlainTextEdit()
+            editor.setReadOnly(True)
+            column.addWidget(editor)
+            details.addLayout(column, stretch=1)
+            setattr(self, attribute, editor)
+        layout.addLayout(details, stretch=1)
+
+        for packet in packets:
+            self.append_packet(packet)
+        if packets:
+            self.table.selectRow(len(packets) - 1)
+
+    def append_packet(self, packet):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        crc_text = 'Válido' if packet.crc_ok else (
+            'Inválido' if packet.crc_ok is False else 'No presente'
+        )
+        preview = format_lora_payload_text(packet.payload).replace('\n', ' ')
+        for column, value in enumerate((
+            str(row + 1), packet.received_at, str(len(packet.payload)),
+            crc_text, preview,
+        )):
+            self.table.setItem(row, column, QTableWidgetItem(value))
+        if row == 0:
+            self.table.selectRow(0)
+
+    def _show_selected_packet(self, *_):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.packets):
+            self.hex_payload.clear()
+            self.text_payload.clear()
+            return
+        payload = self.packets[row].payload
+        self.hex_payload.setPlainText(payload.hex(' ').upper())
+        self.text_payload.setPlainText(format_lora_payload_text(
+            payload, self.full_text_checkbox.isChecked()
+        ))
+
+
 class LoRaSyncWordPanel(QWidget):
     """Una tarjeta y un indicador de actividad por sync word observado."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.entries = {}
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 0)
         layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title = QLabel('SYNC WORD')
         title.setStyleSheet('color: white; font-weight: bold; font-size: 13px;')
@@ -63,7 +155,7 @@ class LoRaSyncWordPanel(QWidget):
             'border-radius: 7px;'
         )
 
-    def record(self, sync_word):
+    def record(self, sync_word, payload, crc_ok):
         entry = self.entries.get(sync_word)
         if entry is None:
             card = QFrame(self.cards_container)
@@ -87,21 +179,62 @@ class LoRaSyncWordPanel(QWidget):
             self._set_led(led, False)
             row.addWidget(led)
 
+            history_button = QPushButton('Lista')
+            history_button.setToolTip('Ver paquetes recibidos con este sync word')
+            history_button.setFixedWidth(50)
+            history_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            history_button.setStyleSheet(
+                'background-color: #444; border: 1px solid #666; '
+                'border-radius: 3px; padding: 2px;'
+            )
+            history_button.clicked.connect(
+                lambda _checked=False, word=sync_word: self.open_history(word)
+            )
+            row.addWidget(history_button)
+
             timer = QTimer(card)
             timer.setSingleShot(True)
             timer.timeout.connect(lambda led=led: self._set_led(led, False))
-            entry = {'card': card, 'counter': counter, 'led': led, 'timer': timer, 'count': 0}
+            entry = {
+                'card': card, 'counter': counter, 'led': led, 'timer': timer,
+                'history_button': history_button, 'packets': [], 'dialog': None,
+                'count': 0,
+            }
             self.entries[sync_word] = entry
             self.placeholder.hide()
             self.cards_layout.addWidget(card)
             self.scroll_area.setFixedHeight(min(220, 8 + 45 * len(self.entries)))
 
+        packet = LoRaPacketRecord(
+            datetime.now().strftime('%H:%M:%S.%f')[:-3], bytes(payload), crc_ok
+        )
+        entry['packets'].append(packet)
+        if entry['dialog'] is not None:
+            entry['dialog'].append_packet(packet)
         entry['count'] += 1
         entry['counter'].setText(f"Paquetes: {entry['count']}")
         self._set_led(entry['led'], True)
         entry['timer'].start(220)
 
+    def open_history(self, sync_word):
+        entry = self.entries.get(sync_word)
+        if entry is None:
+            return
+        if entry['dialog'] is None:
+            entry['dialog'] = LoRaPacketHistoryDialog(
+                sync_word, entry['packets'], entry['card']
+            )
+        entry['dialog'].show()
+        entry['dialog'].raise_()
+        entry['dialog'].activateWindow()
+
+    def close_histories(self):
+        for entry in self.entries.values():
+            if entry['dialog'] is not None:
+                entry['dialog'].close()
+
     def reset(self):
+        self.close_histories()
         for entry in self.entries.values():
             entry['timer'].stop()
             self.cards_layout.removeWidget(entry['card'])
