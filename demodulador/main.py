@@ -875,10 +875,10 @@ class MainWindow(QMainWindow):
 
     def _clear_lora_plots(self):
         self.lora_waterfall_image.clear()
+        self.lora_sync_words_panel.reset()
         for marks in self.lora_symbol_marks.values():
             marks.setData([], [])
         self._lora_latest_frame = None
-        self._lora_sync_word = None
         self._lora_symbols_title = 'Símbolos LoRa'
         self._lora_symbols_x_range = (0, 1)
         self.lora_folded_image.clear()
@@ -1038,15 +1038,13 @@ class MainWindow(QMainWindow):
         self._show_lora_config(bw_khz, sf)
 
     def _show_lora_config(self, bw_khz, sf):
-        sync_word = getattr(self, '_lora_sync_word', None)
-        sync_text = f'0x{sync_word:02X}' if sync_word is not None else '—'
         self.lora_config_label.setText(
             f'<b>DEMODULACIÓN LoRa</b><br><br>'
             f'BW: <b>{bw_khz} kHz</b><br>'
-            f'SF: <b>{sf}</b><br>'
-            f'Sync word: <b>{sync_text}</b>'
+            f'SF: <b>{sf}</b>'
         )
         self.lora_config_label.show()
+        self.lora_sync_words_panel.show()
 
     @receiver_transition
     def set_normal_mode(self):
@@ -1091,6 +1089,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.lora_config_label.hide()
+        self.lora_sync_words_panel.hide()
         self.stereo_metrics_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()

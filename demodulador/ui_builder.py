@@ -1,6 +1,6 @@
-from PyQt6.QtCore import QSize, Qt, QLocale
+from PyQt6.QtCore import QSize, Qt, QLocale, QTimer
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction, QScrollArea
 
 import pyqtgraph as pg
 import numpy as np
@@ -19,6 +19,96 @@ class FlexibleDoubleSpinBox(QDoubleSpinBox):
 
     def valueFromText(self, text):
         return super().valueFromText(text.replace(',', '.'))
+
+
+class LoRaSyncWordPanel(QWidget):
+    """Una tarjeta y un indicador de actividad por sync word observado."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.entries = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(6)
+
+        title = QLabel('SYNC WORD')
+        title.setStyleSheet('color: white; font-weight: bold; font-size: 13px;')
+        layout.addWidget(title)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFixedHeight(38)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet('QScrollArea { background: transparent; }')
+        layout.addWidget(self.scroll_area)
+
+        self.cards_container = QWidget()
+        self.cards_layout = QVBoxLayout(self.cards_container)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(5)
+        self.cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.placeholder = QLabel('Sin tramas recibidas')
+        self.placeholder.setStyleSheet('color: #aaa; padding: 6px;')
+        self.cards_layout.addWidget(self.placeholder)
+        self.scroll_area.setWidget(self.cards_container)
+
+    @staticmethod
+    def _set_led(led, active):
+        color = '#4be16b' if active else '#38413b'
+        border = '#90ffa6' if active else '#66756b'
+        led.setStyleSheet(
+            f'background-color: {color}; border: 1px solid {border}; '
+            'border-radius: 7px;'
+        )
+
+    def record(self, sync_word):
+        entry = self.entries.get(sync_word)
+        if entry is None:
+            card = QFrame(self.cards_container)
+            card.setObjectName('loraSyncWordCard')
+            card.setStyleSheet(
+                'QFrame#loraSyncWordCard { background-color: #1e1e1e; '
+                'border: 1px solid #444; border-radius: 4px; }'
+            )
+            row = QHBoxLayout(card)
+            row.setContentsMargins(9, 8, 9, 8)
+            row.setSpacing(8)
+            identifier = QLabel(f'0x{sync_word:02X}')
+            identifier.setStyleSheet('font-weight: bold;')
+            row.addWidget(identifier)
+            row.addStretch()
+
+            counter = QLabel()
+            row.addWidget(counter)
+            led = QLabel()
+            led.setFixedSize(14, 14)
+            self._set_led(led, False)
+            row.addWidget(led)
+
+            timer = QTimer(card)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda led=led: self._set_led(led, False))
+            entry = {'card': card, 'counter': counter, 'led': led, 'timer': timer, 'count': 0}
+            self.entries[sync_word] = entry
+            self.placeholder.hide()
+            self.cards_layout.addWidget(card)
+            self.scroll_area.setFixedHeight(min(220, 8 + 45 * len(self.entries)))
+
+        entry['count'] += 1
+        entry['counter'].setText(f"Paquetes: {entry['count']}")
+        self._set_led(entry['led'], True)
+        entry['timer'].start(220)
+
+    def reset(self):
+        for entry in self.entries.values():
+            entry['timer'].stop()
+            self.cards_layout.removeWidget(entry['card'])
+            entry['card'].deleteLater()
+        self.entries.clear()
+        self.placeholder.show()
+        self.scroll_area.setFixedHeight(38)
 
 
 class LTEPageWidget(QWidget):
@@ -1392,6 +1482,10 @@ def build_ui(self, state):
     )
     self.lora_config_label.hide()
     controls_layout.addWidget(self.lora_config_label)
+
+    self.lora_sync_words_panel = LoRaSyncWordPanel()
+    self.lora_sync_words_panel.hide()
+    controls_layout.addWidget(self.lora_sync_words_panel)
 
     # --- SECCIÓN ESPECTROGRAMA ---
     self.waterfall_label = QLabel("ESPECTROGRAMA")

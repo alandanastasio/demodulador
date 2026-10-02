@@ -137,7 +137,7 @@ def render_lora(self, state, metrics):
         self.lora_waterfall_stage_regions[section].setRegion((relative_ms(start), relative_ms(end)))
     self._lora_latest_frame = frame
     self._refresh_lora_symbols_view()
-    self._lora_sync_word = frame.sync_word
+    self.lora_sync_words_panel.record(frame.sync_word)
     self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
 
     self.lora_header_length_value.setText(f'{len(frame.payload)} bytes')
