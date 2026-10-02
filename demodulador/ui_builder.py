@@ -927,14 +927,24 @@ def build_ui(self, state):
     self.lora_payload_text = QPlainTextEdit()
     for label, editor in (
         ('Hexadecimal', self.lora_payload_hex),
-        ('Texto', self.lora_payload_text),
+        ('Texto legible', self.lora_payload_text),
     ):
         editor.setReadOnly(True)
         editor.setStyleSheet('background-color: #101010; border: 1px solid #333; color: white;')
+        if editor is self.lora_payload_text:
+            editor.setToolTip('Texto legible o vista completa con escapes. El hexadecimal conserva todos los bytes.')
         column = QVBoxLayout()
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(2)
-        column.addWidget(QLabel(label))
+        label_row = QHBoxLayout()
+        label_row.addWidget(QLabel(label))
+        if editor is self.lora_payload_text:
+            self.lora_full_text_checkbox = QCheckBox('Completo')
+            self.lora_full_text_checkbox.setToolTip('Incluye bytes no imprimibles como \\xFF o \\x00.')
+            self.lora_full_text_checkbox.toggled.connect(self._refresh_lora_payload_text)
+            label_row.addStretch(1)
+            label_row.addWidget(self.lora_full_text_checkbox)
+        column.addLayout(label_row)
         column.addWidget(editor)
         payload_columns.addLayout(column, 1)
     payload_layout.addLayout(payload_columns, 1)

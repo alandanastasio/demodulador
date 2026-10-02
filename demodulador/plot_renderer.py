@@ -4,6 +4,50 @@ from PyQt6.QtCore import Qt, QRectF
 import time
 
 
+def readable_payload_text(payload: bytes) -> str:
+    """Extrae texto UTF-8 legible sin interpretar el protocolo del payload."""
+    decoded = payload.decode('utf-8', errors='replace')
+    fragments = []
+    current = []
+    for char in decoded:
+        if char != '\ufffd' and (char.isprintable() or char in '\n\t'):
+            current.append(char)
+        elif current:
+            fragments.append(''.join(current).strip())
+            current = []
+    if current:
+        fragments.append(''.join(current).strip())
+    fragments = [fragment for fragment in fragments if fragment]
+    if not fragments:
+        return 'Sin texto legible'
+    # Si hay una frase, omitir bytes imprimibles aislados del protocolo binario.
+    if max(map(len, fragments)) >= 3:
+        fragments = [fragment for fragment in fragments if len(fragment) >= 3]
+    return '\n'.join(fragments)
+
+
+def format_lora_payload_text(payload: bytes, show_all: bool = False) -> str:
+    if not show_all:
+        return readable_payload_text(payload)
+    # surrogateescape conserva cada byte UTF-8 inválido para mostrarlo como
+    # escape, mientras deja legible el texto UTF-8 válido.
+    decoded = payload.decode('utf-8', errors='surrogateescape')
+    parts = []
+    for char in decoded:
+        code = ord(char)
+        if 0xDC80 <= code <= 0xDCFF:
+            parts.append(f'\\x{code - 0xDC00:02X}')
+        elif char == '\\':
+            parts.append('\\\\')
+        elif char.isprintable() or char in '\n\t':
+            parts.append(char)
+        elif code < 256:
+            parts.append(f'\\x{code:02X}')
+        else:
+            parts.append(f'\\u{code:04X}')
+    return ''.join(parts)
+
+
 def render_lora(self, state, metrics):
     if not metrics:
         return
@@ -103,12 +147,7 @@ def render_lora(self, state, metrics):
         'Válido' if frame.header_checksum_ok else 'Inválido'
     )
     self.lora_payload_hex.setPlainText(frame.payload.hex(' ').upper())
-    decoded_text = frame.payload.decode('utf-8', errors='replace')
-    printable_text = ''.join(
-        char if char.isprintable() or char in '\n\t' else f'\\u{ord(char):04X}'
-        for char in decoded_text
-    )
-    self.lora_payload_text.setPlainText(printable_text)
+    self._refresh_lora_payload_text()
     crc_text = 'Válido' if frame.crc_ok else (
         'Inválido' if frame.crc_ok is False else 'No presente'
     )

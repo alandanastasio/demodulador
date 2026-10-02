@@ -75,7 +75,7 @@ from dsp.stream_reset import reset_demodulator_stream
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from ui_builder import build_ui
-from plot_renderer import render_plot
+from plot_renderer import render_plot, format_lora_payload_text
 from trace_manager import TraceManager
 from audio_manager import AudioManager
 
@@ -905,6 +905,15 @@ class MainWindow(QMainWindow):
         self.lora_payload_text.clear()
         if state.get('demod_mode') == 'lora':
             self._show_lora_config(state['lora_bw_hz'] // 1000, state['lora_sf'])
+
+    def _refresh_lora_payload_text(self, *_):
+        frame = getattr(self, '_lora_latest_frame', None)
+        if frame is None:
+            self.lora_payload_text.clear()
+            return
+        self.lora_payload_text.setPlainText(format_lora_payload_text(
+            frame.payload, self.lora_full_text_checkbox.isChecked()
+        ))
 
     def _position_lora_symbols_view_selector(self):
         if hasattr(self, 'lora_symbols_view_combo'):
