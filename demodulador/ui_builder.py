@@ -1144,21 +1144,19 @@ def build_ui(self, state):
     payload_layout = QVBoxLayout(payload_box)
     payload_layout.setContentsMargins(9, 7, 9, 7)
     payload_layout.setSpacing(4)
-    payload_columns = QHBoxLayout()
-    payload_columns.setSpacing(8)
+    payload_columns = QGridLayout()
+    payload_columns.setHorizontalSpacing(8)
+    payload_columns.setVerticalSpacing(2)
     self.lora_payload_hex = QPlainTextEdit()
     self.lora_payload_text = QPlainTextEdit()
-    for label, editor in (
-        ('Hexadecimal', self.lora_payload_hex),
-        ('Texto legible', self.lora_payload_text),
+    for column, label, editor in (
+        (0, 'Hexadecimal', self.lora_payload_hex),
+        (1, 'Texto legible', self.lora_payload_text),
     ):
         editor.setReadOnly(True)
         editor.setStyleSheet('background-color: #101010; border: 1px solid #333; color: white;')
         if editor is self.lora_payload_text:
             editor.setToolTip('Texto legible o vista completa con escapes. El hexadecimal conserva todos los bytes.')
-        column = QVBoxLayout()
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(2)
         label_row = QHBoxLayout()
         label_row.addWidget(QLabel(label))
         if editor is self.lora_payload_text:
@@ -1167,9 +1165,11 @@ def build_ui(self, state):
             self.lora_full_text_checkbox.toggled.connect(self._refresh_lora_payload_text)
             label_row.addStretch(1)
             label_row.addWidget(self.lora_full_text_checkbox)
-        column.addLayout(label_row)
-        column.addWidget(editor)
-        payload_columns.addLayout(column, 1)
+        payload_columns.addLayout(label_row, 0, column)
+        payload_columns.addWidget(editor, 1, column)
+    payload_columns.setColumnStretch(0, 1)
+    payload_columns.setColumnStretch(1, 1)
+    payload_columns.setRowStretch(1, 1)
     payload_layout.addLayout(payload_columns, 1)
     crc_row = QHBoxLayout()
     crc_row.addWidget(QLabel('CRC:'))
