@@ -68,3 +68,19 @@ def test_silence_clears_packet_metrics():
     result = demod.procesar(np.zeros(count, dtype=np.complex64))
 
     assert result["metricas"]["btle_metrics"] is None
+
+
+def test_tone_transient_is_not_a_btle_preamble():
+    demod = DemoduladorBTLE()
+    demod.configurar(20_000_000, 2048)
+    demod.skip_metrics = True
+    count = int(demod.sample_rate * demod.buffer_len_s)
+    rng = np.random.default_rng(42)
+    iq = (rng.normal(0, 0.005, count)
+          + 1j * rng.normal(0, 0.005, count)).astype(np.complex64)
+    phase = 2 * np.pi * 300_000 * np.arange(4000) / demod.sample_rate
+    iq[20_000:24_000] += 0.7 * np.exp(1j * phase)
+
+    metrics = demod.procesar(iq)["metricas"]["btle_metrics"]
+
+    assert metrics["preamble_found"] is False

@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+from scipy.signal import butter, sosfilt
 from .base import DemoduladorBase
 
 
@@ -386,6 +387,18 @@ class DemoduladorBTLE(DemoduladorBase):
             for bits in self._preamble_bits_variants
         ]
 
+        # Rechazo de la fuga DC y de canales vecinos dentro de cada ráfaga.
+        # Se aplica a ventanas cortas para no filtrar 20 Msps continuamente
+        # en el callback de la HackRF.
+        high_cut_hz = 20_000
+        low_cut_hz = 1_400_000 if bw_mhz == 1 else 2_400_000
+        self._channel_sos = np.vstack((
+            butter(2, high_cut_hz, btype='highpass',
+                   fs=self.sample_rate, output='sos'),
+            butter(6, low_cut_hz, btype='lowpass',
+                   fs=self.sample_rate, output='sos'),
+        ))
+
     # ──────────────────────────────────────────────────────────────────
     # Procesamiento principal
     # ──────────────────────────────────────────────────────────────────
@@ -433,34 +446,51 @@ class DemoduladorBTLE(DemoduladorBase):
             selected = None
             margin = int(self.sample_rate * 50e-6)
             display_len = int(self.sample_rate * self._DISPLAY_WINDOW_S)
-            for start, end in zip(burst_starts, burst_ends):
+            # Acotar el peor caso cuando otra fuente llena el canal de
+            # ráfagas que no son BLE: el callback no puede recorrer cientos.
+            for start, end in zip(burst_starts[:16], burst_ends[:16]):
                 region_start = max(0, int(start) - margin)
                 region_end = min(len(iq_samples), max(
                     int(end) + margin, int(start) + display_len + margin))
-                region_iq = iq_samples[region_start:region_end]
+                raw_region_iq = iq_samples[region_start:region_end]
+                region_iq = sosfilt(self._channel_sos, raw_region_iq).astype(np.complex64)
                 region_freq = self._frequency_deviation(region_iq)
                 local_starts = np.array([int(start) - region_start])
                 local_ends = np.array([int(end) - region_start])
                 candidate_start, quality, _ = self._find_preamble_by_correlation(
                     region_freq, local_starts)
+                if candidate_start is not None and quality < 0.60:
+                    # El arranque de un tono puede producir un pico espurio
+                    # después del filtro. Con calidad baja, exigir que el
+                    # preámbulo también aparezca en el IQ sin filtrar.
+                    raw_freq = self._frequency_deviation(raw_region_iq)
+                    raw_start, _, _ = self._find_preamble_by_correlation(
+                        raw_freq, local_starts)
+                    if (raw_start is None or
+                            abs(raw_start - candidate_start) > 2 * self._samples_per_bit):
+                        candidate_start = None
                 if selected is None:
-                    selected = (region_iq, region_freq, local_starts, local_ends)
-                sync_quality = max(sync_quality, quality)
-                if candidate_start is not None:
+                    selected = (region_iq, region_freq, local_starts,
+                                local_ends, raw_region_iq)
+                if candidate_start is not None and quality > sync_quality:
                     preamble_start = candidate_start
                     sync_quality = quality
-                    selected = (region_iq, region_freq, local_starts, local_ends)
-                    break
+                    selected = (region_iq, region_freq, local_starts,
+                                local_ends, raw_region_iq)
+                    if quality >= 0.8:
+                        break
 
             if selected is None:
                 # Señal continua: mantener una ventana centrada para el display.
                 center = len(iq_samples) // 2
                 region_start = max(0, center - display_len // 2)
-                region_iq = iq_samples[region_start:region_start + display_len]
+                raw_region_iq = iq_samples[region_start:region_start + display_len]
+                region_iq = sosfilt(self._channel_sos, raw_region_iq).astype(np.complex64)
                 selected = (region_iq, self._frequency_deviation(region_iq),
-                            np.array([], dtype=int), np.array([], dtype=int))
+                            np.array([], dtype=int), np.array([], dtype=int),
+                            raw_region_iq)
 
-            iq_samples, freq_dev_hz, local_starts, local_ends = selected
+            iq_samples, freq_dev_hz, local_starts, local_ends, raw_region_iq = selected
 
             extract_start = None
             extract_end = None
@@ -501,7 +531,7 @@ class DemoduladorBTLE(DemoduladorBase):
             # PASO 4: Cálculo de métricas de la ventana extraída
             # ═════════════════════════════════════════════════════════
             if extract_start is not None:
-                burst_samples = iq_samples[extract_start:extract_end]
+                burst_samples = raw_region_iq[extract_start:extract_end]
                 
                 # Reusar la desviación de frecuencia ya calculada en PASO 1 y 
                 # corregida en PASO 3 (CFO). Esto evita re-demodular con el centrado
@@ -724,14 +754,21 @@ class DemoduladorBTLE(DemoduladorBase):
                 self.last_burst_metrics = None
 
 
-        # La FFT usa solo sus primeras fft_size muestras. Estimar DC sobre esa
-        # misma ventana evita dejar un residuo en el bin central del espectro.
+        # Quitar el offset de la ventana elimina el pico de fuga DC. Como eso
+        # anula matemáticamente el bin central, reconstruirlo para el gráfico
+        # con los bins vecinos evita dibujar una muesca artificial en la señal.
         iq_spectrum = muestras_iq[:self.fft_size]
         if iq_spectrum.size:
             iq_spectrum = iq_spectrum - np.mean(iq_spectrum)
         fft_data = np.fft.fftshift(
             np.fft.fft(iq_spectrum, n=self.fft_size))
-        psd = 10 * np.log10(np.abs(fft_data) ** 2 + 1e-12)
+        spectrum_power = np.abs(fft_data) ** 2
+        if spectrum_power.size > 2:
+            center = spectrum_power.size // 2
+            spectrum_power[center] = (
+                spectrum_power[center - 1] + spectrum_power[center + 1]
+            ) / 2
+        psd = 10 * np.log10(spectrum_power + 1e-12)
 
         resultados['psd_rf'] = psd
         resultados['rf_chunk'] = np.array([])
