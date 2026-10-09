@@ -707,7 +707,7 @@ def build_ui(self, state):
     
     self.btle_power_widget = pg.PlotWidget(title="Potencia vs Tiempo")
     self.btle_power_widget.setLabel('bottom', 'Tiempo [us]')
-    self.btle_power_widget.setLabel('left', 'Potencia [dBm]')
+    self.btle_power_widget.setLabel('left', 'Potencia [dB rel. IQ]')
     self.btle_power_curve = self.btle_power_widget.plot([], pen=pg.mkPen(color="blue", width=1.0))
     
     self.btle_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia")
@@ -715,9 +715,9 @@ def build_ui(self, state):
     self.btle_freq_widget.setLabel('left', 'Frecuencia [kHz]')
     self.btle_freq_curve = self.btle_freq_widget.plot([], pen=pg.mkPen(color="royalblue", width=1.0))
     
-    self.btle_acp_widget = pg.PlotWidget(title="Espectro ACP")
-    self.btle_acp_widget.setLabel('bottom', 'Canal (Ch)')
-    self.btle_acp_widget.setLabel('left', 'Potencia [dBm]')
+    self.btle_acp_widget = pg.PlotWidget(title="Potencia por banda")
+    self.btle_acp_widget.setLabel('bottom', 'Desplazamiento [MHz]')
+    self.btle_acp_widget.setLabel('left', 'Potencia [dB rel. IQ]')
     
     # Configure BarGraphItem with defaults so we can update it later
     
@@ -733,7 +733,7 @@ def build_ui(self, state):
     
     self.btle_power_table_widget = QTableWidget(4, 4)
     self.btle_power_table_widget.setHorizontalHeaderLabels(["Current", "Average", "Max", "Min"])
-    self.btle_power_table_widget.setVerticalHeaderLabels(["Average Power [dBm]", "Peak Power [dBm]", "Peak to Avg Power [dB]", "Leakage Power [dBm]"])
+    self.btle_power_table_widget.setVerticalHeaderLabels(["Average Power [dB rel. IQ]", "Peak Power [dB rel. IQ]", "Peak to Avg Power [dB]", "Idle Power [dB rel. IQ]"])
     self.btle_power_table_widget.setStyleSheet("""
         QTableWidget {
             background-color: #1e1e1e;
@@ -1135,7 +1135,7 @@ def build_ui(self, state):
     """)
 
     self.btle_bw_actions = []
-    for label, bw in [("1 MHz (LE 1M)", 1), ("2 MHz (LE 2M)", 2)]:
+    for label, bw in [("LE 1M (1 Mb/s)", 1), ("LE 2M (2 Mb/s)", 2)]:
         action = QAction(label, self)
         action.setCheckable(True)
         action.triggered.connect(lambda checked, b=bw: self.set_btle_mode(b))

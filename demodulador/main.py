@@ -330,6 +330,8 @@ class MainWindow(QMainWindow):
     
     @receiver_transition
     def set_btle_mode(self, bw_mhz=1):
+        if state.get('demod_mode') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
         self._reset_maximized_state()
@@ -374,6 +376,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btle_metrics_label'):
             self.btle_metrics_label.show()
 
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+
         state['demod_mode'] = 'btle'
         state['sample_rate'] = 20e6
         
@@ -388,9 +397,6 @@ class MainWindow(QMainWindow):
         self.unit_combo.setCurrentText("GHz")
         self.freq_input.setValue(2.402) # BTLE default CH 37
 
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
-            
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("20 MHz") != -1:
             self.sr_combo.setCurrentText("20 MHz")
@@ -399,15 +405,9 @@ class MainWindow(QMainWindow):
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
         
-        self.fft_combo.blockSignals(True)
-        if hasattr(self, 'sa_fft_size_text'):
-            self.fft_combo.setCurrentText(self.sa_fft_size_text)
-            state['fft_size'] = int(self.sa_fft_size_text)
-        self.fft_combo.setEnabled(True)
-        self.fft_combo.blockSignals(False)
         self.freq_plot.show()
         
-        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
+        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE LE {bw_mhz}M")
 
     @receiver_transition
     def set_wifi_ag_mode(self):
@@ -1209,7 +1209,12 @@ class MainWindow(QMainWindow):
         state['fft_size'] = int(text)
         self.trace_manager.reset()
         if self.demodulador_actual is not None:
-            self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            if isinstance(self.demodulador_actual, DemoduladorBTLE):
+                self.demodulador_actual.configurar(
+                    state['sample_rate'], state['fft_size'],
+                    bw_mhz=self.demodulador_actual.bw_mhz)
+            else:
+                self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.update_x_axis()
             
     def on_fft_window_changed(self, text):

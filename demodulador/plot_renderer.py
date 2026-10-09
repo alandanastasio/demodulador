@@ -573,6 +573,17 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
         if state.get('demod_mode') == 'btle':
             if fm_metrics and 'btle_metrics' in fm_metrics:
                 btle = fm_metrics['btle_metrics']
+                if btle is None:
+                    for curve_name in ('btle_freq_curve', 'btle_power_curve', 'btle_mag_curve'):
+                        if hasattr(self, curve_name):
+                            getattr(self, curve_name).setData([], [])
+                    if hasattr(self, 'btle_acp_bars'):
+                        self.btle_acp_bars.setOpts(x=[], height=[])
+                    if hasattr(self, '_btle_freq_metrics_text'):
+                        self._btle_freq_metrics_text.setVisible(False)
+                    if hasattr(self, 'btle_metrics_label'):
+                        self.btle_metrics_label.setText('Sin ráfaga BTLE detectada')
+                    return
                 
                 skip_metrics = btle.get('skip_metrics', False)
                 
@@ -587,6 +598,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         df2_min = btle.get('df2_min_khz', 0.0)
                         mod_idx = btle.get('mod_index', 0.0)
                         drift = btle.get('freq_drift_khz', 0.0)
+                        phy = btle.get('phy_mbps', 1)
                         
                         # Colores según pass/fail de la spec BLE
                         green = '#4CAF50'
@@ -596,17 +608,17 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         # Δf1avg/Δf2avg en TRÁFICO VIVO:
                         # La especificación exige medir con la secuencia 11110000 para obtener >225 kHz.
                         # En payloads aleatorios (live traffic), la media cae a 150-220 kHz por el patrón 1010 y el filtro Gaussiano.
-                        c1 = green if 140 <= df1_avg <= 280 else (yellow if 120 <= df1_avg <= 300 else red)
-                        c2 = green if -280 <= df2_avg <= -140 else (yellow if -300 <= df2_avg <= -120 else red)
+                        c1 = green if 140 * phy <= df1_avg <= 280 * phy else (yellow if 120 * phy <= df1_avg <= 300 * phy else red)
+                        c2 = green if -280 * phy <= df2_avg <= -140 * phy else (yellow if -300 * phy <= df2_avg <= -120 * phy else red)
                         
                         # Δf1max / Δf2min: el pico debe alcanzar cerca de 250 kHz y no exceder los 300 kHz
-                        c3 = green if 185 <= df1_max <= 320 else (yellow if 170 <= df1_max <= 350 else red)
-                        c4 = green if -320 <= df2_min <= -185 else (yellow if -350 <= df2_min <= -170 else red)
+                        c3 = green if 185 * phy <= df1_max <= 320 * phy else (yellow if 170 * phy <= df1_max <= 350 * phy else red)
+                        c4 = green if -320 * phy <= df2_min <= -185 * phy else (yellow if -350 * phy <= df2_min <= -170 * phy else red)
                         
                         # Mod index: En tráfico vivo, al promediar todos los bits, el índice cae a ~0.3 - 0.45.
                         c5 = green if 0.28 <= mod_idx <= 0.55 else (yellow if 0.25 <= mod_idx <= 0.60 else red)
-                        # Drift: spec ≤ 25 kHz
-                        c6 = green if abs(drift) <= 25 else red
+                        # Estimación a partir de bits desconocidos; sin veredicto normativo.
+                        c6 = '#CCCCCC'
                         
                         text = (
                             f"<span style='font-size:13pt; font-family:monospace;'>"
@@ -615,7 +627,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                             f"<span style='color:{c3};'>Δf1max:  {df1_max:+.1f} kHz</span><br>"
                             f"<span style='color:{c4};'>Δf2min:  {df2_min:+.1f} kHz</span><br>"
                             f"<span style='color:{c5};'>Mod Index (h): {mod_idx:.3f}</span><br>"
-                            f"<span style='color:{c6};'>Freq Drift: {drift:+.1f} kHz</span>"
+                            f"<span style='color:{c6};'>Deriva est.: {drift:+.1f} kHz</span>"
                             f"</span>"
                         )
                         
@@ -749,16 +761,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                             </table>
                             
                             <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
-                                <b>TX POWER VS. TIME</b>
+                                <b>POTENCIA IQ VS. TIEMPO</b>
                             </div>
                             <table style='width: 100%;'>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
-                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dB rel. IQ</td>
                                 </tr>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
-                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dB rel. IQ</td>
                                 </tr>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>

@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from .base import DemoduladorBase
 
 
@@ -18,10 +19,10 @@ class DemoduladorBTLE(DemoduladorBase):
     de la Link Layer. Es una secuencia alternada de bits que NO se somete
     a whitening y está fuera de la cobertura del CRC.
 
-    Para LE 1M PHY: 1 octeto (8 bits), pattern según Access Address:
+    Para LE 1M PHY: 1 octeto (8 bits), patrón según Access Address:
       - Si primer bit físico AA = 0 → preámbulo 01010101 (termina en 1)
       - Si primer bit físico AA = 1 → preámbulo 10101010 (termina en 0)
-    Esto garantiza 8 transiciones consecutivas para el enganche de reloj.
+    LE 2M usa un preámbulo alternado de 16 bits con el mismo criterio.
     """
 
     # ── Constantes ──
@@ -30,7 +31,8 @@ class DemoduladorBTLE(DemoduladorBase):
     _SQUELCH_THRESHOLD_DB = 10.0        # Squelch: dB por debajo del pico para silenciar FM
     _LEAKAGE_THRESHOLD_DB = 20.0        # Leakage: dB por debajo del pico para medir fuga
     _FREQ_CLAMP_HZ = 800000             # Clamp de frecuencia instantánea (Hz)
-    _DISPLAY_WINDOW_S = 500e-6          # Ventana de visualización (s) — paquete BLE máx ~376 µs
+    _DISPLAY_WINDOW_S = 500e-6          # Ventana de visualización (s)
+    _BURST_SMOOTH_S = 50e-6
 
     def __init__(self):
         super().__init__()
@@ -44,15 +46,14 @@ class DemoduladorBTLE(DemoduladorBase):
         self.last_burst_metrics = None
         self.skip_metrics = False
 
-        # ── Parámetros de la capa física LE 1M ──
+        # Parámetros iniciales; configurar() selecciona LE 1M o LE 2M.
         self.bit_rate = 1e6            # 1 Mbps (LE 1M PHY)
         self.modulation_index = 0.5    # h = 0.5
         # Desviación: Δf = h × bit_rate / 2 = ±250 kHz
         self.freq_deviation = self.modulation_index * self.bit_rate / 2
         self.bt_product = 0.5          # BT del filtro Gaussiano GFSK
 
-        # Preámbulo: 8 bits para LE 1M PHY (1 octeto).
-        # Para LE 2M sería 16 bits; para LE Coded, 80 símbolos de '00111100'.
+        # Preámbulo: 8 bits para LE 1M, 16 bits para LE 2M.
         self.preamble_len_bits = 8
 
         # Variantes del preámbulo según el Access Address.
@@ -97,13 +98,13 @@ class DemoduladorBTLE(DemoduladorBase):
         1. Codificando bits en NRZ (0→-1, 1→+1)
         2. Creando un tren de pulsos rectangulares (1 bit = sps muestras)
         3. Aplicando un filtro Gaussiano (BT=0.5) para suavizar transiciones
-        4. Escalando a ±250 kHz de desviación
+        4. Escalando a la desviación nominal de la PHY seleccionada
 
         El resultado es la curva de frecuencia instantánea que un receptor
         ideal vería al recibir esta secuencia de bits.
 
         Args:
-            bits: ndarray de bits (0/1), típicamente 8 bits de preámbulo
+            bits: ndarray de bits (0/1) del preámbulo
 
         Returns:
             ndarray: Desviación de frecuencia ideal en Hz
@@ -133,7 +134,7 @@ class DemoduladorBTLE(DemoduladorBase):
         # Aplicar filtro → transiciones suaves estilo GFSK
         freq_ref = np.convolve(rect_pulse, gaussian, mode='same')
 
-        # Escalar a desviación de frecuencia (±250 kHz)
+        # Escalar a la desviación de frecuencia de la PHY seleccionada.
         freq_ref *= self.freq_deviation
 
         return freq_ref
@@ -154,10 +155,21 @@ class DemoduladorBTLE(DemoduladorBase):
             tuple: (starts, ends, smoothed_power, dynamic_range_db)
                    starts/ends son arrays de índices de inicio/fin de ráfagas
         """
-        power = np.abs(iq_samples) ** 2
-        window_size = max(1, int(self.sample_rate * 50e-6))
-        window = np.ones(window_size) / window_size
-        smoothed_power = np.convolve(power, window, mode='same')
+        # La envolvente no necesita resolución de 20 MHz. Un punto por us
+        # conserva los flancos y reduce el detector de 1 M a ~50 k muestras.
+        decimation = max(1, int(round(self.sample_rate * 1e-6)))
+        block_count = len(iq_samples) // decimation
+        if block_count == 0:
+            return (np.array([], dtype=int), np.array([], dtype=int),
+                    np.array([], dtype=float), 0.0)
+        grouped = iq_samples[:block_count * decimation].reshape(
+            block_count, decimation)
+        power = np.mean(np.abs(grouped) ** 2, axis=1)
+        window_size = max(1, int(round(
+            self.sample_rate * self._BURST_SMOOTH_S / decimation)))
+        # uniform_filter1d calcula la media móvil en O(N).
+        smoothed_power = uniform_filter1d(power, size=window_size,
+                                          mode='constant', cval=0.0)
 
         p_min = np.min(smoothed_power)
         p_max = np.max(smoothed_power)
@@ -170,13 +182,13 @@ class DemoduladorBTLE(DemoduladorBase):
             threshold = p_min + (p_max - p_min) * self._BURST_ACTIVATION_RATIO
             is_active = smoothed_power > threshold
             edges = np.diff(is_active.astype(int))
-            starts = np.where(edges == 1)[0]
-            ends = np.where(edges == -1)[0]
+            starts = (np.where(edges == 1)[0] + 1) * decimation
+            ends = (np.where(edges == -1)[0] + 1) * decimation
 
             if len(is_active) > 0 and is_active[0]:
                 starts = np.insert(starts, 0, 0)
             if len(is_active) > 0 and is_active[-1]:
-                ends = np.append(ends, len(iq_samples) - 1)
+                ends = np.append(ends, len(iq_samples))
 
             # Filtrar ráfagas demasiado cortas o pegadas a los bordes
             min_burst_len = int(self.sample_rate * 20e-6)
@@ -221,12 +233,13 @@ class DemoduladorBTLE(DemoduladorBase):
         best_quality = 0.0
         best_variant = 0
         
-        # Margen de búsqueda: +/- 15 us alrededor del flanco de subida
+        # El filtro de potencia centrado puede adelantar el flanco ~15 us.
         margin = int(self.sample_rate * 15e-6)
+        lookahead = int(self.sample_rate * 35e-6)
 
         for s in approx_starts:
             search_start = max(0, s - margin)
-            search_end = min(len(freq_dev_hz), s + margin)
+            search_end = min(len(freq_dev_hz), s + lookahead)
             window_freq_dev = freq_dev_hz[search_start:search_end]
             
             for variant_idx, ref in enumerate(self._preamble_refs):
@@ -267,16 +280,16 @@ class DemoduladorBTLE(DemoduladorBase):
                 valid_peaks = np.where(is_peak & (abs_ncc >= self._sync_threshold))[0]
                 
                 if len(valid_peaks) > 0:
-                    # Tomar el PRIMER pico válido en el tiempo, pero cuidado:
-                    # debido al ruido, puede haber pequeños falsos "picos locales" (ripples)
-                    # en la ladera de subida de la montaña de correlación principal.
-                    # Para evitar elegir un ripple de baja calidad (ej. 0.33) en lugar
-                    # de la cima real (ej. 0.95), agrupamos todos los picos que ocurren
-                    # dentro de 1.5 us (el periodo de repetición del preámbulo es 2 us)
-                    # y nos quedamos con el máximo absoluto de ese primer grupo.
-                    first_peak = valid_peaks[0]
-                    cluster_window = int(self.sample_rate * 1.5e-6)
-                    cluster = valid_peaks[valid_peaks - first_peak <= cluster_window]
+                    # Rechazar los picos débiles previos al comienzo real.
+                    # Luego elegir el primer grupo fuerte, ya que el preámbulo
+                    # alternado también correlaciona bien desplazado un período.
+                    strongest = np.max(abs_ncc[valid_peaks])
+                    strong_peaks = valid_peaks[
+                        abs_ncc[valid_peaks] >= max(self._sync_threshold, 0.9 * strongest)
+                    ]
+                    first_peak = strong_peaks[0]
+                    cluster_window = int(1.5 * self._samples_per_bit)
+                    cluster = strong_peaks[strong_peaks - first_peak <= cluster_window]
                     
                     peak_idx_local = cluster[np.argmax(abs_ncc[cluster])]
                     peak_quality = float(abs_ncc[peak_idx_local])
@@ -305,8 +318,8 @@ class DemoduladorBTLE(DemoduladorBase):
         """
         Estima el Carrier Frequency Offset (CFO) a partir del preámbulo.
 
-        El preámbulo BLE es una secuencia perfectamente alternada (01010101
-        o 10101010). En GFSK con h=0.5, las desviaciones positivas (+Δf)
+        El preámbulo BLE es una secuencia alternada. En GFSK con h=0.5,
+        las desviaciones positivas (+Δf)
         y negativas (-Δf) se compensan exactamente entre sí, haciendo que
         la media de la frecuencia instantánea durante el preámbulo sea
         exactamente 0 Hz en ausencia de CFO.
@@ -343,10 +356,19 @@ class DemoduladorBTLE(DemoduladorBase):
 
     def configurar(self, sample_rate: float, fft_size: int,
                    bw_mhz: float = 1):
+        if bw_mhz not in (1, 2):
+            raise ValueError('BTLE admite las PHY LE 1M y LE 2M.')
         self.sample_rate = sample_rate
         self.fft_size = fft_size
         self.bw_mhz = bw_mhz
         self.buffer = np.array([], dtype=np.complex64)
+        self.last_burst_metrics = None
+
+        self.bit_rate = float(bw_mhz) * 1e6
+        self.freq_deviation = self.modulation_index * self.bit_rate / 2
+        self.preamble_len_bits = 8 if bw_mhz == 1 else 16
+        preamble = np.array([0, 1] * (self.preamble_len_bits // 2), dtype=float)
+        self._preamble_bits_variants = [preamble, 1.0 - preamble]
 
         # Calcular parámetros derivados del sample rate
         self._samples_per_bit = int(self.sample_rate / self.bit_rate)
@@ -368,7 +390,19 @@ class DemoduladorBTLE(DemoduladorBase):
     # Procesamiento principal
     # ──────────────────────────────────────────────────────────────────
 
+    def _frequency_deviation(self, iq_samples):
+        """Discriminador FM sobre una ventana de IQ, con salida en Hz."""
+        d = max(1, self._samples_per_bit // 4)
+        product = iq_samples[d:] * np.conj(iq_samples[:-d])
+        freq_dev_hz = np.angle(product) / (2 * np.pi * d) * self.sample_rate
+        pad_start = d // 2
+        freq_dev_hz = np.pad(freq_dev_hz, (pad_start, d - pad_start), mode='edge')
+        freq_limit = max(self._FREQ_CLAMP_HZ, int(2 * self.freq_deviation))
+        np.clip(freq_dev_hz, -freq_limit, freq_limit, out=freq_dev_hz)
+        return freq_dev_hz
+
     def procesar(self, muestras_iq: np.ndarray) -> dict:
+        muestras_iq = np.asarray(muestras_iq, dtype=np.complex64)
         self.buffer = np.concatenate((self.buffer, muestras_iq))
 
         # Protección contra crecimiento indefinido del buffer
@@ -377,8 +411,10 @@ class DemoduladorBTLE(DemoduladorBase):
 
         target_len = int(self.sample_rate * self.buffer_len_s)
         resultados = {}
+        processed_window = False
 
         if len(self.buffer) >= target_len:
+            processed_window = True
             iq_samples = self.buffer[:target_len]
             overlap = int(self.sample_rate * 2e-3)
             self.buffer = self.buffer[target_len - overlap:]
@@ -388,49 +424,43 @@ class DemoduladorBTLE(DemoduladorBase):
             # demodulación de FM que ocurren cuando hay un DC Offset y un pequeño CFO.
             iq_samples = iq_samples - np.mean(iq_samples)
 
-            # ═════════════════════════════════════════════════════════
-            # PASO 1: FM Demodulación del buffer completo
-            # Derivada de la fase → frecuencia instantánea
-            # ═════════════════════════════════════════════════════════
-            # Discriminador FM con retardo múltiple (arctangent discriminator)
-            # np.diff(unwrap(angle(x))) tiene BW = fs/2 = 10 MHz a 20 Msps,
-            # lo cual amplifica el ruido de fase del SDR en 20× sobre lo necesario.
-            # El discriminador con retardo d:
-            #   freq[n] = angle(x[n] · conj(x[n-d])) × fs / (2π·d)
-            # tiene BW ≈ fs/d. Con d = sps/4 → BW ≈ 4 × bit_rate = 4 MHz,
-            # suficiente para GFSK BT=0.5 (cuyo BW real es ~2 × bit_rate)
-            # y con ~7 dB menos de ruido que np.diff.
-            d = max(1, self._samples_per_bit // 4)
-            product = iq_samples[d:] * np.conj(iq_samples[:-d])
-            freq_dev_hz = np.angle(product) / (2 * np.pi * d) * self.sample_rate
-            # Centrar temporalmente y rellenar a longitud original N
-            pad_start = d // 2
-            pad_end = d - pad_start
-            freq_dev_hz = np.concatenate((
-                np.full(pad_start, freq_dev_hz[0]),
-                freq_dev_hz,
-                np.full(pad_end, freq_dev_hz[-1])
-            ))
-            
-            # Limitar matemáticamente los picos transitorios de discontinuidad de fase.
-            # BLE usa desviación de +-250 kHz. Limitando a +-800 kHz damos muchísimo
-            # margen para el CFO (desalineación de portadora), pero matamos los picos
-            # de encendido/ruido que llegan a 5-10 MHz y rompen el auto-scale del gráfico.
-            np.clip(freq_dev_hz, -self._FREQ_CLAMP_HZ, self._FREQ_CLAMP_HZ, out=freq_dev_hz)
-
-            # ═════════════════════════════════════════════════════════
-            # PASO 2: Detección aproximada de ráfagas (potencia)
-            # ═════════════════════════════════════════════════════════
+            # Buscar candidatos sobre la potencia antes de calcular la fase.
+            # En tráfico normal la mayoría del bloque de 50 ms es silencio.
             burst_starts, burst_ends, _, _ = self._detect_bursts(iq_samples)
 
-            # ═════════════════════════════════════════════════════════
-            # PASO 3: Sincronización por correlación con preámbulo
-            # El preámbulo cumple la función de Symbol Timing Recovery:
-            # la NCC con la referencia GFSK localiza exactamente dónde
-            # empieza cada símbolo (duración 1 µs en LE 1M).
-            # ═════════════════════════════════════════════════════════
-            preamble_start, sync_quality, preamble_variant = \
-                self._find_preamble_by_correlation(freq_dev_hz, burst_starts)
+            preamble_start = None
+            sync_quality = 0.0
+            selected = None
+            margin = int(self.sample_rate * 50e-6)
+            display_len = int(self.sample_rate * self._DISPLAY_WINDOW_S)
+            for start, end in zip(burst_starts, burst_ends):
+                region_start = max(0, int(start) - margin)
+                region_end = min(len(iq_samples), max(
+                    int(end) + margin, int(start) + display_len + margin))
+                region_iq = iq_samples[region_start:region_end]
+                region_freq = self._frequency_deviation(region_iq)
+                local_starts = np.array([int(start) - region_start])
+                local_ends = np.array([int(end) - region_start])
+                candidate_start, quality, _ = self._find_preamble_by_correlation(
+                    region_freq, local_starts)
+                if selected is None:
+                    selected = (region_iq, region_freq, local_starts, local_ends)
+                sync_quality = max(sync_quality, quality)
+                if candidate_start is not None:
+                    preamble_start = candidate_start
+                    sync_quality = quality
+                    selected = (region_iq, region_freq, local_starts, local_ends)
+                    break
+
+            if selected is None:
+                # Señal continua: mantener una ventana centrada para el display.
+                center = len(iq_samples) // 2
+                region_start = max(0, center - display_len // 2)
+                region_iq = iq_samples[region_start:region_start + display_len]
+                selected = (region_iq, self._frequency_deviation(region_iq),
+                            np.array([], dtype=int), np.array([], dtype=int))
+
+            iq_samples, freq_dev_hz, local_starts, local_ends = selected
 
             extract_start = None
             extract_end = None
@@ -445,7 +475,7 @@ class DemoduladorBTLE(DemoduladorBase):
 
                 # ─── Corrección de CFO ───
                 # Restar el offset de toda la señal FM-demodulada
-                # para que los niveles ±250 kHz queden centrados en 0.
+                # para que los niveles de la PHY queden centrados en 0.
                 freq_dev_hz -= cfo_hz
 
                 # ─── Ventana de visualización anclada al preámbulo ───
@@ -463,7 +493,7 @@ class DemoduladorBTLE(DemoduladorBase):
                 # Para señales sin preámbulo BLE válido (CW, tono, etc.)
                 extract_start, extract_end, cfo_hz = \
                     self._fallback_power_detection(
-                        iq_samples, freq_dev_hz, burst_starts, burst_ends)
+                        iq_samples, freq_dev_hz, local_starts, local_ends)
                 if cfo_hz != 0.0:
                     freq_dev_hz -= cfo_hz
 
@@ -488,9 +518,9 @@ class DemoduladorBTLE(DemoduladorBase):
                 # lo que infla los picos de la señal GFSK (onda cuadrada) superando los 300 kHz.
                 # La especificación Bluetooth exige un filtro de medida Gaussiano (BT=0.5).
                 # El filtro Gaussiano no tiene NINGÚN overshoot.
-                from scipy.ndimage import gaussian_filter1d
-                # Para BT=0.5 a 20 MSps, sigma ideal es ~5.3. Usamos 4.5 para no atenuar de más.
-                b_freq_dev_hz = gaussian_filter1d(b_freq_dev_hz, sigma=4.5)
+                # Conservar la misma suavización relativa al período de bit.
+                b_freq_dev_hz = gaussian_filter1d(
+                    b_freq_dev_hz, sigma=0.225 * self._samples_per_bit)
                 
                 # Centrado Dinámico Robusto (Elimina el "salto" vertical)
                 # Estimar el CFO usando solo los 8 µs del preámbulo es muy ruidoso,
@@ -648,13 +678,20 @@ class DemoduladorBTLE(DemoduladorBase):
                         if len(pos_devs) > 0 and len(neg_devs) > 0:
                             mod_index = (df1_avg - df2_avg) / (self.bit_rate / 1000.0)
 
-                        # Frequency Drift: diferencia entre la media de los puntos
-                        # de decisión en la primera mitad vs la segunda mitad
+                        # Estimar el centro de los niveles positivos y negativos
+                        # por mitad. La media simple confunde deriva con el
+                        # desbalance de bits del payload.
                         half = len(bit_devs) // 2
-                        if half > 0:
-                            first_half_mean = float(np.mean(bit_devs[:half]))
-                            second_half_mean = float(np.mean(bit_devs[half:]))
-                            freq_drift_khz = second_half_mean - first_half_mean
+                        if half >= 4:
+                            first_half = bit_devs[:half]
+                            second_half = bit_devs[half:]
+                            if (np.any(first_half > 0) and np.any(first_half < 0)
+                                    and np.any(second_half > 0) and np.any(second_half < 0)):
+                                first_center = (np.median(first_half[first_half > 0])
+                                                + np.median(first_half[first_half < 0])) / 2
+                                second_center = (np.median(second_half[second_half > 0])
+                                                 + np.median(second_half[second_half < 0])) / 2
+                                freq_drift_khz = float(second_center - first_center)
 
                 self.last_burst_metrics = {
                     'burst_time_us': burst_time_us,
@@ -679,17 +716,26 @@ class DemoduladorBTLE(DemoduladorBase):
                     'df2_min_khz': df2_min,
                     'mod_index': mod_index,
                     'freq_drift_khz': freq_drift_khz,
-                    'skip_metrics': self.skip_metrics
+                    'skip_metrics': self.skip_metrics,
+                    'phy_mbps': self.bw_mhz,
                 }
 
+            if len(burst_starts) == 0:
+                self.last_burst_metrics = None
 
+
+        # La FFT usa solo sus primeras fft_size muestras. Estimar DC sobre esa
+        # misma ventana evita dejar un residuo en el bin central del espectro.
+        iq_spectrum = muestras_iq[:self.fft_size]
+        if iq_spectrum.size:
+            iq_spectrum = iq_spectrum - np.mean(iq_spectrum)
         fft_data = np.fft.fftshift(
-            np.fft.fft(muestras_iq, n=self.fft_size))
+            np.fft.fft(iq_spectrum, n=self.fft_size))
         psd = 10 * np.log10(np.abs(fft_data) ** 2 + 1e-12)
 
         resultados['psd_rf'] = psd
         resultados['rf_chunk'] = np.array([])
-        if self.last_burst_metrics is not None:
+        if processed_window:
             resultados['metricas'] = {
                 'btle_metrics': self.last_burst_metrics
             }
