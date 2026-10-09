@@ -387,17 +387,15 @@ class DemoduladorBTLE(DemoduladorBase):
             for bits in self._preamble_bits_variants
         ]
 
-        # Rechazo de la fuga DC y de canales vecinos dentro de cada ráfaga.
-        # Se aplica a ventanas cortas para no filtrar 20 Msps continuamente
-        # en el callback de la HackRF.
-        high_cut_hz = 20_000
+        # El offset DC se resta sobre el bloque de 50 ms en procesar(). Un
+        # pasaaltos sobre cada ráfaga distorsiona los cruces por 0 Hz de GFSK
+        # y crea picos falsos en la desviación de frecuencia instantánea.
+        # Filtrar solo los canales vecinos, sobre ventanas cortas, evita
+        # procesar los 20 Msps continuamente en el callback de la HackRF.
         low_cut_hz = 1_400_000 if bw_mhz == 1 else 2_400_000
-        self._channel_sos = np.vstack((
-            butter(2, high_cut_hz, btype='highpass',
-                   fs=self.sample_rate, output='sos'),
-            butter(6, low_cut_hz, btype='lowpass',
-                   fs=self.sample_rate, output='sos'),
-        ))
+        self._channel_sos = butter(
+            6, low_cut_hz, btype='lowpass',
+            fs=self.sample_rate, output='sos')
 
     # ──────────────────────────────────────────────────────────────────
     # Procesamiento principal

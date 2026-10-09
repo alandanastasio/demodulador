@@ -31,8 +31,12 @@ def test_preamble_is_found_after_smoothed_power_edge(phy_mbps):
 
     assert demod.preamble_len_bits == 8 * phy_mbps
     assert metrics["preamble_found"] is True
-    assert metrics["sync_quality"] > 0.8
+    assert metrics["sync_quality"] > 0.95
     assert abs(metrics["cfo_khz"] - 50) < 25
+    # El GFSK generado nunca excede la desviación nominal: el filtro de canal
+    # no debe crear picos grandes al atravesar la frecuencia central.
+    assert metrics["df1_max_khz"] < 350 * phy_mbps
+    assert metrics["df2_min_khz"] > -350 * phy_mbps
     assert "metricas" not in demod.procesar(np.zeros(1024, dtype=np.complex64))
 
 
