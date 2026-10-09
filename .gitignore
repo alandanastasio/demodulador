@@ -11,6 +11,9 @@ wheels/
 
 #Señales guardadas
 *.npz
+
+# Copias locales de firmware de equipos externos
+hardware_backups/
 demodulador/capturaDSOcorrect (6).ipynb
 demodulador/research/notebook_extracted.py
 .gitignore
@@ -27,3 +30,16 @@ demodulador/research/LTE/TM1_15RB_FDD.dat
 demodulador/research/LTE/VSA_uplink.jpg
 demodulador/research/LTE/VSA_downlink.jpeg
 demodulador/research/LoRa/visualizador_lora_dechirp.py
+hardware/dragino_lg01/README.md
+.gitignore
+hardware/dragino_lg01/RadioHead-raw-access.patch
+.gitignore
+hardware/dragino_lg01/receiver/receiver.ino
+hardware/dragino_lg01/lora_rx.init
+hardware/dragino_lg01/lora_rx_logger.py
+hardware/dragino_lg01/diagrama_flujo_mqtt.png
+.gitignore
+hardware/dragino_lg01/lora_mqtt_bridge.py
+hardware/dragino_lg01/lora_mqtt.init
+hardware/dragino_lg01/diagrama_flujo_mqtt.svg
+hardware/dragino_lg01/receiver/receiver-web.hex
