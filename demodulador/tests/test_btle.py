@@ -10,7 +10,6 @@ from dsp.demoduladores.btle import DemoduladorBTLE
 def test_preamble_is_found_after_smoothed_power_edge(phy_mbps):
     demod = DemoduladorBTLE()
     demod.configurar(20_000_000, 2048, bw_mhz=phy_mbps)
-    demod.skip_metrics = True
 
     rng = np.random.default_rng(42)
     count = int(demod.sample_rate * demod.buffer_len_s)
@@ -37,6 +36,9 @@ def test_preamble_is_found_after_smoothed_power_edge(phy_mbps):
     # no debe crear picos grandes al atravesar la frecuencia central.
     assert metrics["df1_max_khz"] < 350 * phy_mbps
     assert metrics["df2_min_khz"] > -350 * phy_mbps
+    window_power_db = 10 * np.log10(np.mean(metrics["mag_linear"] ** 2))
+    # Ninguna banda de la FFT puede contener más potencia que toda la ventana.
+    assert np.max(metrics["acp_power_dbm"]) <= window_power_db + 0.1
     assert "metricas" not in demod.procesar(np.zeros(1024, dtype=np.complex64))
 
 

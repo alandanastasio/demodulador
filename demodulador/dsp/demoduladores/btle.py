@@ -607,8 +607,11 @@ class DemoduladorBTLE(DemoduladorBase):
                     nfft = 1
                     while nfft < N_b:
                         nfft *= 2
-                    fft_vals = np.fft.fftshift(np.fft.fft(burst_samples, n=nfft)) / N_b
-                    power_spectrum_b = np.abs(fft_vals) ** 2
+                    fft_vals = np.fft.fftshift(np.fft.fft(burst_samples, n=nfft))
+                    # Parseval: la suma de todos los bins debe ser la potencia
+                    # media del IQ original. Al rellenar con ceros, dividir
+                    # solo por N_b infla el resultado por nfft / N_b.
+                    power_spectrum_b = np.abs(fft_vals) ** 2 / (nfft * N_b)
     
                     channel_bw = self.bw_mhz * 1e6
                     offsets_mhz = np.arange(-10, 11)
