@@ -2,6 +2,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from scipy.signal import butter, sosfilt
 from .base import DemoduladorBase
+from .btle_frames import ADVERTISING_ACCESS_BITS, decode_legacy_pdu_bits
 
 
 class DemoduladorBTLE(DemoduladorBase):
@@ -49,6 +50,10 @@ class DemoduladorBTLE(DemoduladorBase):
         self.buffer_len_s = 0.05
         self.buffer = np.array([], dtype=np.complex64)
         self.last_burst_metrics = None
+        self.advertising_channel = None
+        self._buffer_start_sample = 0
+        self._recent_packet_starts = []
+        self.valid_packet_count = 0
         self.skip_metrics = False
 
         # Parámetros iniciales; configurar() selecciona LE 1M o LE 2M.
@@ -370,6 +375,8 @@ class DemoduladorBTLE(DemoduladorBase):
         self.bw_mhz = bw_mhz
         self.buffer = np.array([], dtype=np.complex64)
         self.last_burst_metrics = None
+        self._buffer_start_sample = 0
+        self._recent_packet_starts = []
 
         self.bit_rate = float(bw_mhz) * 1e6
         self.freq_deviation = self.modulation_index * self.bit_rate / 2
@@ -403,6 +410,49 @@ class DemoduladorBTLE(DemoduladorBase):
             6, low_cut_hz, btype='lowpass',
             fs=self.sample_rate, output='sos')
 
+    def set_center_frequency(self, frequency_hz):
+        """Selecciona el índice BLE usado para deshacer el whitening."""
+        frequencies = {37: 2_402_000_000, 38: 2_426_000_000,
+                       39: 2_480_000_000}
+        channel = next(
+            (channel for channel, center in frequencies.items()
+             if abs(frequency_hz - center) < 100_000), None)
+        if channel != self.advertising_channel:
+            self._buffer_start_sample += len(self.buffer)
+            self.buffer = np.empty(0, dtype=np.complex64)
+            self._recent_packet_starts = []
+        self.advertising_channel = channel
+
+    def _decode_legacy_candidate(self, freq_dev_hz, preamble_start):
+        """Prueba fases vecinas de reloj; solo acepta AA exacta y CRC válido."""
+        if self.bw_mhz != 1 or self.advertising_channel is None:
+            return None, None
+        sps = self._samples_per_bit
+        cfo = self._estimate_cfo(freq_dev_hz, preamble_start)
+        max_bits = 8 + 32 + (2 + 37 + 3) * 8
+        half_width = max(1, sps // 5)
+        cumulative = np.concatenate(([0.0], np.cumsum(freq_dev_hz)))
+        for shift in range(-2 * sps, 2 * sps + 1, max(1, sps // 4)):
+            start = preamble_start + shift
+            if start < 0:
+                continue
+            count = min(max_bits, (len(freq_dev_hz) - start) // sps)
+            if count < 8 + 32 + 16 + 24:
+                continue
+            centers = start + np.arange(count) * sps + sps // 2
+            lo = centers - half_width
+            hi = centers + half_width + 1
+            if lo[0] < 0 or hi[-1] > len(freq_dev_hz):
+                continue
+            levels = (cumulative[hi] - cumulative[lo]) / (hi - lo) - cfo
+            bits = (levels > 0).astype(np.uint8)
+            if not np.array_equal(bits[8:40], ADVERTISING_ACCESS_BITS):
+                continue
+            packet = decode_legacy_pdu_bits(bits[40:], self.advertising_channel)
+            if packet is not None:
+                return packet, start
+        return None, None
+
     # ──────────────────────────────────────────────────────────────────
     # Procesamiento principal
     # ──────────────────────────────────────────────────────────────────
@@ -424,6 +474,7 @@ class DemoduladorBTLE(DemoduladorBase):
 
         # Protección contra crecimiento indefinido del buffer
         if self._max_buffer_len and len(self.buffer) > self._max_buffer_len:
+            self._buffer_start_sample += len(self.buffer) - self._max_buffer_len
             self.buffer = self.buffer[-self._max_buffer_len:]
 
         target_len = int(self.sample_rate * self.buffer_len_s)
@@ -434,10 +485,16 @@ class DemoduladorBTLE(DemoduladorBase):
         if len(self.buffer) >= target_len:
             processed_window = True
             iq_samples = self.buffer[:target_len]
+            window_start_sample = self._buffer_start_sample
+            self._recent_packet_starts = [
+                sample for sample in self._recent_packet_starts
+                if sample >= window_start_sample - int(self.sample_rate * 4e-3)
+            ]
             # Cubrir una ráfaga que cruce el límite del bloque: la siguiente
             # ventana debe conservar su preámbulo y también su final.
             overlap = int(self.sample_rate * 4e-3)
             self.buffer = self.buffer[target_len - overlap:]
+            self._buffer_start_sample += target_len - overlap
 
             # Remover DC Offset (Fuga del Oscilador Local / LO Leakage). 
             # Esto evita oscilaciones de baja frecuencia (wobble/senoidal) en la
@@ -453,6 +510,7 @@ class DemoduladorBTLE(DemoduladorBase):
             preamble_start = None
             sync_quality = 0.0
             selected = None
+            decoded_packets = []
             margin = int(self.sample_rate * 50e-6)
             display_len = int(self.sample_rate * self._DISPLAY_WINDOW_S)
             # Acotar el peor caso cuando otra fuente llena el canal de
@@ -469,6 +527,25 @@ class DemoduladorBTLE(DemoduladorBase):
                 candidate_start, quality, variant = self._find_preamble_by_correlation(
                     region_freq, local_starts)
                 if candidate_start is not None:
+                    # AA + CRC constituyen una confirmación más fuerte que
+                    # los umbrales heurísticos del preámbulo corto LE 1M.
+                    packet, frame_start = self._decode_legacy_candidate(
+                        region_freq, candidate_start)
+                    if packet is not None:
+                        absolute_start = window_start_sample + region_start + frame_start
+                        if all(abs(absolute_start - previous) >
+                               4 * self._samples_per_bit
+                               for previous in self._recent_packet_starts):
+                            self._recent_packet_starts.append(absolute_start)
+                            self.valid_packet_count += 1
+                            packet['count'] = self.valid_packet_count
+                            packet['time_s'] = absolute_start / self.sample_rate
+                            decoded_packets.append(packet)
+                            preamble_start = frame_start
+                            sync_quality = quality
+                            selected = (region_iq, region_freq, local_starts,
+                                        local_ends, raw_region_iq)
+                        continue
                     # NCC ignora la amplitud: comprobar que la desviación
                     # observada corresponde a la referencia GFSK de esta PHY.
                     ref = self._preamble_refs[variant]
@@ -503,13 +580,14 @@ class DemoduladorBTLE(DemoduladorBase):
                 if selected is None:
                     selected = (region_iq, region_freq, local_starts,
                                 local_ends, raw_region_iq)
-                if candidate_start is not None and quality > sync_quality:
+                if (not decoded_packets and candidate_start is not None
+                        and quality > sync_quality):
                     preamble_start = candidate_start
                     sync_quality = quality
                     selected = (region_iq, region_freq, local_starts,
                                 local_ends, raw_region_iq)
-                    if quality >= 0.8:
-                        break
+
+            decoded_packet = decoded_packets[-1] if decoded_packets else None
 
             if selected is None:
                 # Sin ráfaga candidata, no hace falta demodular una ventana
@@ -526,7 +604,9 @@ class DemoduladorBTLE(DemoduladorBase):
             cfo_hz = 0.0
             preamble_found = (preamble_start is not None)
 
-            if preamble_found:
+            if preamble_found and (decoded_packet is not None or
+                                   self.bw_mhz != 1 or
+                                   self.advertising_channel is None):
                 # ─── Estimación de CFO desde el preámbulo ───
                 # Al ser alternado, las desviaciones +/- se cancelan,
                 # y cualquier offset residual es el CFO.
@@ -777,6 +857,8 @@ class DemoduladorBTLE(DemoduladorBase):
                     'freq_drift_khz': freq_drift_khz,
                     'skip_metrics': self.skip_metrics,
                     'phy_mbps': self.bw_mhz,
+                    'packet': decoded_packet,
+                    'packets': decoded_packets,
                 }
                 packet_metrics = self.last_burst_metrics
 

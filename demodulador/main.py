@@ -334,6 +334,13 @@ class MainWindow(QMainWindow):
             self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
+        self._btle_packet_history_lines = []
+        if hasattr(self, 'btle_packet_details'):
+            self.btle_packet_details.clear()
+            self.btle_packet_history.clear()
+            self.btle_packet_panel.setTitle(
+                "Anuncios BLE con CRC válido" if bw_mhz == 1
+                else "Anuncios legacy: disponibles en LE 1M")
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -396,6 +403,7 @@ class MainWindow(QMainWindow):
         
         self.unit_combo.setCurrentText("GHz")
         self.freq_input.setValue(2.402) # BTLE default CH 37
+        self.demodulador_actual.set_center_frequency(state['center_freq'])
 
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("20 MHz") != -1:
@@ -1141,6 +1149,8 @@ class MainWindow(QMainWindow):
     def _apply_freq_change(self, center_freq):
         self.radio.set_freq(center_freq)
         state['center_freq'] = center_freq
+        if isinstance(self.demodulador_actual, DemoduladorBTLE):
+            self.demodulador_actual.set_center_frequency(center_freq)
         if not isinstance(self.radio, HackRFHandler) and isinstance(
             self.demodulador_actual, DemoduladorLoRa
         ):

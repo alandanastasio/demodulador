@@ -577,6 +577,40 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     # El espectro ya se actualizó arriba. Los demás cuadros
                     # conservan la última trama hasta recibir otra.
                     return
+
+                packet = btle.get('packet')
+                if packet is not None and hasattr(self, 'btle_packet_details'):
+                    lines = [
+                        f"Canal {packet['channel']} · LE 1M · {packet['pdu_type']}",
+                        f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}",
+                        f"AdvA: {packet.get('advertiser_address', '—')}",
+                        (f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'}"
+                         f" · RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
+                        f"Longitud: {packet['length']} bytes · CRC: válido ({packet['crc_hex']})",
+                        f"PDU: {packet['pdu_hex']}",
+                        f"Payload: {packet['payload_hex']}",
+                    ]
+                    for key, label in (("scanner_address", "ScanA"),
+                                       ("target_address", "TargetA"),
+                                       ("initiator_address", "InitA")):
+                        if key in packet:
+                            lines.append(f"{label}: {packet[key]}")
+                    for field in packet['ad_fields']:
+                        value = field.get('text', field.get('hex', ''))
+                        if 'uuid' in field:
+                            value = f"{field['uuid']} · Datos: {field['data_hex']}"
+                        lines.append(f"{field['name']}: {value}")
+                    self.btle_packet_details.setPlainText('\n'.join(lines))
+                    history = getattr(self, '_btle_packet_history_lines', [])
+                    for received in btle.get('packets', [packet]):
+                        history.insert(0, (
+                            f"#{received['count']}  {received['time_s']:.3f} s  "
+                            f"CH{received['channel']}  {received['pdu_type']}  "
+                            f"{received.get('advertiser_address', '')}  CRC OK"
+                        ))
+                    self._btle_packet_history_lines = history[:12]
+                    self.btle_packet_history.setPlainText(
+                        '\n'.join(self._btle_packet_history_lines))
                 
                 skip_metrics = btle.get('skip_metrics', False)
                 

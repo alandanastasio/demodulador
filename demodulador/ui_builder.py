@@ -761,6 +761,25 @@ def build_ui(self, state):
     self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
     self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
     self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+
+    self.btle_packet_panel = QGroupBox("Anuncios BLE con CRC válido")
+    self.btle_packet_panel.setFixedHeight(205)
+    packet_layout = QHBoxLayout(self.btle_packet_panel)
+    self.btle_packet_details = QPlainTextEdit()
+    self.btle_packet_details.setReadOnly(True)
+    self.btle_packet_details.setPlaceholderText("Esperando un anuncio LE 1M válido…")
+    self.btle_packet_history = QPlainTextEdit()
+    self.btle_packet_history.setReadOnly(True)
+    self.btle_packet_history.setPlaceholderText("Historial de los últimos anuncios")
+    packet_text_style = (
+        "QPlainTextEdit { background: #101010; color: #E8E8E8; "
+        "border: 1px solid #444; font-family: monospace; }"
+    )
+    self.btle_packet_details.setStyleSheet(packet_text_style)
+    self.btle_packet_history.setStyleSheet(packet_text_style)
+    packet_layout.addWidget(self.btle_packet_details, stretch=3)
+    packet_layout.addWidget(self.btle_packet_history, stretch=2)
+    self.layout_btle.addWidget(self.btle_packet_panel, 2, 0, 1, 2)
     
     self.modes_stack.addWidget(self.page_btle)
 
@@ -965,7 +984,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.btle_packet_panel, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):
@@ -1135,7 +1154,8 @@ def build_ui(self, state):
     """)
 
     self.btle_bw_actions = []
-    for label, bw in [("LE 1M (1 Mb/s)", 1), ("LE 2M (2 Mb/s)", 2)]:
+    for label, bw in [("LE 1M (anuncios legacy)", 1),
+                      ("LE 2M (métricas PHY)", 2)]:
         action = QAction(label, self)
         action.setCheckable(True)
         action.triggered.connect(lambda checked, b=bw: self.set_btle_mode(b))
