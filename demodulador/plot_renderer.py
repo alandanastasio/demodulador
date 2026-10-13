@@ -574,15 +574,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
             if fm_metrics and 'btle_metrics' in fm_metrics:
                 btle = fm_metrics['btle_metrics']
                 if btle is None:
-                    for curve_name in ('btle_freq_curve', 'btle_power_curve', 'btle_mag_curve'):
-                        if hasattr(self, curve_name):
-                            getattr(self, curve_name).setData([], [])
-                    if hasattr(self, 'btle_acp_bars'):
-                        self.btle_acp_bars.setOpts(x=[], height=[])
-                    if hasattr(self, '_btle_freq_metrics_text'):
-                        self._btle_freq_metrics_text.setVisible(False)
-                    if hasattr(self, 'btle_metrics_label'):
-                        self.btle_metrics_label.setText('Sin ráfaga BTLE detectada')
+                    # El espectro ya se actualizó arriba. Los demás cuadros
+                    # conservan la última trama hasta recibir otra.
                     return
                 
                 skip_metrics = btle.get('skip_metrics', False)
@@ -591,7 +584,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
                     
                     # ── Overlay de métricas de desviación de frecuencia ──
-                    if not skip_metrics and getattr(self, '_btle_freq_special_mode', False):
+                    if (not skip_metrics and btle.get('preamble_found', False)
+                            and getattr(self, '_btle_freq_special_mode', False)):
                         df1_avg = btle.get('df1_avg_khz', 0.0)
                         df2_avg = btle.get('df2_avg_khz', 0.0)
                         df1_max = btle.get('df1_max_khz', 0.0)
@@ -699,7 +693,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         sync = btle.get('sync_quality', 0.0)
                         preamble = btle.get('preamble_found', False)
                         
-                        sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
+                        sync_text = (f"<span style='color: #4CAF50;'>{sync:.2f}</span>"
+                                     if preamble else "<span style='color: #F44336;'>No Sync</span>")
                         cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
                         
                         avg_pwr = btle.get('avg_power_dbm', 0.0)

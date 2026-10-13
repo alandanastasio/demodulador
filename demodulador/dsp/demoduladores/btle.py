@@ -9,7 +9,7 @@ class DemoduladorBTLE(DemoduladorBase):
     Demodulador BLE (Bluetooth Low Energy) con:
     - Sincronización por correlación con preámbulo GFSK
     - Estimación y corrección de CFO (Carrier Frequency Offset)
-    - Detección de burst por potencia como fallback
+    - Detección de ráfagas por potencia para acotar la búsqueda
 
     Implementa las funciones del preámbulo BLE según la especificación:
     1. Symbol Timing Recovery (sincronización de reloj mediante correlación)
@@ -32,8 +32,12 @@ class DemoduladorBTLE(DemoduladorBase):
     _SQUELCH_THRESHOLD_DB = 10.0        # Squelch: dB por debajo del pico para silenciar FM
     _LEAKAGE_THRESHOLD_DB = 20.0        # Leakage: dB por debajo del pico para medir fuga
     _FREQ_CLAMP_HZ = 800000             # Clamp de frecuencia instantánea (Hz)
-    _DISPLAY_WINDOW_S = 500e-6          # Ventana de visualización (s)
+    _DISPLAY_WINDOW_S = 500e-6          # Ventana mínima de visualización (s)
+    _MAX_DISPLAY_WINDOW_S = 3e-3        # Límite para ráfagas largas (s)
     _BURST_SMOOTH_S = 50e-6
+    _STRONG_SYNC_QUALITY = 0.90
+    _WEAK_SYNC_QUALITY = 0.75
+    _WEAK_MIN_BURST_SNR_DB = 6.0
 
     def __init__(self):
         super().__init__()
@@ -191,11 +195,13 @@ class DemoduladorBTLE(DemoduladorBase):
             if len(is_active) > 0 and is_active[-1]:
                 ends = np.append(ends, len(iq_samples))
 
-            # Filtrar ráfagas demasiado cortas o pegadas a los bordes
+            # Filtrar ráfagas demasiado cortas o sin final visible. Una
+            # ráfaga que empieza en la primera muestra sí puede contener
+            # un preámbulo completo y no debe descartarse aquí.
             min_burst_len = int(self.sample_rate * 20e-6)
             valid = []
             for i, (s, e) in enumerate(zip(starts, ends)):
-                if (e - s) > min_burst_len and s > 0 and e < len(iq_samples) - 1:
+                if (e - s) > min_burst_len and e < len(iq_samples) - 1:
                     valid.append(i)
             if valid:
                 starts = starts[valid]
@@ -423,11 +429,14 @@ class DemoduladorBTLE(DemoduladorBase):
         target_len = int(self.sample_rate * self.buffer_len_s)
         resultados = {}
         processed_window = False
+        packet_metrics = None
 
         if len(self.buffer) >= target_len:
             processed_window = True
             iq_samples = self.buffer[:target_len]
-            overlap = int(self.sample_rate * 2e-3)
+            # Cubrir una ráfaga que cruce el límite del bloque: la siguiente
+            # ventana debe conservar su preámbulo y también su final.
+            overlap = int(self.sample_rate * 4e-3)
             self.buffer = self.buffer[target_len - overlap:]
 
             # Remover DC Offset (Fuga del Oscilador Local / LO Leakage). 
@@ -437,7 +446,9 @@ class DemoduladorBTLE(DemoduladorBase):
 
             # Buscar candidatos sobre la potencia antes de calcular la fase.
             # En tráfico normal la mayoría del bloque de 50 ms es silencio.
-            burst_starts, burst_ends, _, _ = self._detect_bursts(iq_samples)
+            burst_starts, burst_ends, smoothed_power, _ = self._detect_bursts(iq_samples)
+            noise_power = (float(np.percentile(smoothed_power, 10))
+                           if smoothed_power.size else 0.0)
 
             preamble_start = None
             sync_quality = 0.0
@@ -455,18 +466,40 @@ class DemoduladorBTLE(DemoduladorBase):
                 region_freq = self._frequency_deviation(region_iq)
                 local_starts = np.array([int(start) - region_start])
                 local_ends = np.array([int(end) - region_start])
-                candidate_start, quality, _ = self._find_preamble_by_correlation(
+                candidate_start, quality, variant = self._find_preamble_by_correlation(
                     region_freq, local_starts)
-                if candidate_start is not None and quality < 0.60:
-                    # El arranque de un tono puede producir un pico espurio
-                    # después del filtro. Con calidad baja, exigir que el
-                    # preámbulo también aparezca en el IQ sin filtrar.
-                    raw_freq = self._frequency_deviation(raw_region_iq)
-                    raw_start, _, _ = self._find_preamble_by_correlation(
-                        raw_freq, local_starts)
-                    if (raw_start is None or
-                            abs(raw_start - candidate_start) > 2 * self._samples_per_bit):
+                if candidate_start is not None:
+                    # NCC ignora la amplitud: comprobar que la desviación
+                    # observada corresponde a la referencia GFSK de esta PHY.
+                    ref = self._preamble_refs[variant]
+                    observed = region_freq[candidate_start:candidate_start + len(ref)]
+                    centered_ref = ref - np.mean(ref)
+                    gain = abs(float(np.dot(
+                        observed - np.mean(observed), centered_ref
+                    ) / np.dot(centered_ref, centered_ref)))
+                    if not 0.5 <= gain <= 1.5:
                         candidate_start = None
+                    elif quality < self._STRONG_SYNC_QUALITY:
+                        # Una correlación de 8 bits puede aparecer por azar
+                        # en el ruido. Exigir potencia sostenida y confirmar
+                        # el mismo comienzo en el IQ sin filtrar.
+                        if quality < self._WEAK_SYNC_QUALITY:
+                            candidate_start = None
+                        else:
+                            burst_power = float(np.mean(
+                                np.abs(iq_samples[int(start):int(end)]) ** 2))
+                            burst_snr_db = 10 * np.log10(
+                                (burst_power + 1e-20) / (noise_power + 1e-20))
+                            if burst_snr_db < self._WEAK_MIN_BURST_SNR_DB:
+                                candidate_start = None
+                            else:
+                                raw_freq = self._frequency_deviation(raw_region_iq)
+                                raw_start, _, _ = self._find_preamble_by_correlation(
+                                    raw_freq, local_starts)
+                                if (raw_start is None or
+                                        abs(raw_start - candidate_start)
+                                        > 2 * self._samples_per_bit):
+                                    candidate_start = None
                 if selected is None:
                     selected = (region_iq, region_freq, local_starts,
                                 local_ends, raw_region_iq)
@@ -479,14 +512,12 @@ class DemoduladorBTLE(DemoduladorBase):
                         break
 
             if selected is None:
-                # Señal continua: mantener una ventana centrada para el display.
-                center = len(iq_samples) // 2
-                region_start = max(0, center - display_len // 2)
-                raw_region_iq = iq_samples[region_start:region_start + display_len]
-                region_iq = sosfilt(self._channel_sos, raw_region_iq).astype(np.complex64)
-                selected = (region_iq, self._frequency_deviation(region_iq),
+                # Sin ráfaga candidata, no hace falta demodular una ventana
+                # centrada: solo se publicará el espectro calculado abajo.
+                empty_iq = np.empty(0, dtype=np.complex64)
+                selected = (empty_iq, np.empty(0),
                             np.array([], dtype=int), np.array([], dtype=int),
-                            raw_region_iq)
+                            empty_iq)
 
             iq_samples, freq_dev_hz, local_starts, local_ends, raw_region_iq = selected
 
@@ -513,18 +544,15 @@ class DemoduladorBTLE(DemoduladorBase):
                 margin_before = int(self.sample_rate * 10e-6)
                 extract_start = max(0, preamble_start - margin_before)
 
-                max_display = int(self.sample_rate * self._DISPLAY_WINDOW_S)
-                extract_end = min(len(iq_samples),
-                                  extract_start + max_display)
-            else:
-                # ── Fallback: detección por envolvente de potencia ──
-                # Para señales sin preámbulo BLE válido (CW, tono, etc.)
-                extract_start, extract_end, cfo_hz = \
-                    self._fallback_power_detection(
-                        iq_samples, freq_dev_hz, local_starts, local_ends)
-                if cfo_hz != 0.0:
-                    freq_dev_hz -= cfo_hz
-
+                min_display_end = extract_start + display_len
+                burst_end = (int(local_ends[0])
+                             if len(local_ends) else preamble_start)
+                post_margin = int(self.sample_rate * 20e-6)
+                extract_end = min(
+                    len(iq_samples),
+                    extract_start + int(self.sample_rate * self._MAX_DISPLAY_WINDOW_S),
+                    max(min_display_end, burst_end + post_margin),
+                )
             # ═════════════════════════════════════════════════════════
             # PASO 4: Cálculo de métricas de la ventana extraída
             # ═════════════════════════════════════════════════════════
@@ -750,9 +778,7 @@ class DemoduladorBTLE(DemoduladorBase):
                     'skip_metrics': self.skip_metrics,
                     'phy_mbps': self.bw_mhz,
                 }
-
-            if len(burst_starts) == 0:
-                self.last_burst_metrics = None
+                packet_metrics = self.last_burst_metrics
 
 
         # Quitar el offset de la ventana elimina el pico de fuga DC. Como eso
@@ -775,60 +801,7 @@ class DemoduladorBTLE(DemoduladorBase):
         resultados['rf_chunk'] = np.array([])
         if processed_window:
             resultados['metricas'] = {
-                'btle_metrics': self.last_burst_metrics
+                'btle_metrics': packet_metrics
             }
 
         return resultados
-
-    # ──────────────────────────────────────────────────────────────────
-    # Fallback: detección por envolvente de potencia
-    # ──────────────────────────────────────────────────────────────────
-
-    def _fallback_power_detection(self, iq_samples, freq_dev_hz,
-                                  burst_starts, burst_ends):
-        """
-        Método de respaldo para detectar la región de interés cuando
-        no se encuentra un preámbulo BLE válido por correlación.
-
-        Reutiliza los resultados de detección de ráfagas ya calculados
-        en el paso principal. Distingue entre:
-        - Señal continua (sin bursts detectados): ventana centrada fija
-        - Señal con bursts: usa el primer burst válido
-
-        En ambos casos estima CFO como la media de freq_dev en la
-        región detectada (asumiendo datos balanceados).
-
-        Args:
-            iq_samples: Muestras IQ del buffer
-            freq_dev_hz: Desviación de frecuencia ya calculada
-            burst_starts: Array de índices de inicio de ráfagas (de _detect_bursts)
-            burst_ends: Array de índices de fin de ráfagas (de _detect_bursts)
-
-        Returns:
-            tuple: (extract_start, extract_end, cfo_hz)
-                   extract_start puede ser None si no se detecta nada
-        """
-        if len(burst_starts) == 0:
-            # Señal continua o sin bursts: ventana centrada de tamaño fijo
-            max_display = int(self.sample_rate * self._DISPLAY_WINDOW_S)
-            center = len(iq_samples) // 2
-            half = min(max_display // 2, center)
-            extract_start = center - half
-            extract_end = center + half
-
-            # CFO de señal continua (datos balanceados → media ≈ 0)
-            cfo_hz = float(np.mean(
-                freq_dev_hz[extract_start:extract_end]))
-            return extract_start, extract_end, cfo_hz
-        else:
-            # Señal con bursts: usar el primer burst válido
-            s = burst_starts[0]
-            e = burst_ends[0]
-            margin = int(self.sample_rate * 50e-6)
-            extract_start = max(0, s - margin)
-            extract_end = min(len(iq_samples), e + margin)
-
-            # CFO del burst (datos balanceados → media ≈ 0)
-            cfo_hz = float(np.mean(
-                freq_dev_hz[extract_start:extract_end]))
-            return extract_start, extract_end, cfo_hz
