@@ -93,6 +93,10 @@ class PlaybackManager:
         self.is_looping = loop
         self.state['center_freq'] = cf
         self.state['sample_rate'] = sr
+        if self.state.get('demod_mode') == 'btle':
+            # La caja de frecuencia se actualiza con las señales bloqueadas;
+            # el demodulador también necesita el canal para deshacer whitening.
+            self.ui.demodulador_actual.set_center_frequency(cf)
         
         # Actualizamos la caja de texto sin disparar la señal de radio
         self.ui.freq_input.blockSignals(True)

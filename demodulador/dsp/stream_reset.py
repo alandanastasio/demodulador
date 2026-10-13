@@ -20,6 +20,9 @@ def reset_demodulator_stream(demodulator):
     args = (demodulator.sample_rate, demodulator.fft_size)
     if isinstance(demodulator, DemoduladorBTLE):
         fresh.configurar(*args, bw_mhz=demodulator.bw_mhz)
+        # El índice del canal determina la secuencia de whitening. Si se
+        # pierde al reiniciar el flujo, se ven ráfagas pero ningún CRC válido.
+        fresh.advertising_channel = demodulator.advertising_channel
     elif isinstance(demodulator, DemoduladorLTEUplink):
         fresh.configurar(*args, rb_count=demodulator.rb_count)
         # El barrido DL→UL sintoniza otra frecuencia a mitad de la sesión.

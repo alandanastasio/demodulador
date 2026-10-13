@@ -432,7 +432,14 @@ class DemoduladorBTLE(DemoduladorBase):
         max_bits = 8 + 32 + (2 + 37 + 3) * 8
         half_width = max(1, sps // 5)
         cumulative = np.concatenate(([0.0], np.cumsum(freq_dev_hz)))
-        for shift in range(-2 * sps, 2 * sps + 1, max(1, sps // 4)):
+        # El patrón alternado del preámbulo también correlaciona desplazado
+        # varios bits. En capturas reales de anuncios Android el máximo puede
+        # quedar cuatro bits antes del comienzo verdadero. Buscar primero
+        # cerca del pico y luego hasta ±6 bits; AA y CRC validan el ajuste.
+        phase_step = max(1, sps // 4)
+        phase_shifts = sorted(range(-6 * sps, 6 * sps + 1, phase_step),
+                              key=abs)
+        for shift in phase_shifts:
             start = preamble_start + shift
             if start < 0:
                 continue

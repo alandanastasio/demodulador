@@ -7,6 +7,7 @@ from dsp.demoduladores.btle_frames import (
     ADVERTISING_ACCESS_BITS, crc24_ble, decode_legacy_pdu_bits, dewhiten,
 )
 from dsp.demoduladores.btle import DemoduladorBTLE
+from plot_renderer import format_btle_packet_details
 
 
 def _on_air_bits(pdu, channel):
@@ -49,6 +50,62 @@ def test_corrupt_or_incomplete_advertisement_is_rejected():
     corrupt = bits.copy()
     corrupt[22] ^= 1
     assert decode_legacy_pdu_bits(corrupt, 37) is None
+
+
+def test_readable_view_extracts_text_without_interpreting_binary_as_text():
+    # Anuncios reales de los JBL Wave Buds 2 capturados en los canales 37/38.
+    examples = (
+        ('44 1A 31 E3 88 E0 44 6F 13 09 4A 42 4C 20 57 61 76 65 '
+         '20 42 75 64 73 20 32 2D 4C 45', 'JBL Wave Buds 2-LE'),
+        ('60 25 31 E3 88 E0 44 6F 1E FF 06 00 03 01 80 F6 87 44 '
+         '5C 5E 50 04 04 24 4A 42 4C 20 57 61 76 65 20 42 75 '
+         '64 73 20 32', 'JBL Wave Buds 2'),
+    )
+    for pdu_hex, expected_text in examples:
+        packet = decode_legacy_pdu_bits(_on_air_bits(bytes.fromhex(pdu_hex), 37), 37)
+        packet.update(count=1, time_s=0.1)
+        raw = format_btle_packet_details(packet)
+        readable = format_btle_packet_details(packet, readable=True)
+        assert f'PDU: {pdu_hex}' in raw
+        assert f'Texto legible: {expected_text}' in readable
+        assert 'PDU: ' not in readable
+        assert 'D\\^P' not in readable
+
+    fast_pair = bytes.fromhex(
+        '60 10 31 E3 88 E0 44 6F 06 16 2C FE 30 E7 A4 02 0A F5')
+    packet = decode_legacy_pdu_bits(_on_air_bits(fast_pair, 37), 37)
+    packet.update(count=2, time_s=0.2)
+    readable = format_btle_packet_details(packet, readable=True)
+    assert 'Texto legible: (sin texto en esta trama)' in readable
+    assert 'Google Fast Pair: modelo 0x30E7A4' in readable
+
+
+def test_lifepulse_packet_survives_early_preamble_correlation_peak():
+    demod = DemoduladorBTLE()
+    demod.configurar(20_000_000, 4096, bw_mhz=1)
+    demod.set_center_frequency(2_402_000_000)
+    # Trama LifePulse de la captura real: manual (0x02), ID de seis bytes,
+    # presión no disponible (0xFF). Android usó ADV_SCAN_IND no conectable.
+    pdu = bytes.fromhex(
+        'E6 20 72 4D C5 38 FD 7E 19 21 22 5B 21 E1 F8 11 56 BF '
+        'A2 4F 0C 3A A5 8B 85 D1 02 05 4B 48 EE 56 49 FF')
+    bits = np.concatenate((
+        demod._preamble_bits_variants[0].astype(np.uint8),
+        ADVERTISING_ACCESS_BITS,
+        _on_air_bits(pdu, 37),
+    ))
+    true_start = 200
+    frequency = np.concatenate((
+        np.zeros(true_start), demod._generate_gfsk_freq_reference(bits),
+    ))
+
+    packet, found_start = demod._decode_legacy_candidate(
+        frequency, true_start - 4 * demod._samples_per_bit)
+
+    assert packet['pdu_type'] == 'ADV_SCAN_IND'
+    assert packet['ad_fields'][0]['uuid'] == 'd1858ba5-3a0c-4fa2-bf56-11f8e1215b22'
+    assert packet['ad_fields'][0]['data_hex'] == '02 05 4B 48 EE 56 49 FF'
+    assert abs(found_start - true_start) < demod._samples_per_bit
 
 
 @pytest.mark.parametrize('sample_rate, channel, center_hz', [

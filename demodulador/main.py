@@ -75,7 +75,7 @@ from dsp.stream_reset import reset_demodulator_stream
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from ui_builder import build_ui
-from plot_renderer import render_plot
+from plot_renderer import render_plot, render_btle_packet_details
 from trace_manager import TraceManager
 from audio_manager import AudioManager
 
@@ -130,6 +130,9 @@ class MainWindow(QMainWindow):
 
         # Construimos la interfaz gráfica delegada
         build_ui(self, state)
+        self.btle_readable_checkbox.toggled.connect(
+            lambda: render_btle_packet_details(
+                self, getattr(self, '_btle_last_packet', None)))
         
         # Conectar el auto-escalado para que se dispare al cambiar de modo
         self.btn_change_uplink_freq.clicked.connect(lambda: self.set_lte_uplink_mode(self._current_lte_bw_mhz if hasattr(self, "_current_lte_bw_mhz") else 5))
@@ -335,6 +338,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
         self._btle_packet_history_lines = []
+        self._btle_last_packet = None
         if hasattr(self, 'btle_packet_details'):
             self.btle_packet_details.clear()
             self.btle_packet_history.clear()

@@ -764,7 +764,13 @@ def build_ui(self, state):
 
     self.btle_packet_panel = QGroupBox("Anuncios BLE con CRC válido")
     self.btle_packet_panel.setFixedHeight(205)
-    packet_layout = QHBoxLayout(self.btle_packet_panel)
+    packet_panel_layout = QVBoxLayout(self.btle_packet_panel)
+    packet_panel_layout.setContentsMargins(6, 4, 6, 6)
+    self.btle_readable_checkbox = QCheckBox("Ver texto legible")
+    self.btle_readable_checkbox.setToolTip(
+        "Muestra los textos de los campos AD; conserva los datos binarios como campos interpretados.")
+    packet_panel_layout.addWidget(self.btle_readable_checkbox)
+    packet_layout = QHBoxLayout()
     self.btle_packet_details = QPlainTextEdit()
     self.btle_packet_details.setReadOnly(True)
     self.btle_packet_details.setPlaceholderText("Esperando un anuncio LE 1M válido…")
@@ -779,6 +785,7 @@ def build_ui(self, state):
     self.btle_packet_history.setStyleSheet(packet_text_style)
     packet_layout.addWidget(self.btle_packet_details, stretch=3)
     packet_layout.addWidget(self.btle_packet_history, stretch=2)
+    packet_panel_layout.addLayout(packet_layout)
     self.layout_btle.addWidget(self.btle_packet_panel, 2, 0, 1, 2)
     
     self.modes_stack.addWidget(self.page_btle)

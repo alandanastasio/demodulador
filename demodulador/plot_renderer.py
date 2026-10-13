@@ -1,7 +1,75 @@
 import pyqtgraph as pg
 import numpy as np
+import re
 from PyQt6.QtCore import Qt, QRectF
 import time
+
+
+def _btle_text_parts(packet):
+    """Extrae texto de campos AD que pueden contenerlo sin leer bytes de control."""
+    parts = []
+    for field in packet.get('ad_fields', []):
+        if field.get('type') in (0x08, 0x09) and field.get('text'):
+            parts.append(field['text'])
+        elif field.get('type') == 0xFF:
+            raw = bytes.fromhex(field.get('hex', ''))
+            parts.extend(match.decode('ascii') for match in
+                         re.findall(rb'[A-Za-z0-9][A-Za-z0-9 ._-]{4,}', raw))
+    return parts
+
+
+def format_btle_packet_details(packet, readable=False):
+    """Formatea un anuncio BLE sin presentar bytes binarios como texto."""
+    lines = [
+        f"Canal {packet['channel']} · LE 1M · {packet['pdu_type']}",
+        f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}",
+        f"AdvA: {packet.get('advertiser_address', '—')}",
+        (f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'}"
+         f" · RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
+        f"Longitud: {packet['length']} bytes · CRC: válido ({packet['crc_hex']})",
+    ]
+    if readable:
+        text_parts = _btle_text_parts(packet)
+        lines.append('PDU/Payload: campos BLE interpretados abajo')
+        lines.append('Texto legible: ' +
+                     ('; '.join(text_parts) if text_parts else '(sin texto en esta trama)'))
+    else:
+        lines.extend((f"PDU: {packet['pdu_hex']}",
+                      f"Payload: {packet['payload_hex']}"))
+
+    for key, label in (("scanner_address", "ScanA"),
+                       ("target_address", "TargetA"),
+                       ("initiator_address", "InitA")):
+        if key in packet:
+            lines.append(f"{label}: {packet[key]}")
+    for field in packet['ad_fields']:
+        value = field.get('text', field.get('hex', ''))
+        name = field['name']
+        if readable and field.get('type') == 0x16:
+            raw = bytes.fromhex(field.get('hex', ''))
+            if len(raw) >= 2:
+                uuid = int.from_bytes(raw[:2], 'little')
+                name = f'Service Data 0x{uuid:04X}'
+                value = raw[2:].hex(' ').upper() or '(sin datos)'
+                if uuid == 0xFE2C and len(raw) == 5:
+                    name = 'Google Fast Pair'
+                    value = f'modelo 0x{raw[2:].hex().upper()}'
+        elif readable and field.get('type') == 0xFF:
+            name = 'Datos de fabricante'
+            value = 'texto + datos binarios' if _btle_text_parts(
+                {'ad_fields': [field]}) else 'datos binarios'
+        elif 'uuid' in field:
+            value = f"{field['uuid']} · Datos: {field['data_hex']}"
+        lines.append(f'{name}: {value}')
+    return '\n'.join(lines)
+
+
+def render_btle_packet_details(self, packet):
+    if packet is not None:
+        readable = (hasattr(self, 'btle_readable_checkbox')
+                    and self.btle_readable_checkbox.isChecked())
+        self.btle_packet_details.setPlainText(
+            format_btle_packet_details(packet, readable))
 
 
 def render_lora(self, state, metrics):
@@ -580,27 +648,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
 
                 packet = btle.get('packet')
                 if packet is not None and hasattr(self, 'btle_packet_details'):
-                    lines = [
-                        f"Canal {packet['channel']} · LE 1M · {packet['pdu_type']}",
-                        f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}",
-                        f"AdvA: {packet.get('advertiser_address', '—')}",
-                        (f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'}"
-                         f" · RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
-                        f"Longitud: {packet['length']} bytes · CRC: válido ({packet['crc_hex']})",
-                        f"PDU: {packet['pdu_hex']}",
-                        f"Payload: {packet['payload_hex']}",
-                    ]
-                    for key, label in (("scanner_address", "ScanA"),
-                                       ("target_address", "TargetA"),
-                                       ("initiator_address", "InitA")):
-                        if key in packet:
-                            lines.append(f"{label}: {packet[key]}")
-                    for field in packet['ad_fields']:
-                        value = field.get('text', field.get('hex', ''))
-                        if 'uuid' in field:
-                            value = f"{field['uuid']} · Datos: {field['data_hex']}"
-                        lines.append(f"{field['name']}: {value}")
-                    self.btle_packet_details.setPlainText('\n'.join(lines))
+                    self._btle_last_packet = packet
+                    render_btle_packet_details(self, packet)
                     history = getattr(self, '_btle_packet_history_lines', [])
                     for received in btle.get('packets', [packet]):
                         history.insert(0, (
