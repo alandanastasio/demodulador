@@ -81,10 +81,16 @@ def _ad_fields(data):
         elif ad_type == 0x0A and len(value) == 1:
             field['name'] = 'Potencia TX'
             field['text'] = f'{int.from_bytes(value, "little", signed=True)} dBm'
-        elif ad_type == 0x21 and len(value) >= 16:
-            field['name'] = 'Service Data (UUID 128 bits)'
-            field['uuid'] = str(UUID(bytes=value[:16][::-1]))
-            field['data_hex'] = value[16:].hex(' ').upper()
+        elif ad_type in (0x16, 0x20, 0x21):
+            uuid_size = {0x16: 2, 0x20: 4, 0x21: 16}[ad_type]
+            if len(value) >= uuid_size:
+                field['name'] = f'Service Data (UUID {uuid_size * 8} bits)'
+                if uuid_size == 16:
+                    field['uuid'] = str(UUID(bytes=value[:16][::-1]))
+                else:
+                    uuid = int.from_bytes(value[:uuid_size], 'little')
+                    field['uuid'] = f'0x{uuid:0{uuid_size * 2}X}'
+                field['data_hex'] = value[uuid_size:].hex(' ').upper()
         fields.append(field)
         offset += length + 1
     return fields

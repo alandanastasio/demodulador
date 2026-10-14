@@ -8,6 +8,8 @@ from PyQt6.QtWidgets import QApplication
 
 from btle_history import BtleHistoryDialog, BtleHistoryModel
 
+SERVICE_UUID = 'd1858ba5-3a0c-4fa2-bf56-11f8e1215b22'
+
 
 def _packet(number, pdu_type='ADV_SCAN_IND'):
     return {
@@ -48,6 +50,29 @@ def test_full_history_keeps_all_packets_and_selected_details():
         dialog.table.selectRow(20)
         assert 'Paquete: 21' in dialog.details.toPlainText()
         assert 'ScanA: AA:BB:CC:DD:EE:FF' in dialog.details.toPlainText()
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_history_shows_generic_service_uuid_and_raw_data():
+    app = QApplication.instance() or QApplication([])
+    model = BtleHistoryModel()
+    dialog = BtleHistoryDialog(model)
+    try:
+        packet = _packet(1)
+        packet['ad_fields'] = [{
+            'type': 0x21,
+            'name': 'Service Data (UUID 128 bits)',
+            'uuid': SERVICE_UUID,
+            'data_hex': '02 49 5C AD 5F 67 BF FF',
+            'hex': '',
+        }]
+        model.append_packets([packet, _packet(2, 'SCAN_REQ')])
+        dialog.table.selectRow(0)
+        assert model.data(model.index(0, 4)) == SERVICE_UUID
+        assert 'UUID: ' + SERVICE_UUID in dialog.details.toPlainText()
+        assert 'Datos del servicio: 02 49 5C AD 5F 67 BF FF' in dialog.details.toPlainText()
     finally:
         dialog.close()
         app.processEvents()

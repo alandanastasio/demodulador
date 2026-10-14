@@ -764,7 +764,7 @@ def build_ui(self, state):
     self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
 
     self.btle_packet_panel = QGroupBox("Anuncios BLE con CRC válido")
-    self.btle_packet_panel.setFixedHeight(205)
+    self.btle_packet_panel.setFixedHeight(285)
     packet_panel_layout = QVBoxLayout(self.btle_packet_panel)
     packet_panel_layout.setContentsMargins(6, 4, 6, 6)
     self.btle_readable_checkbox = QCheckBox("Ver texto legible")

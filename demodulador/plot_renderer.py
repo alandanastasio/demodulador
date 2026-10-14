@@ -19,48 +19,65 @@ def _btle_text_parts(packet):
 
 
 def format_btle_packet_details(packet, readable=False):
-    """Formatea un anuncio BLE sin presentar bytes binarios como texto."""
+    """Muestra la estructura de la trama sin duplicar el payload en hexadecimal."""
+    header_hex = ' '.join(packet['pdu_hex'].split()[:2])
     lines = [
-        f"Canal {packet['channel']} · LE 1M · {packet['pdu_type']}",
-        f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}",
-        f"AdvA: {packet.get('advertiser_address', '—')}",
-        (f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'}"
-         f" · RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
-        f"Longitud: {packet['length']} bytes · CRC: válido ({packet['crc_hex']})",
+        (f"Trama BLE · Canal {packet['channel']} · LE 1M · "
+         f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}"),
+        '├─ Preámbulo: detectado',
+        '├─ Access Address: 0x8E89BED6 (anuncios)',
+        f"├─ PDU: {packet['pdu_type']} · {packet['length'] + 2} bytes",
+        (f"│  ├─ Encabezado: {header_hex} · "
+         f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'} · "
+         f"RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
+        f"│  └─ Payload: {packet['length']} bytes",
     ]
-    if readable:
-        text_parts = _btle_text_parts(packet)
-        lines.append('PDU/Payload: campos BLE interpretados abajo')
-        lines.append('Texto legible: ' +
-                     ('; '.join(text_parts) if text_parts else '(sin texto en esta trama)'))
-    else:
-        lines.extend((f"PDU: {packet['pdu_hex']}",
-                      f"Payload: {packet['payload_hex']}"))
-
-    for key, label in (("scanner_address", "ScanA"),
+    payload_items = []
+    for key, label in (("advertiser_address", "AdvA"),
+                       ("scanner_address", "ScanA"),
                        ("target_address", "TargetA"),
                        ("initiator_address", "InitA")):
         if key in packet:
-            lines.append(f"{label}: {packet[key]}")
-    for field in packet['ad_fields']:
-        value = field.get('text', field.get('hex', ''))
-        name = field['name']
-        if readable and field.get('type') == 0x16:
-            raw = bytes.fromhex(field.get('hex', ''))
-            if len(raw) >= 2:
-                uuid = int.from_bytes(raw[:2], 'little')
-                name = f'Service Data 0x{uuid:04X}'
-                value = raw[2:].hex(' ').upper() or '(sin datos)'
-                if uuid == 0xFE2C and len(raw) == 5:
-                    name = 'Google Fast Pair'
-                    value = f'modelo 0x{raw[2:].hex().upper()}'
-        elif readable and field.get('type') == 0xFF:
-            name = 'Datos de fabricante'
-            value = 'texto + datos binarios' if _btle_text_parts(
-                {'ad_fields': [field]}) else 'datos binarios'
-        elif 'uuid' in field:
-            value = f"{field['uuid']} · Datos: {field['data_hex']}"
-        lines.append(f'{name}: {value}')
+            payload_items.append(f'{label}: {packet[key]}')
+    fields = packet.get('ad_fields', ())
+    if fields:
+        payload_items.append(None)
+    for index, item in enumerate(payload_items):
+        last_item = index == len(payload_items) - 1
+        branch = '└─' if last_item else '├─'
+        if item is not None:
+            lines.append(f'│     {branch} {item}')
+            continue
+        lines.append(f'│     {branch} Datos del anuncio')
+        field_prefix = '│        ' if last_item else '│     │  '
+        for field_index, field in enumerate(fields):
+            last_field = field_index == len(fields) - 1
+            field_branch = '└─' if last_field else '├─'
+            child_prefix = field_prefix + ('   ' if last_field else '│  ')
+            ad_type = field.get('type')
+            ad_label = f'AD 0x{ad_type:02X}' if ad_type is not None else 'AD'
+            if 'uuid' in field:
+                lines.append(f'{field_prefix}{field_branch} {ad_label} · {field["name"]}')
+                lines.append(f'{child_prefix}├─ UUID: {field["uuid"]}')
+                service_data = field.get('data_hex', '') or '(sin datos)'
+                fast_pair = (readable and ad_type == 0x16
+                             and field['uuid'] == '0xFE2C'
+                             and len(bytes.fromhex(field.get('data_hex', ''))) == 3)
+                data_branch = '├─' if fast_pair else '└─'
+                lines.append(f'{child_prefix}{data_branch} Datos del servicio: {service_data}')
+                if fast_pair:
+                    model = field['data_hex'].replace(' ', '')
+                    lines.append(f'{child_prefix}└─ Google Fast Pair: modelo 0x{model}')
+            else:
+                value = field.get('text', field.get('hex', ''))
+                lines.append(f'{field_prefix}{field_branch} {ad_label} · {field["name"]}: {value}')
+    lines.append(f"└─ CRC: válido ({packet['crc_hex']})")
+    if readable:
+        text_parts = _btle_text_parts(packet)
+        lines.append('Texto legible: ' +
+                     ('; '.join(text_parts) if text_parts else '(sin texto en esta trama)'))
+    else:
+        lines.append(f"PDU en hex: {packet['pdu_hex']}")
     return '\n'.join(lines)
 
 

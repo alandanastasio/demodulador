@@ -42,6 +42,21 @@ def test_legacy_advertisement_decodes_on_each_primary_channel():
                                       37 if channel != 37 else 38) is None
 
 
+@pytest.mark.parametrize('ad_type, uuid_air, expected_uuid, data', [
+    (0x16, bytes.fromhex('2C FE'), '0xFE2C', bytes.fromhex('30 E7 A4')),
+    (0x20, bytes.fromhex('78 56 34 12'), '0x12345678', bytes.fromhex('DE AD')),
+])
+def test_generic_service_data_keeps_uuid_and_raw_application_bytes(
+        ad_type, uuid_air, expected_uuid, data):
+    ad = bytes([1 + len(uuid_air) + len(data), ad_type]) + uuid_air + data
+    payload = bytes.fromhex('66 55 44 33 22 11') + ad
+    packet = decode_legacy_pdu_bits(
+        _on_air_bits(bytes([0x02, len(payload)]) + payload, 37), 37)
+    field = packet['ad_fields'][0]
+    assert field['uuid'] == expected_uuid
+    assert field['data_hex'] == data.hex(' ').upper()
+
+
 def test_corrupt_or_incomplete_advertisement_is_rejected():
     payload = bytes.fromhex('66 55 44 33 22 11')
     pdu = bytes([0x02, len(payload)]) + payload
@@ -66,9 +81,9 @@ def test_readable_view_extracts_text_without_interpreting_binary_as_text():
         packet.update(count=1, time_s=0.1)
         raw = format_btle_packet_details(packet)
         readable = format_btle_packet_details(packet, readable=True)
-        assert f'PDU: {pdu_hex}' in raw
+        assert f'PDU en hex: {pdu_hex}' in raw
         assert f'Texto legible: {expected_text}' in readable
-        assert 'PDU: ' not in readable
+        assert 'PDU en hex: ' not in readable
         assert 'D\\^P' not in readable
 
     fast_pair = bytes.fromhex(
@@ -80,12 +95,11 @@ def test_readable_view_extracts_text_without_interpreting_binary_as_text():
     assert 'Google Fast Pair: modelo 0x30E7A4' in readable
 
 
-def test_lifepulse_packet_survives_early_preamble_correlation_peak():
+def test_service_data_packet_survives_early_preamble_correlation_peak():
     demod = DemoduladorBTLE()
     demod.configurar(20_000_000, 4096, bw_mhz=1)
     demod.set_center_frequency(2_402_000_000)
-    # Trama LifePulse de la captura real: manual (0x02), ID de seis bytes,
-    # presión no disponible (0xFF). Android usó ADV_SCAN_IND no conectable.
+    # ADV_SCAN_IND real con Service Data de 128 bits y ocho bytes de datos.
     pdu = bytes.fromhex(
         'E6 20 72 4D C5 38 FD 7E 19 21 22 5B 21 E1 F8 11 56 BF '
         'A2 4F 0C 3A A5 8B 85 D1 02 05 4B 48 EE 56 49 FF')
@@ -106,6 +120,17 @@ def test_lifepulse_packet_survives_early_preamble_correlation_peak():
     assert packet['ad_fields'][0]['uuid'] == 'd1858ba5-3a0c-4fa2-bf56-11f8e1215b22'
     assert packet['ad_fields'][0]['data_hex'] == '02 05 4B 48 EE 56 49 FF'
     assert abs(found_start - true_start) < demod._samples_per_bit
+    packet.update(count=1, time_s=0.1)
+    generic = format_btle_packet_details(packet)
+    assert '├─ PDU: ADV_SCAN_IND · 34 bytes' in generic
+    assert '│  └─ Payload: 32 bytes' in generic
+    assert 'AD 0x21 · Service Data (UUID 128 bits)' in generic
+    assert 'UUID: d1858ba5-3a0c-4fa2-bf56-11f8e1215b22' in generic
+    assert 'Datos del servicio: 02 05 4B 48 EE 56 49 FF' in generic
+    assert generic.index('Datos del servicio:') < generic.index('PDU en hex:')
+    assert 'Payload en hex:' not in generic
+    assert 'Datos del servicio: 02 05 4B 48 EE 56 49 FF' in (
+        format_btle_packet_details(packet, readable=True))
 
 
 @pytest.mark.parametrize('sample_rate, channel, center_hz', [

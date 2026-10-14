@@ -9,8 +9,16 @@ from PyQt6.QtWidgets import (
 from plot_renderer import format_btle_packet_details
 
 
+def _service_uuid(packet):
+    """Muestra el identificador BLE sin interpretar datos de aplicación."""
+    for field in packet.get('ad_fields', ()):
+        if 'uuid' in field:
+            return field['uuid']
+    return '—'
+
+
 class BtleHistoryModel(QAbstractTableModel):
-    COLUMNS = ('N.º', 'Tiempo [s]', 'Canal', 'Tipo', 'AdvA', 'ScanA', 'Bytes')
+    COLUMNS = ('N.º', 'Tiempo [s]', 'Canal', 'Tipo', 'UUID servicio', 'AdvA', 'ScanA', 'Bytes')
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +44,7 @@ class BtleHistoryModel(QAbstractTableModel):
             f"{packet['time_s']:.6f}",
             packet['channel'],
             packet['pdu_type'],
+            _service_uuid(packet),
             packet.get('advertiser_address', '—'),
             packet.get('scanner_address', '—'),
             packet['length'],
@@ -108,8 +117,9 @@ class BtleHistoryDialog(QDialog):
         self.table.setColumnWidth(1, 115)
         self.table.setColumnWidth(2, 65)
         self.table.setColumnWidth(3, 155)
-        self.table.setColumnWidth(4, 175)
-        self.table.setColumnWidth(5, 175)
+        self.table.setColumnWidth(4, 265)
+        self.table.setColumnWidth(5, 155)
+        self.table.setColumnWidth(6, 155)
         splitter.addWidget(self.table)
 
         self.details = QPlainTextEdit()
@@ -119,7 +129,7 @@ class BtleHistoryDialog(QDialog):
             'QPlainTextEdit { background: #101010; color: #E8E8E8; '
             'border: 1px solid #444; font-family: monospace; }')
         splitter.addWidget(self.details)
-        splitter.setSizes([400, 200])
+        splitter.setSizes([300, 300])
         layout.addWidget(splitter)
 
         bottom = QHBoxLayout()
@@ -147,15 +157,16 @@ class BtleHistoryDialog(QDialog):
         if row < 0 or row >= self.model.rowCount():
             self.details.clear()
             return
+        packet = self.model.packets[row]
         self.details.setPlainText(format_btle_packet_details(
-            self.model.packets[row], self.readable_checkbox.isChecked()))
+            packet, self.readable_checkbox.isChecked()))
 
     def open_history(self, readable=False):
         self.readable_checkbox.setChecked(readable)
         if not self.isVisible() and self.model.rowCount():
-            last = self.model.rowCount() - 1
-            self.table.selectRow(last)
-            self.table.scrollTo(self.model.index(last, 0))
+            selected = self.model.rowCount() - 1
+            self.table.selectRow(selected)
+            self.table.scrollTo(self.model.index(selected, 0))
         self.show()
         self.raise_()
         self.activateWindow()
