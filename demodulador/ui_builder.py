@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, Q
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
+from btle_history import BtleHistoryDialog, BtleHistoryModel
 
 class FlexibleDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
@@ -769,14 +770,24 @@ def build_ui(self, state):
     self.btle_readable_checkbox = QCheckBox("Ver texto legible")
     self.btle_readable_checkbox.setToolTip(
         "Muestra los textos de los campos AD; conserva los datos binarios como campos interpretados.")
-    packet_panel_layout.addWidget(self.btle_readable_checkbox)
+    packet_controls = QHBoxLayout()
+    packet_controls.addWidget(self.btle_readable_checkbox)
+    packet_controls.addStretch()
+    self.btle_history_model = BtleHistoryModel(self)
+    self.btle_history_dialog = BtleHistoryDialog(self.btle_history_model, self)
+    self.btle_history_button = QPushButton("Historial completo")
+    self.btle_history_button.clicked.connect(
+        lambda: self.btle_history_dialog.open_history(
+            self.btle_readable_checkbox.isChecked()))
+    packet_controls.addWidget(self.btle_history_button)
+    packet_panel_layout.addLayout(packet_controls)
     packet_layout = QHBoxLayout()
     self.btle_packet_details = QPlainTextEdit()
     self.btle_packet_details.setReadOnly(True)
     self.btle_packet_details.setPlaceholderText("Esperando un anuncio LE 1M válido…")
     self.btle_packet_history = QPlainTextEdit()
     self.btle_packet_history.setReadOnly(True)
-    self.btle_packet_history.setPlaceholderText("Historial de los últimos anuncios")
+    self.btle_packet_history.setPlaceholderText("Últimas tramas BLE")
     packet_text_style = (
         "QPlainTextEdit { background: #101010; color: #E8E8E8; "
         "border: 1px solid #444; font-family: monospace; }"

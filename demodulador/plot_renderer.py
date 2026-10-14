@@ -648,18 +648,12 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
 
                 packet = btle.get('packet')
                 if packet is not None and hasattr(self, 'btle_packet_details'):
-                    self._btle_last_packet = packet
-                    render_btle_packet_details(self, packet)
-                    history = getattr(self, '_btle_packet_history_lines', [])
-                    for received in btle.get('packets', [packet]):
-                        history.insert(0, (
-                            f"#{received['count']}  {received['time_s']:.3f} s  "
-                            f"CH{received['channel']}  {received['pdu_type']}  "
-                            f"{received.get('advertiser_address', '')}  CRC OK"
-                        ))
-                    self._btle_packet_history_lines = history[:12]
+                    records = self.btle_history_model.append_packets(
+                        btle.get('packets', [packet]))
+                    self._btle_last_packet = records[-1]
+                    render_btle_packet_details(self, self._btle_last_packet)
                     self.btle_packet_history.setPlainText(
-                        '\n'.join(self._btle_packet_history_lines))
+                        '\n'.join(self.btle_history_model.recent_lines()))
                 
                 skip_metrics = btle.get('skip_metrics', False)
                 

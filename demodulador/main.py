@@ -337,11 +337,11 @@ class MainWindow(QMainWindow):
             self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
-        self._btle_packet_history_lines = []
         self._btle_last_packet = None
         if hasattr(self, 'btle_packet_details'):
             self.btle_packet_details.clear()
-            self.btle_packet_history.clear()
+            self.btle_packet_history.setPlainText(
+                '\n'.join(self.btle_history_model.recent_lines()))
             self.btle_packet_panel.setTitle(
                 "Anuncios BLE con CRC válido" if bw_mhz == 1
                 else "Anuncios legacy: disponibles en LE 1M")
