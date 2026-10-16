@@ -467,7 +467,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                 )
                 self.fm_metrics_label.setText(html_text)
                 
-            # ---  Cálculo y renderizado de Separación Estéreo ---
+            # Las RMS de L y R indican balance, no separación/crosstalk.
                 if 'rms_L' in fm_metrics and 'rms_R' in fm_metrics:
                     # Protegemos el logaritmo por si hay silencio absoluto
                     rms_L_val = max(fm_metrics['rms_L'], 1e-12)
@@ -476,24 +476,39 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     db_L = 20 * np.log10(rms_L_val)
                     db_R = 20 * np.log10(rms_R_val)
                     
-                    # La separación es la diferencia absoluta de energía
-                    separacion_db = abs(db_L - db_R)
-                    
-                    # Código de colores (50dB+ es excelente para grado laboratorio)
-                    if separacion_db >= 50:
-                        color_sep = "#00B000" # Verde
-                    elif separacion_db >= 30:
-                        color_sep = "#FFD500" # Amarillo
-                    else:
-                        color_sep = "#FF3333" # Rojo (Música normal o mal filtrado)
+                    balance_db = db_L - db_R
+                    is_live_audio = state.get('demod_mode') == 'wbfm_audio'
+                    level_unit = 'dBFS' if is_live_audio else 'dB re 1 kHz'
+                    pilot_html = ''
+                    if is_live_audio:
+                        locked = fm_metrics.get('stereo_locked', False)
+                        pilot_color = '#00B000' if locked else '#FFAA33'
+                        pilot_text = 'Detectado' if locked else 'No detectado (mono)'
+                        iq_drops = fm_metrics.get('dropped_iq_blocks', 0)
+                        audio_drops = fm_metrics.get('dropped_audio_blocks', 0)
+                        gaps = fm_metrics.get('audio_underruns', 0)
+                        device_gaps = fm_metrics.get('device_underruns', 0)
+                        flow_color = '#FFAA33' if any((iq_drops, audio_drops,
+                                                       gaps, device_gaps)) else '#55FF55'
+                        pilot_html = (
+                            f"<br><span style='color: #FFFFFF'><b>Piloto 19 kHz:</b></span> "
+                            f"<span style='color: {pilot_color}; font-weight: bold;'>{pilot_text}</span><br>"
+                            f"<span style='color: #FFFFFF'><b>SNR piloto:</b></span> "
+                            f"<span style='color: #FFFFFF;'>{fm_metrics.get('pilot_snr_db', 0):.1f} dB</span><br>"
+                            f"<span style='color: #FFFFFF'><b>Flujo IQ/audio:</b></span> "
+                            f"<span style='color: {flow_color};'>"
+                            f"IQ {iq_drops} · cola {audio_drops} · vacío {gaps} · salida {device_gaps}"
+                            f"</span>"
+                        )
                         
                     html_stereo = (
                         f"<div style='line-height: 1.5;'>"
-                        f"<span style='color: #FFFFFF'><b>Potencia RMS (L):</b></span> <span style='color: #00FFFF;'>{db_L:+.2f} dB</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Potencia RMS (R):</b></span> <span style='color: #FF00FF;'>{db_R:+.2f} dB</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Nivel RMS (L):</b></span> <span style='color: #00FFFF;'>{db_L:+.2f} {level_unit}</span><br>"
+                        f"<span style='color: #FFFFFF'><b>Nivel RMS (R):</b></span> <span style='color: #FF00FF;'>{db_R:+.2f} {level_unit}</span><br>"
                         f"<span style='color: #555555;'>─────────────────────────────</span><br>"
-                        f"<span style='color: #FFFFFF'><b>Crosstalk (Separación):</b></span> "
-                        f"<span style='color: {color_sep}; font-weight: bold;'>{separacion_db:.2f} dB</span>"
+                        f"<span style='color: #FFFFFF'><b>Balance L−R:</b></span> "
+                        f"<span style='color: #FFFFFF;'>{balance_db:+.2f} dB</span>"
+                        f"{pilot_html}"
                         f"</div>"
                     )
                     self.stereo_metrics_label.setText(html_stereo)
