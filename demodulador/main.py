@@ -75,7 +75,7 @@ from dsp.stream_reset import reset_demodulator_stream
 from marker_manager import MarkerManager
 from playback_manager import PlaybackManager
 from ui_builder import build_ui
-from plot_renderer import render_plot
+from plot_renderer import render_plot, render_btle_packet_details
 from trace_manager import TraceManager
 from audio_manager import AudioManager
 
@@ -130,6 +130,9 @@ class MainWindow(QMainWindow):
 
         # Construimos la interfaz gráfica delegada
         build_ui(self, state)
+        self.btle_readable_checkbox.toggled.connect(
+            lambda: render_btle_packet_details(
+                self, getattr(self, '_btle_last_packet', None)))
         
         # Conectar el auto-escalado para que se dispare al cambiar de modo
         self.btn_change_uplink_freq.clicked.connect(lambda: self.set_lte_uplink_mode(self._current_lte_bw_mhz if hasattr(self, "_current_lte_bw_mhz") else 5))
@@ -329,10 +332,19 @@ class MainWindow(QMainWindow):
 
     
     @receiver_transition
-    def set_btle_mode(self, bw_mhz=1):
+    def set_btle_mode(self, bw_mhz=1, decode_legacy=True):
+        if state.get('demod_mode') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
+        self._btle_last_packet = None
+        if hasattr(self, 'btle_packet_details'):
+            self.btle_packet_details.clear()
+            self.btle_packet_history.setPlainText(
+                '\n'.join(self.btle_history_model.recent_lines()))
+            self.btle_packet_panel.setTitle("Anuncios BLE con CRC válido")
         self._reset_maximized_state()
+        self.btle_packet_panel.setVisible(bw_mhz == 1 and decode_legacy)
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -374,6 +386,13 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btle_metrics_label'):
             self.btle_metrics_label.show()
 
+        self.fft_combo.blockSignals(True)
+        if hasattr(self, 'sa_fft_size_text'):
+            self.fft_combo.setCurrentText(self.sa_fft_size_text)
+            state['fft_size'] = int(self.sa_fft_size_text)
+        self.fft_combo.setEnabled(True)
+        self.fft_combo.blockSignals(False)
+
         state['demod_mode'] = 'btle'
         state['sample_rate'] = 20e6
         
@@ -382,15 +401,15 @@ class MainWindow(QMainWindow):
             self.radio.set_muestras_por_bloque(65536)
 
         self.demodulador_actual = DemoduladorBTLE()
-        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz)
+        self.demodulador_actual.configurar(
+            state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz,
+            decode_legacy=decode_legacy)
         self.radio.set_sample_rate(state['sample_rate'])
         
         self.unit_combo.setCurrentText("GHz")
         self.freq_input.setValue(2.402) # BTLE default CH 37
+        self.demodulador_actual.set_center_frequency(state['center_freq'])
 
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
-            
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("20 MHz") != -1:
             self.sr_combo.setCurrentText("20 MHz")
@@ -399,15 +418,11 @@ class MainWindow(QMainWindow):
         self.sr_combo.setEnabled(False)
         self.sr_combo.blockSignals(False)
         
-        self.fft_combo.blockSignals(True)
-        if hasattr(self, 'sa_fft_size_text'):
-            self.fft_combo.setCurrentText(self.sa_fft_size_text)
-            state['fft_size'] = int(self.sa_fft_size_text)
-        self.fft_combo.setEnabled(True)
-        self.fft_combo.blockSignals(False)
         self.freq_plot.show()
         
-        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE ({bw_mhz} MHz)")
+        mode_label = "anuncios legacy" if bw_mhz == 1 and decode_legacy else "métricas PHY"
+        self.setWindowTitle(
+            f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE LE {bw_mhz}M ({mode_label})")
 
     @receiver_transition
     def set_wifi_ag_mode(self):
@@ -1141,6 +1156,8 @@ class MainWindow(QMainWindow):
     def _apply_freq_change(self, center_freq):
         self.radio.set_freq(center_freq)
         state['center_freq'] = center_freq
+        if isinstance(self.demodulador_actual, DemoduladorBTLE):
+            self.demodulador_actual.set_center_frequency(center_freq)
         if not isinstance(self.radio, HackRFHandler) and isinstance(
             self.demodulador_actual, DemoduladorLoRa
         ):
@@ -1209,7 +1226,13 @@ class MainWindow(QMainWindow):
         state['fft_size'] = int(text)
         self.trace_manager.reset()
         if self.demodulador_actual is not None:
-            self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            if isinstance(self.demodulador_actual, DemoduladorBTLE):
+                self.demodulador_actual.configurar(
+                    state['sample_rate'], state['fft_size'],
+                    bw_mhz=self.demodulador_actual.bw_mhz,
+                    decode_legacy=self.demodulador_actual.decode_legacy)
+            else:
+                self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.update_x_axis()
             
     def on_fft_window_changed(self, text):

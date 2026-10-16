@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, Q
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
+from btle_history import BtleHistoryDialog, BtleHistoryModel
 
 class FlexibleDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
@@ -707,7 +708,7 @@ def build_ui(self, state):
     
     self.btle_power_widget = pg.PlotWidget(title="Potencia vs Tiempo")
     self.btle_power_widget.setLabel('bottom', 'Tiempo [us]')
-    self.btle_power_widget.setLabel('left', 'Potencia [dBm]')
+    self.btle_power_widget.setLabel('left', 'Potencia [dB rel. IQ]')
     self.btle_power_curve = self.btle_power_widget.plot([], pen=pg.mkPen(color="blue", width=1.0))
     
     self.btle_freq_widget = pg.PlotWidget(title="Desviación de Frecuencia")
@@ -715,9 +716,9 @@ def build_ui(self, state):
     self.btle_freq_widget.setLabel('left', 'Frecuencia [kHz]')
     self.btle_freq_curve = self.btle_freq_widget.plot([], pen=pg.mkPen(color="royalblue", width=1.0))
     
-    self.btle_acp_widget = pg.PlotWidget(title="Espectro ACP")
-    self.btle_acp_widget.setLabel('bottom', 'Canal (Ch)')
-    self.btle_acp_widget.setLabel('left', 'Potencia [dBm]')
+    self.btle_acp_widget = pg.PlotWidget(title="Potencia por banda")
+    self.btle_acp_widget.setLabel('bottom', 'Desplazamiento [MHz]')
+    self.btle_acp_widget.setLabel('left', 'Potencia [dB rel. IQ]')
     
     # Configure BarGraphItem with defaults so we can update it later
     
@@ -733,7 +734,7 @@ def build_ui(self, state):
     
     self.btle_power_table_widget = QTableWidget(4, 4)
     self.btle_power_table_widget.setHorizontalHeaderLabels(["Current", "Average", "Max", "Min"])
-    self.btle_power_table_widget.setVerticalHeaderLabels(["Average Power [dBm]", "Peak Power [dBm]", "Peak to Avg Power [dB]", "Leakage Power [dBm]"])
+    self.btle_power_table_widget.setVerticalHeaderLabels(["Average Power [dB rel. IQ]", "Peak Power [dB rel. IQ]", "Peak to Avg Power [dB]", "Idle Power [dB rel. IQ]"])
     self.btle_power_table_widget.setStyleSheet("""
         QTableWidget {
             background-color: #1e1e1e;
@@ -761,6 +762,42 @@ def build_ui(self, state):
     self.layout_btle.addWidget(self.btle_power_widget, 0, 1)
     self.layout_btle.addWidget(self.btle_freq_widget, 1, 0)
     self.layout_btle.addWidget(self.btle_acp_widget, 1, 1)
+
+    self.btle_packet_panel = QGroupBox("Anuncios BLE con CRC válido")
+    self.btle_packet_panel.setFixedHeight(285)
+    packet_panel_layout = QVBoxLayout(self.btle_packet_panel)
+    packet_panel_layout.setContentsMargins(6, 4, 6, 6)
+    self.btle_readable_checkbox = QCheckBox("Ver texto legible")
+    self.btle_readable_checkbox.setToolTip(
+        "Muestra los textos de los campos AD; conserva los datos binarios como campos interpretados.")
+    packet_controls = QHBoxLayout()
+    packet_controls.addWidget(self.btle_readable_checkbox)
+    packet_controls.addStretch()
+    self.btle_history_model = BtleHistoryModel(self)
+    self.btle_history_dialog = BtleHistoryDialog(self.btle_history_model, self)
+    self.btle_history_button = QPushButton("Historial completo")
+    self.btle_history_button.clicked.connect(
+        lambda: self.btle_history_dialog.open_history(
+            self.btle_readable_checkbox.isChecked()))
+    packet_controls.addWidget(self.btle_history_button)
+    packet_panel_layout.addLayout(packet_controls)
+    packet_layout = QHBoxLayout()
+    self.btle_packet_details = QPlainTextEdit()
+    self.btle_packet_details.setReadOnly(True)
+    self.btle_packet_details.setPlaceholderText("Esperando un anuncio LE 1M válido…")
+    self.btle_packet_history = QPlainTextEdit()
+    self.btle_packet_history.setReadOnly(True)
+    self.btle_packet_history.setPlaceholderText("Últimas tramas BLE")
+    packet_text_style = (
+        "QPlainTextEdit { background: #101010; color: #E8E8E8; "
+        "border: 1px solid #444; font-family: monospace; }"
+    )
+    self.btle_packet_details.setStyleSheet(packet_text_style)
+    self.btle_packet_history.setStyleSheet(packet_text_style)
+    packet_layout.addWidget(self.btle_packet_details, stretch=3)
+    packet_layout.addWidget(self.btle_packet_history, stretch=2)
+    packet_panel_layout.addLayout(packet_layout)
+    self.layout_btle.addWidget(self.btle_packet_panel, 2, 0, 1, 2)
     
     self.modes_stack.addWidget(self.page_btle)
 
@@ -965,7 +1002,7 @@ def build_ui(self, state):
     self.marker_manager.attach_to_plots()
     
     # --- Instalamos event filters para doble-click maximizar ---
-    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
+    self.all_panels = [self.freq_plot, self.waterfall_widget, self.wbfm_mpx_widget, self.wbfm_audio_widget, self.wbfm_lr_container, self.wifi_time_widget, self.wifi_evm_subc_widget, self.wifi_evm_sym_widget, self.wifi_const_widget, self.lte_time_widget, self.lte_evm_subc_widget, self.lte_const_widget, self.lte_frame_summary, self.lte_q1_container, self.btle_spectrum_widget, self.btle_power_widget, self.btle_freq_widget, self.btle_acp_widget, self.btle_mag_widget, self.btle_power_table_widget, self.btle_packet_panel, self.lora_waterfall_widget, self.lora_symbols_widget, self.lora_packet_info_widget]
     for w in self.all_panels:
         w.installEventFilter(self)
         if isinstance(w, pg.PlotWidget):
@@ -1135,10 +1172,16 @@ def build_ui(self, state):
     """)
 
     self.btle_bw_actions = []
-    for label, bw in [("1 MHz (LE 1M)", 1), ("2 MHz (LE 2M)", 2)]:
+    for label, bw, decode_legacy in [
+        ("LE 1M (anuncios legacy)", 1, True),
+        ("LE 1M (métricas PHY)", 1, False),
+        ("LE 2M (métricas PHY)", 2, False),
+    ]:
         action = QAction(label, self)
         action.setCheckable(True)
-        action.triggered.connect(lambda checked, b=bw: self.set_btle_mode(b))
+        action.triggered.connect(
+            lambda checked, b=bw, legacy=decode_legacy:
+            self.set_btle_mode(b, decode_legacy=legacy))
         self.demod_group.addAction(action)
         self.btle_menu.addAction(action)
         self.btle_bw_actions.append(action)

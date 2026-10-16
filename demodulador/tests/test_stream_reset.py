@@ -13,6 +13,7 @@ from dsp.stream_reset import reset_demodulator_stream
 def test_preserves_mode_parameters_and_discards_btle_samples():
     old = DemoduladorBTLE()
     old.configurar(20_000_000, 4096, bw_mhz=2)
+    old.set_center_frequency(2_426_000_000)
     old.buffer = np.ones(100, np.complex64)
 
     fresh = reset_demodulator_stream(old)
@@ -20,7 +21,20 @@ def test_preserves_mode_parameters_and_discards_btle_samples():
     assert fresh is not old
     assert fresh.bw_mhz == 2
     assert fresh.sample_rate == 20_000_000
+    assert fresh.advertising_channel == 38
     assert len(fresh.buffer) == 0
+
+
+def test_preserves_le_1m_phy_metrics_mode_after_stream_reset():
+    old = DemoduladorBTLE()
+    old.configurar(20_000_000, 4096, bw_mhz=1, decode_legacy=False)
+    old.set_center_frequency(2_402_000_000)
+
+    fresh = reset_demodulator_stream(old)
+
+    assert fresh.bw_mhz == 1
+    assert fresh.decode_legacy is False
+    assert fresh.advertising_channel == 37
 
 
 def test_old_worker_results_cannot_reach_new_demodulator():

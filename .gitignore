@@ -11,6 +11,8 @@ wheels/
 
 #Señales guardadas
 *.npz
+*.cf32
+*.cf32.part
 
 # Copias locales de firmware de equipos externos
 hardware_backups/
@@ -43,3 +45,34 @@ hardware/dragino_lg01/lora_mqtt_bridge.py
 hardware/dragino_lg01/lora_mqtt.init
 hardware/dragino_lg01/diagrama_flujo_mqtt.svg
 hardware/dragino_lg01/receiver/receiver-web.hex
+demodulador/research/BTLE/espectrograma_agilent_9030.png
+.gitignore
+demodulador/research/BTLE/MeasR_0000.csv
+demodulador/research/BTLE/espectrograma_agilent.py
+demodulador/research/BTLE/analiza_captura_ble_ancha.py
+.gitignore
+demodulador/research/BTLE/captura_ble_2s_demodulacion_lifepulse_canal_37.png
+.gitignore
+demodulador/research/BTLE/captura_ble_2s_espectrograma_detalle_evento_2.png
+demodulador/research/BTLE/captura_ble_2s_eventos.png
+.gitignore
+demodulador/research/BTLE/captura_ble_2s_demodulacion_lifepulse_evento_1.png
+demodulador/research/BTLE/captura_ble_2s_demodulacion_lifepulse_evento_2.png
+demodulador/research/BTLE/captura_ble_2s_espectrograma_completo.png
+demodulador/research/BTLE/captura_ble_2s_espectrograma_detalle_evento_1.png
+demodulador/research/BTLE/captura_ble_2s_espectrograma.png
+demodulador/research/BTLE/captura_ble_2s.cf32.json
+demodulador/research/BTLE/captura_profunda_agilent.py
+demodulador/research/BTLE/Capture+_2019-07-04-15-57-18.png
+demodulador/research/BTLE/demodulacion_lifepulse_agilent.py
+demodulador/research/BTLE/espectro_agilent_banda_completa.png
+demodulador/research/BTLE/espectro_agilent_banda_completa.py
+demodulador/research/BTLE/espectrograma_captura_ble_ancha.py
+demodulador/research/BTLE/espectros_agilent_canales_37_38_39.png
+demodulador/research/BTLE/espectros_agilent_canales.py
+demodulador/research/BTLE/Trace_0011.csv
+demodulador/research/BTLE/Trace_0012.csv
+demodulador/research/BTLE/Trace_0013.csv
+demodulador/research/BTLE/Trace_0014.csv
+demodulador/research/BTLE/captura_ble_2s_demodulacion_lifepulse_canal_38.png
+demodulador/research/BTLE/captura_ble_2s_demodulacion_lifepulse_canal_39.png

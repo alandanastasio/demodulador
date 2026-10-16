@@ -1,7 +1,92 @@
 import pyqtgraph as pg
 import numpy as np
+import re
 from PyQt6.QtCore import Qt, QRectF
 import time
+
+
+def _btle_text_parts(packet):
+    """Extrae texto de campos AD que pueden contenerlo sin leer bytes de control."""
+    parts = []
+    for field in packet.get('ad_fields', []):
+        if field.get('type') in (0x08, 0x09) and field.get('text'):
+            parts.append(field['text'])
+        elif field.get('type') == 0xFF:
+            raw = bytes.fromhex(field.get('hex', ''))
+            parts.extend(match.decode('ascii') for match in
+                         re.findall(rb'[A-Za-z0-9][A-Za-z0-9 ._-]{4,}', raw))
+    return parts
+
+
+def format_btle_packet_details(packet, readable=False):
+    """Muestra la estructura de la trama sin duplicar el payload en hexadecimal."""
+    header_hex = ' '.join(packet['pdu_hex'].split()[:2])
+    lines = [
+        (f"Trama BLE · Canal {packet['channel']} · LE 1M · "
+         f"Tiempo: {packet['time_s']:.3f} s · Paquete: {packet['count']}"),
+        '├─ Preámbulo: detectado',
+        '├─ Access Address: 0x8E89BED6 (anuncios)',
+        f"├─ PDU: {packet['pdu_type']} · {packet['length'] + 2} bytes",
+        (f"│  ├─ Encabezado: {header_hex} · "
+         f"TxAdd: {'aleatoria' if packet['tx_address_random'] else 'pública'} · "
+         f"RxAdd: {'aleatoria' if packet['rx_address_random'] else 'pública'}"),
+        f"│  └─ Payload: {packet['length']} bytes",
+    ]
+    payload_items = []
+    for key, label in (("advertiser_address", "AdvA"),
+                       ("scanner_address", "ScanA"),
+                       ("target_address", "TargetA"),
+                       ("initiator_address", "InitA")):
+        if key in packet:
+            payload_items.append(f'{label}: {packet[key]}')
+    fields = packet.get('ad_fields', ())
+    if fields:
+        payload_items.append(None)
+    for index, item in enumerate(payload_items):
+        last_item = index == len(payload_items) - 1
+        branch = '└─' if last_item else '├─'
+        if item is not None:
+            lines.append(f'│     {branch} {item}')
+            continue
+        lines.append(f'│     {branch} Datos del anuncio')
+        field_prefix = '│        ' if last_item else '│     │  '
+        for field_index, field in enumerate(fields):
+            last_field = field_index == len(fields) - 1
+            field_branch = '└─' if last_field else '├─'
+            child_prefix = field_prefix + ('   ' if last_field else '│  ')
+            ad_type = field.get('type')
+            ad_label = f'AD 0x{ad_type:02X}' if ad_type is not None else 'AD'
+            if 'uuid' in field:
+                lines.append(f'{field_prefix}{field_branch} {ad_label} · {field["name"]}')
+                lines.append(f'{child_prefix}├─ UUID: {field["uuid"]}')
+                service_data = field.get('data_hex', '') or '(sin datos)'
+                fast_pair = (readable and ad_type == 0x16
+                             and field['uuid'] == '0xFE2C'
+                             and len(bytes.fromhex(field.get('data_hex', ''))) == 3)
+                data_branch = '├─' if fast_pair else '└─'
+                lines.append(f'{child_prefix}{data_branch} Datos del servicio: {service_data}')
+                if fast_pair:
+                    model = field['data_hex'].replace(' ', '')
+                    lines.append(f'{child_prefix}└─ Google Fast Pair: modelo 0x{model}')
+            else:
+                value = field.get('text', field.get('hex', ''))
+                lines.append(f'{field_prefix}{field_branch} {ad_label} · {field["name"]}: {value}')
+    lines.append(f"└─ CRC: válido ({packet['crc_hex']})")
+    if readable:
+        text_parts = _btle_text_parts(packet)
+        lines.append('Texto legible: ' +
+                     ('; '.join(text_parts) if text_parts else '(sin texto en esta trama)'))
+    else:
+        lines.append(f"PDU en hex: {packet['pdu_hex']}")
+    return '\n'.join(lines)
+
+
+def render_btle_packet_details(self, packet):
+    if packet is not None:
+        readable = (hasattr(self, 'btle_readable_checkbox')
+                    and self.btle_readable_checkbox.isChecked())
+        self.btle_packet_details.setPlainText(
+            format_btle_packet_details(packet, readable))
 
 
 def render_lora(self, state, metrics):
@@ -573,6 +658,19 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
         if state.get('demod_mode') == 'btle':
             if fm_metrics and 'btle_metrics' in fm_metrics:
                 btle = fm_metrics['btle_metrics']
+                if btle is None:
+                    # El espectro ya se actualizó arriba. Los demás cuadros
+                    # conservan la última trama hasta recibir otra.
+                    return
+
+                packet = btle.get('packet')
+                if packet is not None and hasattr(self, 'btle_packet_details'):
+                    records = self.btle_history_model.append_packets(
+                        btle.get('packets', [packet]))
+                    self._btle_last_packet = records[-1]
+                    render_btle_packet_details(self, self._btle_last_packet)
+                    self.btle_packet_history.setPlainText(
+                        '\n'.join(self.btle_history_model.recent_lines()))
                 
                 skip_metrics = btle.get('skip_metrics', False)
                 
@@ -580,13 +678,15 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                     self.btle_freq_curve.setData(btle['burst_time_us'], btle['freq_dev_khz'])
                     
                     # ── Overlay de métricas de desviación de frecuencia ──
-                    if not skip_metrics and getattr(self, '_btle_freq_special_mode', False):
+                    if (not skip_metrics and btle.get('preamble_found', False)
+                            and getattr(self, '_btle_freq_special_mode', False)):
                         df1_avg = btle.get('df1_avg_khz', 0.0)
                         df2_avg = btle.get('df2_avg_khz', 0.0)
                         df1_max = btle.get('df1_max_khz', 0.0)
                         df2_min = btle.get('df2_min_khz', 0.0)
                         mod_idx = btle.get('mod_index', 0.0)
                         drift = btle.get('freq_drift_khz', 0.0)
+                        phy = btle.get('phy_mbps', 1)
                         
                         # Colores según pass/fail de la spec BLE
                         green = '#4CAF50'
@@ -596,17 +696,17 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         # Δf1avg/Δf2avg en TRÁFICO VIVO:
                         # La especificación exige medir con la secuencia 11110000 para obtener >225 kHz.
                         # En payloads aleatorios (live traffic), la media cae a 150-220 kHz por el patrón 1010 y el filtro Gaussiano.
-                        c1 = green if 140 <= df1_avg <= 280 else (yellow if 120 <= df1_avg <= 300 else red)
-                        c2 = green if -280 <= df2_avg <= -140 else (yellow if -300 <= df2_avg <= -120 else red)
+                        c1 = green if 140 * phy <= df1_avg <= 280 * phy else (yellow if 120 * phy <= df1_avg <= 300 * phy else red)
+                        c2 = green if -280 * phy <= df2_avg <= -140 * phy else (yellow if -300 * phy <= df2_avg <= -120 * phy else red)
                         
                         # Δf1max / Δf2min: el pico debe alcanzar cerca de 250 kHz y no exceder los 300 kHz
-                        c3 = green if 185 <= df1_max <= 320 else (yellow if 170 <= df1_max <= 350 else red)
-                        c4 = green if -320 <= df2_min <= -185 else (yellow if -350 <= df2_min <= -170 else red)
+                        c3 = green if 185 * phy <= df1_max <= 320 * phy else (yellow if 170 * phy <= df1_max <= 350 * phy else red)
+                        c4 = green if -320 * phy <= df2_min <= -185 * phy else (yellow if -350 * phy <= df2_min <= -170 * phy else red)
                         
                         # Mod index: En tráfico vivo, al promediar todos los bits, el índice cae a ~0.3 - 0.45.
                         c5 = green if 0.28 <= mod_idx <= 0.55 else (yellow if 0.25 <= mod_idx <= 0.60 else red)
-                        # Drift: spec ≤ 25 kHz
-                        c6 = green if abs(drift) <= 25 else red
+                        # Estimación a partir de bits desconocidos; sin veredicto normativo.
+                        c6 = '#CCCCCC'
                         
                         text = (
                             f"<span style='font-size:13pt; font-family:monospace;'>"
@@ -615,7 +715,7 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                             f"<span style='color:{c3};'>Δf1max:  {df1_max:+.1f} kHz</span><br>"
                             f"<span style='color:{c4};'>Δf2min:  {df2_min:+.1f} kHz</span><br>"
                             f"<span style='color:{c5};'>Mod Index (h): {mod_idx:.3f}</span><br>"
-                            f"<span style='color:{c6};'>Freq Drift: {drift:+.1f} kHz</span>"
+                            f"<span style='color:{c6};'>Deriva est.: {drift:+.1f} kHz</span>"
                             f"</span>"
                         )
                         
@@ -687,7 +787,8 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                         sync = btle.get('sync_quality', 0.0)
                         preamble = btle.get('preamble_found', False)
                         
-                        sync_text = f"<span style='color: #4CAF50;'>{sync:.2f}</span>" if preamble else "<span style='color: #F44336;'>No Sync</span>"
+                        sync_text = (f"<span style='color: #4CAF50;'>{sync:.2f}</span>"
+                                     if preamble else "<span style='color: #F44336;'>No Sync</span>")
                         cfo_text = f"<span style='color: #4CAF50;'>{cfo:.2f} kHz</span>"
                         
                         avg_pwr = btle.get('avg_power_dbm', 0.0)
@@ -749,16 +850,16 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
                             </table>
                             
                             <div style='color: #888; font-size: 11px; margin-bottom: 5px; border-bottom: 1px solid #444; padding-bottom: 3px;'>
-                                <b>TX POWER VS. TIME</b>
+                                <b>POTENCIA IQ VS. TIEMPO</b>
                             </div>
                             <table style='width: 100%;'>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Average Power:</td>
-                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dBm</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{avg_pwr:.2f} dB rel. IQ</td>
                                 </tr>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Peak Power:</td>
-                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dBm</td>
+                                    <td style='text-align: right; font-weight: bold; color: #FFFFFF;'>{peak_pwr:.2f} dB rel. IQ</td>
                                 </tr>
                                 <tr>
                                     <td style='color: #bbb; padding: 2px 0;'>Peak - Avg (PAPR):</td>
