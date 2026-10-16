@@ -1,11 +1,15 @@
-from PyQt6.QtCore import QSize, Qt, QLocale
+from dataclasses import dataclass
+from datetime import datetime
+
+from PyQt6.QtCore import QSize, Qt, QLocale, QTimer
 from PyQt6.QtGui import QAction, QPainterPath, QActionGroup, QPainter, QColor
-from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction
+from PyQt6.QtWidgets import QWidget, QStackedWidget, QHBoxLayout, QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, QToolBar, QToolButton, QMenu, QPushButton, QGridLayout, QCheckBox, QFrame, QGroupBox, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QWidgetAction, QScrollArea, QSizePolicy, QDialog
 
 import pyqtgraph as pg
 import numpy as np
 from marker_manager import MarkerManager
 from btle_history import BtleHistoryDialog, BtleHistoryModel
+from plot_renderer import format_lora_payload_text
 
 class FlexibleDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
@@ -20,6 +24,225 @@ class FlexibleDoubleSpinBox(QDoubleSpinBox):
 
     def valueFromText(self, text):
         return super().valueFromText(text.replace(',', '.'))
+
+
+@dataclass(frozen=True)
+class LoRaPacketRecord:
+    received_at: str
+    payload: bytes
+    crc_ok: bool | None
+
+
+class LoRaPacketHistoryDialog(QDialog):
+    """Historial de tramas recibidas con un sync word concreto."""
+
+    def __init__(self, sync_word, packets, parent=None):
+        super().__init__(parent)
+        self.packets = packets
+        self.setWindowTitle(f'Paquetes LoRa · sync word 0x{sync_word:02X}')
+        self.resize(760, 510)
+
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(('#', 'Hora', 'Bytes', 'CRC', 'Texto'))
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().hide()
+        header = self.table.horizontalHeader()
+        for column in range(4):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.itemSelectionChanged.connect(self._show_selected_packet)
+        layout.addWidget(self.table, stretch=2)
+
+        details = QHBoxLayout()
+        for title, attribute in (
+            ('Payload hexadecimal', 'hex_payload'),
+            ('Texto legible', 'text_payload'),
+        ):
+            column = QVBoxLayout()
+            if attribute == 'text_payload':
+                heading = QHBoxLayout()
+                heading.addWidget(QLabel(title))
+                heading.addStretch()
+                self.full_text_checkbox = QCheckBox('Completo')
+                self.full_text_checkbox.toggled.connect(self._show_selected_packet)
+                heading.addWidget(self.full_text_checkbox)
+                column.addLayout(heading)
+            else:
+                column.addWidget(QLabel(title))
+            editor = QPlainTextEdit()
+            editor.setReadOnly(True)
+            column.addWidget(editor)
+            details.addLayout(column, stretch=1)
+            setattr(self, attribute, editor)
+        layout.addLayout(details, stretch=1)
+
+        for packet in packets:
+            self.append_packet(packet)
+        if packets:
+            self.table.selectRow(len(packets) - 1)
+
+    def append_packet(self, packet):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        crc_text = 'Válido' if packet.crc_ok else (
+            'Inválido' if packet.crc_ok is False else 'No presente'
+        )
+        preview = format_lora_payload_text(packet.payload).replace('\n', ' ')
+        for column, value in enumerate((
+            str(row + 1), packet.received_at, str(len(packet.payload)),
+            crc_text, preview,
+        )):
+            self.table.setItem(row, column, QTableWidgetItem(value))
+        if row == 0:
+            self.table.selectRow(0)
+
+    def _show_selected_packet(self, *_):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self.packets):
+            self.hex_payload.clear()
+            self.text_payload.clear()
+            return
+        payload = self.packets[row].payload
+        self.hex_payload.setPlainText(payload.hex(' ').upper())
+        self.text_payload.setPlainText(format_lora_payload_text(
+            payload, self.full_text_checkbox.isChecked()
+        ))
+
+
+class LoRaSyncWordPanel(QWidget):
+    """Una tarjeta y un indicador de actividad por sync word observado."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.entries = {}
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        title = QLabel('SYNC WORD')
+        title.setStyleSheet('color: white; font-weight: bold; font-size: 13px;')
+        layout.addWidget(title)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFixedHeight(38)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setStyleSheet('QScrollArea { background: transparent; }')
+        layout.addWidget(self.scroll_area)
+
+        self.cards_container = QWidget()
+        self.cards_layout = QVBoxLayout(self.cards_container)
+        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setSpacing(5)
+        self.cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.placeholder = QLabel('Sin tramas recibidas')
+        self.placeholder.setStyleSheet('color: #aaa; padding: 6px;')
+        self.cards_layout.addWidget(self.placeholder)
+        self.scroll_area.setWidget(self.cards_container)
+
+    @staticmethod
+    def _set_led(led, active):
+        color = '#4be16b' if active else '#38413b'
+        border = '#90ffa6' if active else '#66756b'
+        led.setStyleSheet(
+            f'background-color: {color}; border: 1px solid {border}; '
+            'border-radius: 7px;'
+        )
+
+    def record(self, sync_word, payload, crc_ok):
+        entry = self.entries.get(sync_word)
+        if entry is None:
+            card = QFrame(self.cards_container)
+            card.setObjectName('loraSyncWordCard')
+            card.setStyleSheet(
+                'QFrame#loraSyncWordCard { background-color: #1e1e1e; '
+                'border: 1px solid #444; border-radius: 4px; }'
+            )
+            row = QHBoxLayout(card)
+            row.setContentsMargins(9, 8, 9, 8)
+            row.setSpacing(8)
+            identifier = QLabel(f'0x{sync_word:02X}')
+            identifier.setStyleSheet('font-weight: bold;')
+            row.addWidget(identifier)
+            row.addStretch()
+
+            counter = QLabel()
+            row.addWidget(counter)
+            led = QLabel()
+            led.setFixedSize(14, 14)
+            self._set_led(led, False)
+            row.addWidget(led)
+
+            history_button = QPushButton('Lista')
+            history_button.setToolTip('Ver paquetes recibidos con este sync word')
+            history_button.setFixedWidth(50)
+            history_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            history_button.setStyleSheet(
+                'background-color: #444; border: 1px solid #666; '
+                'border-radius: 3px; padding: 2px;'
+            )
+            history_button.clicked.connect(
+                lambda _checked=False, word=sync_word: self.open_history(word)
+            )
+            row.addWidget(history_button)
+
+            timer = QTimer(card)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda led=led: self._set_led(led, False))
+            entry = {
+                'card': card, 'counter': counter, 'led': led, 'timer': timer,
+                'history_button': history_button, 'packets': [], 'dialog': None,
+                'count': 0,
+            }
+            self.entries[sync_word] = entry
+            self.placeholder.hide()
+            self.cards_layout.addWidget(card)
+            self.scroll_area.setFixedHeight(min(220, 8 + 45 * len(self.entries)))
+
+        packet = LoRaPacketRecord(
+            datetime.now().strftime('%H:%M:%S.%f')[:-3], bytes(payload), crc_ok
+        )
+        entry['packets'].append(packet)
+        if entry['dialog'] is not None:
+            entry['dialog'].append_packet(packet)
+        entry['count'] += 1
+        entry['counter'].setText(f"Paquetes: {entry['count']}")
+        self._set_led(entry['led'], True)
+        entry['timer'].start(220)
+
+    def open_history(self, sync_word):
+        entry = self.entries.get(sync_word)
+        if entry is None:
+            return
+        if entry['dialog'] is None:
+            entry['dialog'] = LoRaPacketHistoryDialog(
+                sync_word, entry['packets'], entry['card']
+            )
+        entry['dialog'].show()
+        entry['dialog'].raise_()
+        entry['dialog'].activateWindow()
+
+    def close_histories(self):
+        for entry in self.entries.values():
+            if entry['dialog'] is not None:
+                entry['dialog'].close()
+
+    def reset(self):
+        self.close_histories()
+        for entry in self.entries.values():
+            entry['timer'].stop()
+            self.cards_layout.removeWidget(entry['card'])
+            entry['card'].deleteLater()
+        self.entries.clear()
+        self.placeholder.show()
+        self.scroll_area.setFixedHeight(38)
 
 
 class LTEPageWidget(QWidget):
@@ -958,22 +1181,32 @@ def build_ui(self, state):
     payload_layout = QVBoxLayout(payload_box)
     payload_layout.setContentsMargins(9, 7, 9, 7)
     payload_layout.setSpacing(4)
-    payload_columns = QHBoxLayout()
-    payload_columns.setSpacing(8)
+    payload_columns = QGridLayout()
+    payload_columns.setHorizontalSpacing(8)
+    payload_columns.setVerticalSpacing(2)
     self.lora_payload_hex = QPlainTextEdit()
     self.lora_payload_text = QPlainTextEdit()
-    for label, editor in (
-        ('Hexadecimal', self.lora_payload_hex),
-        ('Texto', self.lora_payload_text),
+    for column, label, editor in (
+        (0, 'Hexadecimal', self.lora_payload_hex),
+        (1, 'Texto legible', self.lora_payload_text),
     ):
         editor.setReadOnly(True)
         editor.setStyleSheet('background-color: #101010; border: 1px solid #333; color: white;')
-        column = QVBoxLayout()
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(2)
-        column.addWidget(QLabel(label))
-        column.addWidget(editor)
-        payload_columns.addLayout(column, 1)
+        if editor is self.lora_payload_text:
+            editor.setToolTip('Texto legible o vista completa con escapes. El hexadecimal conserva todos los bytes.')
+        label_row = QHBoxLayout()
+        label_row.addWidget(QLabel(label))
+        if editor is self.lora_payload_text:
+            self.lora_full_text_checkbox = QCheckBox('Completo')
+            self.lora_full_text_checkbox.setToolTip('Incluye bytes no imprimibles como \\xFF o \\x00.')
+            self.lora_full_text_checkbox.toggled.connect(self._refresh_lora_payload_text)
+            label_row.addStretch(1)
+            label_row.addWidget(self.lora_full_text_checkbox)
+        payload_columns.addLayout(label_row, 0, column)
+        payload_columns.addWidget(editor, 1, column)
+    payload_columns.setColumnStretch(0, 1)
+    payload_columns.setColumnStretch(1, 1)
+    payload_columns.setRowStretch(1, 1)
     payload_layout.addLayout(payload_columns, 1)
     crc_row = QHBoxLayout()
     crc_row.addWidget(QLabel('CRC:'))
@@ -1425,6 +1658,10 @@ def build_ui(self, state):
     )
     self.lora_config_label.hide()
     controls_layout.addWidget(self.lora_config_label)
+
+    self.lora_sync_words_panel = LoRaSyncWordPanel()
+    self.lora_sync_words_panel.hide()
+    controls_layout.addWidget(self.lora_sync_words_panel)
 
     # --- SECCIÓN ESPECTROGRAMA ---
     self.waterfall_label = QLabel("ESPECTROGRAMA")

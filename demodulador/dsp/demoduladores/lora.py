@@ -77,8 +77,16 @@ class DemoduladorLoRa(DemoduladorBase):
             self._closed = True
         self.reset_stream()
 
+    def _search_window_samples(self):
+        # SF12/BW125: 64 símbolos son ~2,1 s, tiempo suficiente para
+        # conservar el preámbulo durante los reintentos de decodificación.
+        return max(self.sample_rate, 64 * self._config.samples_per_symbol)
+
     def _trim_buffer_locked(self):
-        base_limit = int(self.sample_rate * 2)
+        search_window = self._search_window_samples()
+        # Un segundo extra permite que llegue IQ nuevo mientras el worker
+        # procesa una instantánea sin expulsar todavía el preámbulo.
+        base_limit = max(int(self.sample_rate * 2), search_window + self.sample_rate)
         hard_limit = int(self.sample_rate * 16)
         limit = base_limit
         if self._preserve_from_abs is not None:
@@ -214,14 +222,12 @@ class DemoduladorLoRa(DemoduladorBase):
                         buffer_start_abs = self._total_samples - self._buffer_samples
                         search_start_abs = max(buffer_start_abs, self._next_search_abs)
                         if not waiting_for_frame:
-                            # Un preámbulo que cruza el borde sigue teniendo
-                            # al menos un segundo de IQ para completarse.
+                            # La ventana debe cubrir también las tramas lentas:
+                            # con SF12/BW125 un segundo puede empezar ya
+                            # después del preámbulo.
                             search_start_abs = max(
                                 search_start_abs,
-                                self._total_samples - max(
-                                    self.sample_rate,
-                                    20 * self._config.samples_per_symbol,
-                                ),
+                                self._total_samples - self._search_window_samples(),
                             )
                         self._processing = True
                         self._last_attempt = now

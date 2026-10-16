@@ -7,6 +7,7 @@ sincronización CFO/STO, plegado de la FFT, header explícito y payload PHY.
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.fft import fft as scipy_fft
 
 
 class LoRaDecodeError(ValueError):
@@ -134,7 +135,15 @@ def _circular_distance(a: float, b: float, size: int) -> float:
 
 
 def _chirp_fft(samples: np.ndarray, reference: np.ndarray, interpolation: int = 1) -> tuple[float, float]:
-    power = np.abs(np.fft.fft(samples * reference, n=len(samples) * interpolation)) ** 2
+    if interpolation > 1 and samples.dtype == np.complex64:
+        # La interpolación 32x crea FFT muy grandes en SF12/BW125. SciPy
+        # conserva complex64 y evita el costo de promoverlas a complex128.
+        # Las entradas de doble precisión mantienen la ruta original.
+        dechirped = np.multiply(samples, reference, dtype=np.complex64)
+        spectrum = scipy_fft(dechirped, n=len(samples) * interpolation)
+    else:
+        spectrum = np.fft.fft(samples * reference, n=len(samples) * interpolation)
+    power = np.abs(spectrum) ** 2
     index = int(np.argmax(power))
     signed_bin = ((index + len(power) // 2) % len(power) - len(power) // 2) / interpolation
     energy = max(len(samples) * np.vdot(samples, samples).real, 1e-30)
