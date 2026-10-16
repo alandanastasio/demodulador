@@ -5,7 +5,7 @@ from numba import jit
 
 
 @jit(nopython=True)
-def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
+def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial, avance_fase):
     N = len(piloto)
     portadora_38k = np.zeros(N)
     
@@ -25,9 +25,10 @@ def correr_pll_38k(piloto, fs, fase_inicial, integral_inicial):
         filtro_integral += beta * error
         ajuste_fase = alpha * error + filtro_integral
         
-        # 3. Generar 38 kHz (doble de la fase)
-        # Usamos seno porque el filtro de 19kHz desplaza la fase 90 grados
-        portadora_38k[i] = np.sin(2.0 * fase)
+        # El piloto filtrado llega retrasado respecto de L-R. Compensar esa
+        # diferencia antes de duplicar la fase; el signo fija L y R según
+        # la fase de la subportadora estéreo respecto del piloto.
+        portadora_38k[i] = -np.sin(2.0 * (fase + avance_fase))
         
         # 4. Actualizar NCO
         fase += w_center + ajuste_fase
@@ -73,6 +74,8 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         self.pilot_zi = None
         self.lmr_zi = None
         self.audio_lpf_zi = None
+        self.lpr_delay_samples = 0
+        self.lpr_delay_buffer = np.empty(0)
         
         # Variables de estado para el PLL de 19kHz -> 38kHz
         self.pll_fase = 0.0
@@ -118,6 +121,17 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         
         # 4. Filtro para limpiar el L-R ya bajado a banda base (Pasa Bajos 15 kHz)
         self.stereo_audio_lpf_kernel = firwin(101, 15000 / freq_nyq)
+
+        # L-R atraviesa un FIR más después de la mezcla. Igualar el retardo
+        # de L+R evita que las dos ramas se sumen con distinta fase de audio.
+        self.lpr_delay_samples = (
+            len(self.stereo_lmr_kernel) + len(self.stereo_audio_lpf_kernel)
+            - len(self.stereo_lpr_kernel) - 1
+        ) // 2
+        self.lpr_delay_buffer = np.zeros(self.lpr_delay_samples)
+        self.pilot_phase_advance = (2 * np.pi * 19000 / nueva_fs *
+                                    (len(self.stereo_pilot_kernel)
+                                     - len(self.stereo_lmr_kernel)) / 2)
         
         # Limpiar estados
         self.lpr_zi = None
@@ -184,6 +198,10 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         if self.lpr_zi is None:
             self.lpr_zi = lfilter_zi(self.stereo_lpr_kernel, [1.0]) * demod_khz_clean[0]
         senal_L_plus_R, self.lpr_zi = lfilter(self.stereo_lpr_kernel, [1.0], demod_khz_clean, zi=self.lpr_zi)
+        if self.lpr_delay_samples:
+            delayed_lpr = np.concatenate((self.lpr_delay_buffer, senal_L_plus_R))
+            self.lpr_delay_buffer = delayed_lpr[-self.lpr_delay_samples:].copy()
+            senal_L_plus_R = delayed_lpr[:len(senal_L_plus_R)]
         
         # B. Extraer Piloto 19 kHz
         if self.pilot_zi is None:
@@ -197,7 +215,8 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         
         # D. Regenerar Portadora 38 kHz con PLL
         portadora_38k, self.pll_fase, self.pll_filtro_integral = correr_pll_38k(
-            piloto_19k, nueva_fs, self.pll_fase, self.pll_filtro_integral
+            piloto_19k, nueva_fs, self.pll_fase, self.pll_filtro_integral,
+            self.pilot_phase_advance,
         )
         
         # E. Demodular L-R (Multiplicador Síncrono)
@@ -290,6 +309,6 @@ class DemoduladorWBFMAudio(DemoduladorBase):
             'audio_time_R': canal_R[:muestras_10ms], 
             't_axis_audio': t_axis_audio,
             'mpx_time': demod_khz_clean[:muestras_10ms],
-            'audio_out': audio_stereo, # Sigue saliendo solo el L por los parlantes por ahora
+            'audio_out': audio_stereo,
             'metricas': fm_metrics
         }
