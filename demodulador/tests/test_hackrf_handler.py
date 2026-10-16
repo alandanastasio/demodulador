@@ -111,6 +111,25 @@ def test_retune_and_rate_change_mark_gap_before_new_samples(fake_library):
     handler.close()
 
 
+def test_wifi_can_use_20_mhz_filter_and_other_modes_restore_default(fake_library):
+    device, _, _ = fake_library
+    handler = hackrf_handler.HackRFHandler(lambda _: None)
+    handler.configurar(20_000_000, 2_412_000_000)
+    handler.start_rx()
+
+    assert handler._baseband_bandwidth == 15_000_000
+    handler.set_baseband_filter_bandwidth(20_000_000)
+    assert handler._baseband_bandwidth == 20_000_000
+    assert handler.is_running
+    handler.set_baseband_filter_bandwidth(None)
+    assert handler._baseband_bandwidth == 15_000_000
+    assert device.calls[-2:] == [('filter', 15_000_000), ('start', None)]
+
+    with pytest.raises(ValueError, match='no puede superar'):
+        handler.set_baseband_filter_bandwidth(24_000_000)
+    handler.close()
+
+
 def test_failed_rate_restores_previous_running_configuration(fake_library):
     device, _, _ = fake_library
     received = []

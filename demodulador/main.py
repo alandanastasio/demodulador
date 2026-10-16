@@ -100,6 +100,10 @@ class SignalEmitter(QObject):
 emitter = SignalEmitter()
 
 class MainWindow(QMainWindow):
+    def _configure_wifi_rx_filter(self, enabled):
+        if isinstance(self.radio, HackRFHandler):
+            self.radio.set_baseband_filter_bandwidth(20_000_000 if enabled else None)
+
     def __init__(self, radio_handler): 
         super().__init__()
         
@@ -266,6 +270,7 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_wbfm_mode(self):
+        self._configure_wifi_rx_filter(False)
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -333,6 +338,7 @@ class MainWindow(QMainWindow):
     
     @receiver_transition
     def set_btle_mode(self, bw_mhz=1, decode_legacy=True):
+        self._configure_wifi_rx_filter(False)
         if state.get('demod_mode') == 'none':
             self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
@@ -480,6 +486,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = DemoduladorWiFiAG()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.radio.set_sample_rate(state['sample_rate'])
+        self._configure_wifi_rx_filter(True)
         
         self.unit_combo.setCurrentText("GHz")
         self.freq_input.setValue(2.412)
@@ -505,6 +512,7 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_lte_mode(self, bw_mhz=5):
+        self._configure_wifi_rx_filter(False)
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -673,6 +681,7 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_lte_uplink_mode(self, bw_mhz=5):
+        self._configure_wifi_rx_filter(False)
         self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton
@@ -1004,6 +1013,7 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_lora_mode(self, bw_khz, sf):
+        self._configure_wifi_rx_filter(False)
         if bw_khz not in (125, 250, 500):
             raise ValueError(f"Ancho de banda LoRa no soportado: {bw_khz} kHz")
         if sf not in range(7, 13):
@@ -1063,6 +1073,7 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_normal_mode(self):
+        self._configure_wifi_rx_filter(False)
         if isinstance(self.demodulador_actual, DemoduladorLoRa):
             self.demodulador_actual.close()
         self._reset_maximized_state()
