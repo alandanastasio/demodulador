@@ -1172,11 +1172,16 @@ def build_ui(self, state):
     """)
 
     self.btle_bw_actions = []
-    for label, bw in [("LE 1M (anuncios legacy)", 1),
-                      ("LE 2M (métricas PHY)", 2)]:
+    for label, bw, decode_legacy in [
+        ("LE 1M (anuncios legacy)", 1, True),
+        ("LE 1M (métricas PHY)", 1, False),
+        ("LE 2M (métricas PHY)", 2, False),
+    ]:
         action = QAction(label, self)
         action.setCheckable(True)
-        action.triggered.connect(lambda checked, b=bw: self.set_btle_mode(b))
+        action.triggered.connect(
+            lambda checked, b=bw, legacy=decode_legacy:
+            self.set_btle_mode(b, decode_legacy=legacy))
         self.demod_group.addAction(action)
         self.btle_menu.addAction(action)
         self.btle_bw_actions.append(action)

@@ -19,7 +19,8 @@ def reset_demodulator_stream(demodulator):
     fresh = type(demodulator)()
     args = (demodulator.sample_rate, demodulator.fft_size)
     if isinstance(demodulator, DemoduladorBTLE):
-        fresh.configurar(*args, bw_mhz=demodulator.bw_mhz)
+        fresh.configurar(*args, bw_mhz=demodulator.bw_mhz,
+                         decode_legacy=demodulator.decode_legacy)
         # El índice del canal determina la secuencia de whitening. Si se
         # pierde al reiniciar el flujo, se ven ráfagas pero ningún CRC válido.
         fresh.advertising_channel = demodulator.advertising_channel

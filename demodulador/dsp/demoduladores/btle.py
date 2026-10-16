@@ -51,6 +51,7 @@ class DemoduladorBTLE(DemoduladorBase):
         self.buffer = np.array([], dtype=np.complex64)
         self.last_burst_metrics = None
         self.advertising_channel = None
+        self.decode_legacy = True
         self._buffer_start_sample = 0
         self._recent_packet_starts = []
         self.valid_packet_count = 0
@@ -367,12 +368,13 @@ class DemoduladorBTLE(DemoduladorBase):
     # ──────────────────────────────────────────────────────────────────
 
     def configurar(self, sample_rate: float, fft_size: int,
-                   bw_mhz: float = 1):
+                   bw_mhz: float = 1, decode_legacy: bool = True):
         if bw_mhz not in (1, 2):
             raise ValueError('BTLE admite las PHY LE 1M y LE 2M.')
         self.sample_rate = sample_rate
         self.fft_size = fft_size
         self.bw_mhz = bw_mhz
+        self.decode_legacy = bool(decode_legacy) and bw_mhz == 1
         self.buffer = np.array([], dtype=np.complex64)
         self.last_burst_metrics = None
         self._buffer_start_sample = 0
@@ -425,7 +427,7 @@ class DemoduladorBTLE(DemoduladorBase):
 
     def _decode_legacy_candidate(self, freq_dev_hz, preamble_start):
         """Prueba fases vecinas de reloj; solo acepta AA exacta y CRC válido."""
-        if self.bw_mhz != 1 or self.advertising_channel is None:
+        if not self.decode_legacy or self.advertising_channel is None:
             return None, None
         sps = self._samples_per_bit
         cfo = self._estimate_cfo(freq_dev_hz, preamble_start)
@@ -536,8 +538,10 @@ class DemoduladorBTLE(DemoduladorBase):
                 if candidate_start is not None:
                     # AA + CRC constituyen una confirmación más fuerte que
                     # los umbrales heurísticos del preámbulo corto LE 1M.
-                    packet, frame_start = self._decode_legacy_candidate(
-                        region_freq, candidate_start)
+                    packet = frame_start = None
+                    if self.decode_legacy:
+                        packet, frame_start = self._decode_legacy_candidate(
+                            region_freq, candidate_start)
                     if packet is not None:
                         absolute_start = window_start_sample + region_start + frame_start
                         if all(abs(absolute_start - previous) >
@@ -612,7 +616,7 @@ class DemoduladorBTLE(DemoduladorBase):
             preamble_found = (preamble_start is not None)
 
             if preamble_found and (decoded_packet is not None or
-                                   self.bw_mhz != 1 or
+                                   not self.decode_legacy or
                                    self.advertising_channel is None):
                 # ─── Estimación de CFO desde el preámbulo ───
                 # Al ser alternado, las desviaciones +/- se cancelan,

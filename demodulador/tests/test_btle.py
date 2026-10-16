@@ -173,6 +173,34 @@ def test_silence_does_not_emit_packet_metrics():
     assert result["metricas"]["btle_metrics"] is None
 
 
+def test_le_1m_phy_metrics_do_not_require_a_valid_legacy_advertisement():
+    rng = np.random.default_rng(57)
+    reference = DemoduladorBTLE()
+    reference.configurar(20_000_000, 2048, bw_mhz=1)
+    count = int(reference.sample_rate * reference.buffer_len_s)
+    iq = (rng.normal(0, 0.005, count)
+          + 1j * rng.normal(0, 0.005, count)).astype(np.complex64)
+    bits = np.concatenate((reference._preamble_bits_variants[0],
+                           rng.integers(0, 2, 200)))
+    frequency = reference._generate_gfsk_freq_reference(bits) + 40_000
+    burst = np.exp(2j * np.pi * np.cumsum(frequency) / reference.sample_rate)
+    iq[100_000:100_000 + len(burst)] += 0.7 * burst
+
+    reference.set_center_frequency(2_402_000_000)
+    legacy = reference.procesar(iq)["metricas"]["btle_metrics"]
+
+    phy = DemoduladorBTLE()
+    phy.configurar(20_000_000, 2048, bw_mhz=1, decode_legacy=False)
+    phy.set_center_frequency(2_402_000_000)
+    metrics = phy.procesar(iq)["metricas"]["btle_metrics"]
+
+    assert legacy is None
+    assert metrics["preamble_found"] is True
+    assert metrics["packet"] is None
+    assert metrics["packets"] == []
+    assert abs(metrics["cfo_khz"] - 40) < 25
+
+
 @pytest.mark.parametrize("phy_mbps", [1, 2])
 def test_continuous_gfsk_does_not_replace_a_packet(phy_mbps):
     demod = DemoduladorBTLE()
@@ -222,10 +250,13 @@ def test_last_packet_is_retained_without_a_new_frame(next_signal):
     assert not np.array_equal(first["psd_rf"], following["psd_rf"])
 
 
+@pytest.mark.parametrize("decode_legacy", [True, False])
 @pytest.mark.parametrize("interference", ["noise", "dc", "adjacent_tone"])
-def test_no_continuous_btle_signal_for_noise_dc_or_adjacent_channel(interference):
+def test_no_continuous_btle_signal_for_noise_dc_or_adjacent_channel(
+        interference, decode_legacy):
     demod = DemoduladorBTLE()
-    demod.configurar(20_000_000, 2048)
+    demod.configurar(20_000_000, 2048, decode_legacy=decode_legacy)
+    demod.set_center_frequency(2_402_000_000)
     count = int(demod.sample_rate * demod.buffer_len_s)
     rng = np.random.default_rng(35)
     iq = (rng.normal(0, 0.005, count)

@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
 
     
     @receiver_transition
-    def set_btle_mode(self, bw_mhz=1):
+    def set_btle_mode(self, bw_mhz=1, decode_legacy=True):
         if state.get('demod_mode') == 'none':
             self.sa_sample_rate_text = self.sr_combo.currentText()
         if hasattr(self, '_btle_power_stats'):
@@ -342,10 +342,9 @@ class MainWindow(QMainWindow):
             self.btle_packet_details.clear()
             self.btle_packet_history.setPlainText(
                 '\n'.join(self.btle_history_model.recent_lines()))
-            self.btle_packet_panel.setTitle(
-                "Anuncios BLE con CRC válido" if bw_mhz == 1
-                else "Anuncios legacy: disponibles en LE 1M")
+            self.btle_packet_panel.setTitle("Anuncios BLE con CRC válido")
         self._reset_maximized_state()
+        self.btle_packet_panel.setVisible(bw_mhz == 1 and decode_legacy)
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -402,7 +401,9 @@ class MainWindow(QMainWindow):
             self.radio.set_muestras_por_bloque(65536)
 
         self.demodulador_actual = DemoduladorBTLE()
-        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz)
+        self.demodulador_actual.configurar(
+            state['sample_rate'], state['fft_size'], bw_mhz=bw_mhz,
+            decode_legacy=decode_legacy)
         self.radio.set_sample_rate(state['sample_rate'])
         
         self.unit_combo.setCurrentText("GHz")
@@ -419,7 +420,9 @@ class MainWindow(QMainWindow):
         
         self.freq_plot.show()
         
-        self.setWindowTitle(f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE LE {bw_mhz}M")
+        mode_label = "anuncios legacy" if bw_mhz == 1 and decode_legacy else "métricas PHY"
+        self.setWindowTitle(
+            f"DEMODULADOR SDR - [{self.radio.nombre}] - BTLE LE {bw_mhz}M ({mode_label})")
 
     @receiver_transition
     def set_wifi_ag_mode(self):
@@ -1226,7 +1229,8 @@ class MainWindow(QMainWindow):
             if isinstance(self.demodulador_actual, DemoduladorBTLE):
                 self.demodulador_actual.configurar(
                     state['sample_rate'], state['fft_size'],
-                    bw_mhz=self.demodulador_actual.bw_mhz)
+                    bw_mhz=self.demodulador_actual.bw_mhz,
+                    decode_legacy=self.demodulador_actual.decode_legacy)
             else:
                 self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         self.update_x_axis()

@@ -25,6 +25,18 @@ def test_preserves_mode_parameters_and_discards_btle_samples():
     assert len(fresh.buffer) == 0
 
 
+def test_preserves_le_1m_phy_metrics_mode_after_stream_reset():
+    old = DemoduladorBTLE()
+    old.configurar(20_000_000, 4096, bw_mhz=1, decode_legacy=False)
+    old.set_center_frequency(2_402_000_000)
+
+    fresh = reset_demodulator_stream(old)
+
+    assert fresh.bw_mhz == 1
+    assert fresh.decode_legacy is False
+    assert fresh.advertising_channel == 37
+
+
 def test_old_worker_results_cannot_reach_new_demodulator():
     old = DemoduladorWiFiAG()
     old.configurar(20_000_000, 4096)
