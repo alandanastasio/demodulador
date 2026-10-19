@@ -156,10 +156,17 @@ class MainWindow(QMainWindow):
 
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
+            self.audio_manager.clear_audio()
             if self.demodulador_actual is not None:
-                self.demodulador_actual = reset_demodulator_stream(
-                    self.demodulador_actual
-                )
+                previous = self.demodulador_actual
+                if isinstance(previous, DemoduladorWBFMAudio):
+                    previous.procesar(None)
+                    # Evita publicar un bloque viejo mientras se configura
+                    # la nueva instancia del flujo.
+                    self.demodulador_actual = None
+                self.demodulador_actual = reset_demodulator_stream(previous)
+                if isinstance(self.demodulador_actual, DemoduladorWBFMAudio):
+                    self._bind_wbfm_audio_result(self.demodulador_actual)
             return
             
         # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
@@ -202,25 +209,35 @@ class MainWindow(QMainWindow):
                     from PyQt6.QtCore import QTimer
                     QTimer.singleShot(0, self._force_switch_to_ul)
                     return
-                
-                
-                # 3. Gestión de Audio:
-                self.audio_manager.enqueue_audio(resultados.get('audio_out'))
-                
-                # 4. Actualización de la Interfaz: Despachamos todos los vectores procesados 
-                # hacia el hilo principal de PyQt usando el emisor de señales genérico.
-                emitter.data_updated.emit(
-                    resultados['psd_rf'],
-                    resultados['rf_chunk'],
-                    resultados.get('psd_mpx'),
-                    resultados.get('f_axis_mpx'),
-                    resultados.get('audio_time_L'), 
-                    resultados.get('audio_time_R'), 
-                    resultados.get('t_axis_audio'),
-                    resultados.get('metricas'),
-                    resultados.get('mpx_time'),
-                    resultados.get('evm_data')
-                )
+                self._publish_demod_result(resultados)
+
+    def _bind_wbfm_audio_result(self, demodulator):
+        demodulator.result_callback = (
+            lambda result: self._deliver_wbfm_audio_result(demodulator, result)
+        )
+
+    def _deliver_wbfm_audio_result(self, demodulator, result):
+        if (self.demodulador_actual is demodulator
+                and state.get('demod_mode') == 'wbfm_audio'):
+            self._publish_demod_result(result)
+
+    def _publish_demod_result(self, resultados):
+        self.audio_manager.enqueue_audio(resultados.get('audio_out'))
+        if state.get('demod_mode') == 'wbfm_audio' and resultados.get('metricas') is not None:
+            resultados['metricas'].update(self.audio_manager.flow_stats())
+        # Las señales Qt se despachan al hilo dueño de la interfaz.
+        emitter.data_updated.emit(
+            resultados['psd_rf'],
+            resultados['rf_chunk'],
+            resultados.get('psd_mpx'),
+            resultados.get('f_axis_mpx'),
+            resultados.get('audio_time_L'),
+            resultados.get('audio_time_R'),
+            resultados.get('t_axis_audio'),
+            resultados.get('metricas'),
+            resultados.get('mpx_time'),
+            resultados.get('evm_data')
+        )
 
     # === MÉTODOS DE LA UI (BOTONES Y MENÚS) ===
     
@@ -272,6 +289,11 @@ class MainWindow(QMainWindow):
     def set_wbfm_mode(self):
         self._configure_wifi_rx_filter(False)
         self._reset_maximized_state()
+        # A 3 Msps la RTL puede perder transferencias USB. A 2,4 Msps se
+        # obtiene exactamente la misma banda MPX de 300 kHz (factor 8).
+        fm_sample_rate = 2.4e6 if isinstance(self.radio, RtlSdrHandler) else 3.0e6
+        fm_rate_text = ("2.4 MHz (Decimado a 300k)" if fm_sample_rate == 2.4e6
+                        else "3.0 MHz (Decimado a 300k)")
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
         if hasattr(self, 'lte_q1_stack') and self.lte_q1_stack.indexOf(self.freq_plot) != -1:
@@ -312,9 +334,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'btle_metrics_label'):
             self.btle_metrics_label.hide()
         self.sr_combo.blockSignals(True)
-        if self.sr_combo.findText("3.0 MHz (Decimado a 300k)") == -1:
-            self.sr_combo.addItem("3.0 MHz (Decimado a 300k)")
-        self.sr_combo.setCurrentText("3.0 MHz (Decimado a 300k)")
+        if self.sr_combo.findText(fm_rate_text) == -1:
+            self.sr_combo.addItem(fm_rate_text)
+        self.sr_combo.setCurrentText(fm_rate_text)
         self.sr_combo.setEnabled(False) 
         self.sr_combo.blockSignals(False)
         
@@ -326,7 +348,7 @@ class MainWindow(QMainWindow):
         self.fft_combo.blockSignals(False)
 
         state['demod_mode'] = 'wbfm'
-        state['sample_rate'] = 3.0e6 
+        state['sample_rate'] = fm_sample_rate
         
         self.freq_plot.show()
         self.demodulador_actual = DemoduladorWBFM()
@@ -885,6 +907,7 @@ class MainWindow(QMainWindow):
         # Cargamos el Plugin de Audio
         self.demodulador_actual = DemoduladorWBFMAudio()
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self._bind_wbfm_audio_result(self.demodulador_actual)
 
     def _set_lora_default_frequency(self):
         self.unit_combo.setCurrentText("MHz")
@@ -1131,8 +1154,11 @@ class MainWindow(QMainWindow):
             self.audio_manager.toggle_audio()
         
         self.sr_combo.blockSignals(True)
-        idx = self.sr_combo.findText("3.0 MHz (Decimado a 300k)")
-        if idx != -1: self.sr_combo.removeItem(idx)
+        for fm_rate_text in ("3.0 MHz (Decimado a 300k)",
+                             "2.4 MHz (Decimado a 300k)"):
+            idx = self.sr_combo.findText(fm_rate_text)
+            if idx != -1:
+                self.sr_combo.removeItem(idx)
         
         if hasattr(self, 'sa_sample_rate_text'):
             self.sr_combo.setCurrentText(self.sa_sample_rate_text)
@@ -1308,7 +1334,7 @@ class MainWindow(QMainWindow):
 
     def update_x_axis(self):
         cf = state['center_freq']
-        if state.get('demod_mode') == 'wbfm':
+        if state.get('demod_mode') in ('wbfm', 'wbfm_audio'):
             fs = state['fft_size'] 
             sr_visual = 300000 
             self.f_axis = np.linspace(cf - sr_visual/2, cf + sr_visual/2, fs) / 1e6
@@ -1584,6 +1610,8 @@ class MainWindow(QMainWindow):
         self._saved_col_stretches = {}
 
     def _reset_maximized_state(self):
+        if state.get('demod_mode') == 'wbfm_audio' and state.get('play_audio'):
+            self.audio_manager.deactivate()
         if getattr(self, '_maximized_widget', None) is not None:
             self._restore_panels()
             
