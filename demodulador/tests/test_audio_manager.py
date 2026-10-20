@@ -101,3 +101,26 @@ def test_live_queue_drops_oldest_block_when_full(monkeypatch):
     manager.deactivate()
     assert manager.audio_stream is None
     assert manager.state['audio_queue'].empty()
+
+
+def test_pause_mutes_immediately_and_resume_uses_fresh_audio(monkeypatch):
+    manager = make_manager(monkeypatch)
+    for _ in range(3):
+        manager.enqueue_audio(np.ones((4800, 2), dtype=np.float32))
+    np.testing.assert_array_equal(play(manager, 1024), 1)
+
+    manager.set_paused(True)
+    assert manager.ui.audio_l_btn.isChecked()
+    assert manager.ui.audio_r_btn.isChecked()
+    assert manager.state['play_audio']
+    assert manager.state['audio_queue'].empty()
+    np.testing.assert_array_equal(play(manager, 1024), 0)
+    manager.enqueue_audio(np.full((4800, 2), 9, dtype=np.float32))
+    assert manager.state['audio_queue'].empty()
+
+    manager.set_paused(False)
+    np.testing.assert_array_equal(play(manager, 1024), 0)
+    for _ in range(3):
+        manager.enqueue_audio(np.full((4800, 2), 2, dtype=np.float32))
+    np.testing.assert_array_equal(play(manager, 1024), 2)
+    manager.deactivate()

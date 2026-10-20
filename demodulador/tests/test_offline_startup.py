@@ -75,6 +75,10 @@ def test_main_window_replays_capture_without_receiver(tmp_path, monkeypatch, qap
     assert not window.record_action.isEnabled()
     assert "Modo sin SDR" in window.offline_notice.text()
     assert "#493638" in window.offline_notice.styleSheet()
+    window.pause_btn.click()
+    assert window.is_paused and window.audio_manager._paused
+    window.pause_btn.click()
+    assert not window.is_paused and not window.audio_manager._paused
     window.playback_manager.load_and_play()
     assert window.playback_manager.state['sample_rate'] == 1_000
     assert window.playback_manager.playback_data is not None

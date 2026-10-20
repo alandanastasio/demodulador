@@ -1672,6 +1672,7 @@ class MainWindow(QMainWindow):
             self.controls_widget.show()
     def toggle_pause(self):
         self.is_paused = self.pause_btn.isChecked()
+        self.audio_manager.set_paused(self.is_paused)
         
         if self.is_paused:
             self.pause_btn.setText("▶")

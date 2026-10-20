@@ -15,6 +15,7 @@ class AudioManager:
         self._audio_chunk = None
         self._audio_offset = 0
         self._primed = False
+        self._paused = False
         self._audio_lock = Lock()
         self.underrun_events = 0
         self.underrun_frames = 0
@@ -25,7 +26,11 @@ class AudioManager:
 
     def enqueue_audio(self, audio_data):
         """Recibe las muestras del DSP y las mete en la cola si el audio está activo"""
-        if self.state.get('play_audio', False) and audio_data is not None and len(audio_data):
+        if audio_data is None or not len(audio_data):
+            return
+        with self._audio_lock:
+            if self._paused or not self.state.get('play_audio', False):
+                return
             try:
                 self.state['audio_queue'].put_nowait(audio_data)
             except queue.Full:
@@ -46,11 +51,23 @@ class AudioManager:
             self._audio_chunk = None
             self._audio_offset = 0
             self._primed = False
-        while True:
-            try:
-                self.state['audio_queue'].get_nowait()
-            except queue.Empty:
-                break
+            while True:
+                try:
+                    self.state['audio_queue'].get_nowait()
+                except queue.Empty:
+                    break
+
+    def set_paused(self, paused):
+        with self._audio_lock:
+            self._paused = bool(paused)
+            self._audio_chunk = None
+            self._audio_offset = 0
+            self._primed = False
+            while True:
+                try:
+                    self.state['audio_queue'].get_nowait()
+                except queue.Empty:
+                    break
 
     def deactivate(self):
         self.ui.audio_l_btn.setChecked(False)
@@ -83,6 +100,8 @@ class AudioManager:
             def audio_callback(outdata, frames, time, status):
                 outdata.fill(0.0)
                 with self._audio_lock:
+                    if self._paused:
+                        return
                     if getattr(status, 'output_underflow', False):
                         self.device_underruns += 1
                     # Dos bloques de reserva absorben la variación de tiempo
