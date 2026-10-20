@@ -101,7 +101,7 @@ class DemoduladorWBFMAudio(DemoduladorBase):
     def id(self): return "wbfm_audio"
 
     @property
-    def nombre_mostrar(self): return "WBFM (Audio en Vivo)"
+    def nombre_mostrar(self): return "FM: escucha"
 
     def configurar(self, sample_rate: float, fft_size: int):
         self.sample_rate = sample_rate

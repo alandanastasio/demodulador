@@ -1350,23 +1350,17 @@ def build_ui(self, state):
     """)
 
     # Opciones dentro del submenú FM
-    self.action_wbfm = QAction("WBFM (Radio Comercial)", self)
+    self.action_wbfm = QAction("FM: medición", self)
     self.action_wbfm.setCheckable(True)
     self.action_wbfm.triggered.connect(self.set_wbfm_mode)
     self.demod_group.addAction(self.action_wbfm)
     self.fm_menu.addAction(self.action_wbfm)
 
-    self.action_wbfm_audio = QAction("WBFM (Audio en Vivo)", self)
+    self.action_wbfm_audio = QAction("FM: escucha", self)
     self.action_wbfm_audio.setCheckable(True)
-    self.action_wbfm_audio.triggered.connect(self.set_wbfm_audio_mode) # Usará una función nueva
+    self.action_wbfm_audio.triggered.connect(self.set_wbfm_audio_mode)
     self.demod_group.addAction(self.action_wbfm_audio)
     self.fm_menu.addAction(self.action_wbfm_audio)
-
-    self.action_nbfm = QAction("Custom FM", self)
-    self.action_nbfm.setCheckable(True)
-    # self.action_nbfm.triggered.connect(...)
-    self.demod_group.addAction(self.action_nbfm)
-    self.fm_menu.addAction(self.action_nbfm)
 
     # Agregamos el submenú FM al menú principal de Demodulación
     self.demod_menu.addMenu(self.fm_menu)

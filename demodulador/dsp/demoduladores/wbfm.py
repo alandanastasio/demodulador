@@ -62,7 +62,7 @@ class DemoduladorWBFM(DemoduladorBase):
     def id(self): return "wbfm"
 
     @property
-    def nombre_mostrar(self): return "WBFM (Modo Medición Precisa)"
+    def nombre_mostrar(self): return "FM: medición"
 
     def configurar(self, sample_rate: float, fft_size: int):
         self.sample_rate = sample_rate

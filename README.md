@@ -7,13 +7,14 @@ Aplicación de recepción y análisis de señales de radio con interfaz gráfica
 | Modo | Funciones implementadas |
 | --- | --- |
 | Analizador de espectro | Espectro interactivo, espectrograma, marcadores, trazas y controles de visualización. |
-| FM comercial (WBFM) | Medición de la señal multiplex, piloto estéreo y canales de audio; modo separado de reproducción de audio estéreo en vivo. |
+| FM: medición | Medición de la señal multiplex, piloto estéreo y canales de audio, con un espectro multiplex de mayor resolución. |
+| FM: escucha | Gráficos y métricas FM, con reproducción de audio estéreo en vivo y controles para los canales izquierdo y derecho. |
 | WiFi 802.11a/g | Detección y sincronización de tramas OFDM, estimación de desplazamiento de frecuencia y canal, constelación, EVM y decodificación del campo SIGNAL. |
 | Bluetooth Low Energy | Detección y métricas de ráfagas LE 1M y LE 2M; en LE 1M, decodificación de anuncios *legacy* con verificación de CRC e historial de paquetes. |
 | LoRa | Detección de preámbulo y decodificación de tramas de la capa física, con encabezado, carga útil, CRC cuando está presente, símbolos y *sync word*. La interfaz ofrece BW de 125, 250 y 500 kHz y SF7 a SF12. |
 | LTE | Análisis de señales downlink y uplink, con sincronización, constelaciones, métricas y visualizaciones de recursos. Las opciones de ancho de banda dependen de la tasa de muestreo que admita el SDR. |
 
-El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física. El elemento «Custom FM» figura en el menú, pero todavía no tiene una acción de demodulación conectada.
+El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física.
 
 ## Hardware y capturas
 
