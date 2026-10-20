@@ -88,7 +88,6 @@ state = {
     'lora_sf': None,
     'demod_mode': 'none',
     'is_recording': False,
-    'recorded_samples': [],
     'zero_span': False,
     'fft_window': 'rectangular'
 }
@@ -96,6 +95,7 @@ state = {
 class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
     data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object, object)
+    recording_done = pyqtSignal(object, object)
 
 emitter = SignalEmitter()
 
@@ -109,7 +109,8 @@ class MainWindow(QMainWindow):
         
         # 1. HARDWARE Y DSP SETUP
         self.radio = radio_handler
-        self.radio.rx_callback = self.procesar_muestras_iq # Conectamos la radio a nuestro puente
+        self._suspend_live_iq = False
+        self.radio.rx_callback = self._procesar_muestras_radio
         self.demodulador_actual = SpectrumAnalyzer() 
         self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
         
@@ -154,8 +155,19 @@ class MainWindow(QMainWindow):
         self.radio.configurar(state['sample_rate'], state['center_freq'])
         self.radio.start_rx()
 
+    def _procesar_muestras_radio(self, samples):
+        if not self._suspend_live_iq:
+            self.procesar_muestras_iq(samples)
+
+    def _reset_retro_iq(self):
+        if hasattr(self, 'retro_buffer'):
+            self.retro_buffer = None
+        self.waterfall_buffer = None
+
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
+            self.playback_manager.signal_discontinuity()
+            self._reset_retro_iq()
             self.audio_manager.clear_audio()
             if self.demodulador_actual is not None:
                 previous = self.demodulador_actual
@@ -169,12 +181,15 @@ class MainWindow(QMainWindow):
                     self._bind_wbfm_audio_result(self.demodulador_actual)
             return
             
-        # 1. Grabación de muestras I/Q crudas (si el usuario activó la grabación)
-        if state['is_recording']:
-            state['recorded_samples'].append(c_samples.copy())
+        # La captura tiene prioridad: no bloquear el callback SDR con DSP/plots.
+        if self.playback_manager.record_samples(c_samples):
+            return
             
         # 1.5. Grabación retroactiva del Waterfall (Búfer Circular de RAM)
-        if getattr(self, 'waterfall_enabled', False) and state.get('demod_mode') == 'none' and not self.is_paused:
+        if (getattr(self, 'waterfall_enabled', False)
+                and state.get('demod_mode') == 'none'
+                and self.playback_manager.playback_data is None
+                and not self.is_paused):
             dt = getattr(self, 'wf_dt_avg', 0.166)
             total_time = dt * getattr(self, 'waterfall_lines', 200)
             expected_samples = int(total_time * state.get('sample_rate', 2e6))
@@ -506,7 +521,10 @@ class MainWindow(QMainWindow):
             self.radio.set_muestras_por_bloque(pot2)
 
         self.demodulador_actual = DemoduladorWiFiAG()
-        self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+        self.demodulador_actual.configurar(
+            state['sample_rate'], state['fft_size'],
+            remove_dc=isinstance(self.radio, BladeRFHandler),
+        )
         self.radio.set_sample_rate(state['sample_rate'])
         self._configure_wifi_rx_filter(True)
         
@@ -1202,6 +1220,7 @@ class MainWindow(QMainWindow):
     def _apply_freq_change(self, center_freq):
         self.radio.set_freq(center_freq)
         state['center_freq'] = center_freq
+        self._reset_retro_iq()
         if isinstance(self.demodulador_actual, DemoduladorBTLE):
             self.demodulador_actual.set_center_frequency(center_freq)
         if not isinstance(self.radio, HackRFHandler) and isinstance(
@@ -1241,6 +1260,7 @@ class MainWindow(QMainWindow):
     def _apply_sample_rate_change(self, text, sample_rate):
         self.radio.set_sample_rate(sample_rate)
         state['sample_rate'] = sample_rate
+        self._reset_retro_iq()
         if state.get('demod_mode', 'none') == 'none':
             self.sa_sample_rate_text = text
         
@@ -1348,6 +1368,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         print("Cerrando aplicación SDR...")
+        self.playback_manager.shutdown()
         self.audio_manager.stop_all()
         if isinstance(self.demodulador_actual, DemoduladorLoRa):
             self.demodulador_actual.close()

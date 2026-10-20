@@ -182,6 +182,7 @@ def test_iq_callback_keeps_interleaved_signed_samples(fake_library):
 
     assert device.callback(device, raw, len(raw), len(raw)) == 0
     np.testing.assert_allclose(received[-1], [127 / 128 - 1j, -0.5 + 0.25j])
+    assert received[-1].dtype == np.complex64
     handler.close()
 
 

@@ -15,6 +15,14 @@ class SDRBase(ABC):
     def validate_sample_rate(self, sr_hz: float):
         """Permite que cada SDR rechace una tasa antes de alterar el flujo."""
 
+    def get_sample_rate(self):
+        """Tasa real de recepción, si el controlador puede consultarla."""
+        return None
+
+    def get_center_frequency(self):
+        """Frecuencia central informada por el controlador, si está disponible."""
+        return None
+
     @property
     @abstractmethod
     def nombre(self) -> str:

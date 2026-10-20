@@ -441,7 +441,7 @@ def build_ui(self, state):
     self.loop_action.triggered.connect(lambda: self.playback_manager.load_and_play(loop=True))
 
     self.stop_play_action = QAction("⏹ Detener Reproducción", self)
-    self.stop_play_action.triggered.connect(self.playback_manager.stop_playback)
+    self.stop_play_action.triggered.connect(lambda: self.playback_manager.stop_playback())
     self.stop_play_action.setEnabled(False) # Arranca deshabilitado
     
     # 4. Agregar al menú

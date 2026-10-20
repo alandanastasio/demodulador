@@ -741,7 +741,7 @@ class DemoduladorLTEUplink(DemoduladorBase):
             self.proxima_captura = time.time() + self.pausa_entre_snapshots
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
-        if muestras_iq is None or len(muestras_iq) == 0:
+        if muestras_iq is None:
             return None
 
         # SIEMPRE extraer resultados pendientes primero, sin importar si estamos
@@ -754,6 +754,9 @@ class DemoduladorLTEUplink(DemoduladorBase):
                 
         if resultados_pendientes is not None:
             return resultados_pendientes
+
+        if len(muestras_iq) == 0:
+            return None
 
         if self.is_processing:
             return None

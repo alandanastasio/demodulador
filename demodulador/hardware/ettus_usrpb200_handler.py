@@ -72,6 +72,12 @@ class USRPB200Handler(SDRBase):
             return f"Ettus USRP B200 ({self.serial})"
         return "Ettus USRP B200"
 
+    def get_sample_rate(self):
+        return float(self.usrp.get_rx_rate(0))
+
+    def get_center_frequency(self):
+        return float(self.usrp.get_rx_freq(0))
+
     def configurar(self, sample_rate: float, center_freq: float):
         self.set_sample_rate(sample_rate)
         self.set_freq(center_freq)
@@ -122,7 +128,14 @@ class USRPB200Handler(SDRBase):
     def _rx_worker(self):
         stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.start_cont)
         stream_cmd.stream_now = True
-        self.streamer.issue_stream_cmd(stream_cmd)
+        try:
+            self.streamer.issue_stream_cmd(stream_cmd)
+        except Exception as exc:
+            self.is_running = False
+            print(f"Error al iniciar recepción USRP: {exc}")
+            if self.rx_callback is not None:
+                self.rx_callback(None)
+            return
         
         metadata = uhd.types.RXMetadata()
         chunk_size = self.muestras_por_bloque
@@ -143,18 +156,19 @@ class USRPB200Handler(SDRBase):
                     samps = self.streamer.recv(recv_buffer[samps_received:chunk_size], metadata)
                     
                     if metadata.error_code != uhd.types.RXMetadataErrorCode.none:
-                        if metadata.error_code != uhd.types.RXMetadataErrorCode.timeout:
-                            # Hubo un OVERFLOW (O) o error de secuencia.
-                            self.rx_callback(None)
-                            samps_received = 0
-                            zero_samps_count = 0
-                            break # Romper el bucle interno para descartar este bloque y reiniciar
+                        # Un timeout, overflow o error de secuencia invalida la
+                        # continuidad; nunca unir muestras a ambos lados.
+                        self.rx_callback(None)
+                        samps_received = 0
+                        zero_samps_count = 0
+                        break
                             
                     if samps == 0:
                         zero_samps_count += 1
                         if zero_samps_count > 10:
                             # Demasiados errores seguidos, el stream probablemente murió o está muy atrasado.
                             # Reiniciamos el bloque para evitar un freeze infinito
+                            self.rx_callback(None)
                             break
                     else:
                         zero_samps_count = 0
@@ -162,10 +176,13 @@ class USRPB200Handler(SDRBase):
                     samps_received += samps
                 
                 if samps_received == chunk_size and self.is_running:
-                    self.rx_callback(recv_buffer.astype(np.complex128))
+                    self.rx_callback(recv_buffer.copy())
                     
             except Exception as e:
                 print(f"Error en rx_worker de USRP: {e}")
+                self.is_running = False
+                if self.rx_callback is not None:
+                    self.rx_callback(None)
                 break
                 
         stop_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.stop_cont)

@@ -254,6 +254,7 @@ def is_ht_mixed_signal(data_symbols, valid_data):
 
 class DemoduladorWiFiAG(DemoduladorBase):
     def __init__(self):
+        self.remove_dc = False
         self.sample_rate = 20e6 
         self.fft_size = 4096
         self.buffer_medicion = []
@@ -281,7 +282,9 @@ class DemoduladorWiFiAG(DemoduladorBase):
     @property
     def nombre_mostrar(self): return "WiFi 802.11a/g (OFDM)"
 
-    def configurar(self, sample_rate: float, fft_size: int):
+    def configurar(self, sample_rate: float, fft_size: int, remove_dc=None):
+        if remove_dc is not None:
+            self.remove_dc = bool(remove_dc)
         self.sample_rate = sample_rate
         self.fft_size = fft_size
         self.buffer_medicion = []
@@ -364,9 +367,10 @@ class DemoduladorWiFiAG(DemoduladorBase):
             wifi_metrics = {}
             S_data = None
 
-            # --- 0. LIMPIEZA DE HARDWARE ---
-            # Eliminamos la fuga del oscilador local (DC Offset) de todo el bloque
-            #bloque_iq = bloque_iq - np.mean(bloque_iq)
+            # bladeRF antes corregía DC en el controlador. Mantener esa ruta
+            # de análisis sin modificar los IQ que se graban.
+            if self.remove_dc:
+                bloque_iq = bloque_iq - np.mean(bloque_iq)
 
             # 1. BÚSQUEDA GRUESA (Energía)
             energia = np.abs(bloque_iq) ** 2

@@ -39,7 +39,7 @@ def test_preserves_le_1m_phy_metrics_mode_after_stream_reset():
 
 def test_old_worker_results_cannot_reach_new_demodulator():
     old = DemoduladorWiFiAG()
-    old.configurar(20_000_000, 4096)
+    old.configurar(20_000_000, 4096, remove_dc=True)
     old.nuevos_datos_listos = True
     old.last_heavy_results = {'old': True}
 
@@ -47,6 +47,7 @@ def test_old_worker_results_cannot_reach_new_demodulator():
     old.last_heavy_results = {'finished_late': True}
 
     assert fresh is not old
+    assert fresh.remove_dc is True
     assert not fresh.nuevos_datos_listos
     assert fresh.last_heavy_results == {}
 

@@ -1,4 +1,5 @@
 import threading
+import logging
 import numpy as np
 from rtlsdr import RtlSdr
 from .sdr_base import SDRBase
@@ -13,6 +14,12 @@ class RtlSdrHandler(SDRBase):
     @property
     def nombre(self):
         return "RTL-SDR"
+
+    def get_sample_rate(self):
+        return float(self.sdr.sample_rate)
+
+    def get_center_frequency(self):
+        return float(self.sdr.center_freq)
 
     def _async_callback(self, samples, context):
         """
@@ -46,11 +53,21 @@ class RtlSdrHandler(SDRBase):
             self.is_running = True
             # Iniciamos la lectura asincrónica en un hilo separado
             self._thread = threading.Thread(
-                target=self.sdr.read_samples_async,
-                args=(self._async_callback, 32768)
+                target=self._rx_worker,
             )
             self._thread.daemon = True
             self._thread.start()
+
+    def _rx_worker(self):
+        try:
+            self.sdr.read_samples_async(self._async_callback, 32768)
+        except Exception:
+            logging.exception("Falló el flujo IQ de RTL-SDR")
+        finally:
+            if self.is_running:
+                self.is_running = False
+                if self.rx_callback is not None:
+                    self.rx_callback(None)
 
     def stop_rx(self):
         if self.is_running:

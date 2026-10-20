@@ -51,6 +51,12 @@ class HackRFHandler(SDRBase):
     def nombre(self):
         return "HackRF One"
 
+    def get_sample_rate(self):
+        return self._sample_rate
+
+    def get_center_frequency(self):
+        return self._center_freq
+
     def _require_open(self):
         if self._closed or self.sdr is None:
             raise RuntimeError("La HackRF está cerrada.")
@@ -126,13 +132,21 @@ class HackRFHandler(SDRBase):
                 return 0
             if valid_length < 0 or valid_length > buffer_length or valid_length % 2:
                 raise ValueError("Bloque IQ inválido recibido de HackRF.")
-            raw_data = np.array(buffer[:valid_length], dtype=np.int8)
-            samples = (raw_data[0::2] + 1j * raw_data[1::2]) / 128.0
+            raw_data = np.asarray(buffer[:valid_length], dtype=np.int8)
+            # k/128 es representable exactamente en float32; conservar c64
+            # reduce a la mitad el caudal necesario para la captura en disco.
+            samples = raw_data.astype(np.float32).view(np.complex64)
+            samples *= np.float32(1.0 / 128.0)
             if self.rx_callback is not None:
                 self.rx_callback(samples)
         except Exception:
             logging.exception("Error en el callback de recepción HackRF")
             self.is_running = False
+            if self.rx_callback is not None:
+                try:
+                    self.rx_callback(None)
+                except Exception:
+                    logging.exception("No se pudo informar el corte de recepción HackRF")
             return -1
         return 0
 

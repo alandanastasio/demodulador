@@ -27,7 +27,9 @@ La ventana inicial detecta estos SDR mediante sus controladores correspondientes
 | Nuand bladeRF x40 | Bindings de `libbladeRF` |
 | Ettus USRP B200 | UHD |
 
-La grabación desde **Rec/Play** guarda un archivo `muestras_iq_*.npz` en el directorio desde el que se ejecutó el programa. Contiene `raw_iq`, `center_freq` y `sample_rate`. El mismo menú permite reproducirlo una vez, en bucle o detener la reproducción. Las muestras se acumulan en memoria durante la grabación y se escriben al detenerla; conviene vigilar la RAM en capturas largas. La interfaz de reproducción se abre después de seleccionar e inicializar un SDR.
+La grabación desde **Rec/Play** escribe secuencialmente `muestras_iq_*.iq` en el directorio desde el que se ejecutó el programa. El archivo `.json` del mismo nombre guarda el tipo de muestra, la frecuencia central, la tasa de muestreo, el número de bloques y muestras, y una suma SHA-256; conservá ambos archivos juntos. Al reproducir una captura nueva se verifican su tamaño y suma; también se admiten las capturas `.npz` anteriores, que no contienen esa verificación. La reproducción conserva el orden de las muestras y puede ejecutarse una vez, en bucle o detenerse; requiere seleccionar e inicializar un SDR al abrir la aplicación. Si el procesamiento tarda más que el tiempo real, la reproducción puede retrasarse sin saltar muestras.
+
+Durante la grabación se pausan los gráficos y se bloquean los cambios de modo, frecuencia y tasa para priorizar la recepción. Si el SDR informa un corte, falla la escritura o se llena la cola de disco, la captura se descarta y la interfaz muestra el error. Algunos controladores no informan todas las pérdidas que puedan ocurrir antes de entregar un bloque a la aplicación; la integridad del archivo verifica las muestras recibidas por el programa, no las que el hardware haya perdido previamente.
 
 ## Instalación
 

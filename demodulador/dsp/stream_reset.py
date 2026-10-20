@@ -3,6 +3,7 @@
 from .demoduladores.btle import DemoduladorBTLE
 from .demoduladores.lora import DemoduladorLoRa
 from .demoduladores.lte_uplink import DemoduladorLTEUplink
+from .demoduladores.wifi_ag import DemoduladorWiFiAG
 
 
 def reset_demodulator_stream(demodulator):
@@ -32,6 +33,8 @@ def reset_demodulator_stream(demodulator):
         fresh.cell_id_guardada = demodulator.cell_id_guardada
         fresh.n_id_1 = demodulator.n_id_1
         fresh.n_id_2 = demodulator.n_id_2
+    elif isinstance(demodulator, DemoduladorWiFiAG):
+        fresh.configurar(*args, remove_dc=demodulator.remove_dc)
     else:
         fresh.configurar(*args)
 

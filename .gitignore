@@ -13,6 +13,10 @@ wheels/
 *.npz
 *.cf32
 *.cf32.part
+muestras_iq_*.iq
+muestras_iq_*.iq.part
+muestras_iq_*.json
+muestras_iq_*.json.part
 
 demodulador/capturaDSOcorrect (6).ipynb
 demodulador/research/notebook_extracted.py
