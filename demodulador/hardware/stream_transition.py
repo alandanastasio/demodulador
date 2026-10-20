@@ -3,9 +3,6 @@
 from functools import wraps
 from inspect import signature
 
-from .hackrf_handler import HackRFHandler
-
-
 def receiver_transition(method):
     """Pausa HackRF durante una transición, también cuando hay llamadas anidadas."""
     no_arguments = len(signature(method).parameters) == 1
@@ -17,7 +14,7 @@ def receiver_transition(method):
         if no_arguments and len(args) == 1 and isinstance(args[0], bool) and not kwargs:
             args = ()
 
-        if not isinstance(self.radio, HackRFHandler):
+        if self.radio.nombre != "HackRF One":
             return method(self, *args, **kwargs)
 
         depth = getattr(self, '_receiver_transition_depth', 0)

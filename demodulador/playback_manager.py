@@ -65,6 +65,9 @@ class PlaybackManager(QObject):
             return
         if self._recorder is not None or self.playback_data is not None:
             return
+        if not self.ui.radio.supports_live_rx:
+            self.ui.statusBar().showMessage("No hay SDR para grabar en este modo.", 5000)
+            return
         if not self.ui.radio.is_running:
             self.ui.statusBar().showMessage("El SDR debe estar recibiendo para grabar.", 5000)
             return
@@ -124,8 +127,10 @@ class PlaybackManager(QObject):
             self._recorder = None
         self._restore_enabled(self._record_controls)
         self._record_controls = None
-        self.ui.record_action.setEnabled(True)
-        self.ui.record_action.setText("🔴 Iniciar Grabación")
+        self.ui.record_action.setEnabled(self.ui.radio.supports_live_rx)
+        self.ui.record_action.setText(
+            "🔴 Iniciar Grabación" if self.ui.radio.supports_live_rx
+            else "🔴 Grabación disponible con SDR")
         self.ui.rec_play_btn.setText("Rec/Play")
         if error:
             self.ui.statusBar().showMessage(f"Captura descartada: {error}", 0)
@@ -174,12 +179,13 @@ class PlaybackManager(QObject):
         live_state = (self.state['center_freq'], self.state['sample_rate'],
                       self.ui.freq_input.value(), self.ui.sr_combo.currentText())
         self.ui._suspend_live_iq = True
-        try:
-            self.ui.radio.stop_rx()
-        except Exception as exc:
-            self.ui._suspend_live_iq = False
-            self.ui.statusBar().showMessage(f"No se pudo detener el SDR: {exc}", 0)
-            return
+        if self.ui.radio.supports_live_rx:
+            try:
+                self.ui.radio.stop_rx()
+            except Exception as exc:
+                self.ui._suspend_live_iq = False
+                self.ui.statusBar().showMessage(f"No se pudo detener el SDR: {exc}", 0)
+                return
         self._live_state = live_state
         self._live_demod = self.ui.demodulador_actual
         if hasattr(self.ui, '_reset_retro_iq'):
@@ -196,7 +202,7 @@ class PlaybackManager(QObject):
         self.state['sample_rate'] = sample_rate
         self._play_controls = self._set_enabled(
             ('freq_input', 'sr_combo', 'fft_combo', 'demod_btn',
-             'change_sdr_btn', 'btn_change_uplink_freq', 'lna_combo', 'vga_combo',
+             'btn_change_uplink_freq', 'lna_combo', 'vga_combo',
              'record_action', 'play_action', 'loop_action'), False)
         self.ui.stop_play_action.setEnabled(True)
         self.ui.freq_input.blockSignals(True)
@@ -302,7 +308,7 @@ class PlaybackManager(QObject):
         self.ui.stop_play_action.setEnabled(False)
         self.ui.rec_play_btn.setText("Rec/Play")
         self.ui.freq_plot_curve.setPen(pg.mkPen(color="#FFD500", width=1.5))
-        if restart_radio:
+        if restart_radio and self.ui.radio.supports_live_rx:
             self.ui._suspend_live_iq = False
             self.ui.radio.start_rx()
 
@@ -314,6 +320,7 @@ class PlaybackManager(QObject):
             recorder = self._recorder
             if recorder is not None:
                 recorder.finish()
-        self.ui.radio.stop_rx()
+        if self.ui.radio.supports_live_rx:
+            self.ui.radio.stop_rx()
         if recorder is not None:
             recorder.wait()

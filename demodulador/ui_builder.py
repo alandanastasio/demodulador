@@ -1544,6 +1544,8 @@ def build_ui(self, state):
     elif "File" in self.radio.nombre:
         self.sr_combo.addItems(["1.92 MHz", "3.84 MHz", "7.68 MHz", "15.36 MHz", "30.72 MHz"])
         self.sr_combo.setCurrentText("3.84 MHz")
+    elif not self.radio.supports_live_rx:
+        self.sr_combo.addItem("10 MHz")
         
     self.sr_combo.currentTextChanged.connect(self.on_sr_changed)
     form_layout.addRow(self.sr_label, self.sr_combo)

@@ -4,11 +4,12 @@ import usb.core
 from PyQt6.QtCore import QSize, Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QMainWindow, QVBoxLayout, QLabel, QPushButton, QListWidget, QWidget, QListWidgetItem, QApplication
-from hardware.hackrf_handler import HackRFHandler
-from hardware.rtlsdr_handler import RtlSdrHandler
-from hardware.nuand_bladerf_handler import BladeRFHandler
-from hardware.ettus_usrpb200_handler import USRPB200Handler
-from main import MainWindow
+from hardware.mock_sdr_handler import MockSDRHandler
+
+
+def create_main_window(radio_handler):
+    from main import MainWindow
+    return MainWindow(radio_handler)
 
 class DeviceScannerThread(QThread):
     devices_found_signal = pyqtSignal(list)  # type: ignore
@@ -66,15 +67,19 @@ class DeviceInitializerThread(QThread):
     def run(self):
         try:
             if "HackRF" in self.device_name:
+                from hardware.hackrf_handler import HackRFHandler
                 print("Iniciando HackRF...")
                 self.radio_handler = HackRFHandler(rx_callback=None)
             elif "RTL-SDR" in self.device_name:
+                from hardware.rtlsdr_handler import RtlSdrHandler
                 print("Iniciando RTL-SDR...")
                 self.radio_handler = RtlSdrHandler(rx_callback=None)
             elif "bladeRF" in self.device_name:
+                from hardware.nuand_bladerf_handler import BladeRFHandler
                 print("Iniciando bladeRF...")
                 self.radio_handler = BladeRFHandler(rx_callback=None)
             elif "Ettus USRP B200" in self.device_name:
+                from hardware.ettus_usrpb200_handler import USRPB200Handler
                 print(f"Iniciando {self.device_name}...")
                 serial = None
                 if "SN: " in self.device_name:
@@ -102,7 +107,7 @@ class StartupWindow(QMainWindow):
         self.setWindowTitle("DEMODULADOR SDR")
         icon_path = os.path.join(os.path.dirname(__file__), "logo.demod.png")
         self.setWindowIcon(QIcon(icon_path))
-        self.resize(QSize(400, 380))
+        self.resize(QSize(430, 450))
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
 
         layout = QVBoxLayout()
@@ -142,6 +147,27 @@ class StartupWindow(QMainWindow):
         """)
         self.device_list.itemClicked.connect(self.launch_main_window)
         layout.addWidget(self.device_list)
+
+        offline_label = QLabel("Reproducción sin equipo")
+        offline_label.setStyleSheet("font-size: 17px; font-weight: bold; margin-top: 10px;")
+        layout.addWidget(offline_label)
+        self.offline_btn = QPushButton("📂 Abrir demodulador sin SDR")
+        self.offline_btn.setToolTip("Para reproducir capturas IQ .iq o .npz desde Rec/Play")
+        self.offline_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.offline_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #444444;
+                color: white;
+                font-weight: bold;
+                padding: 13px 15px;
+                border-radius: 6px;
+                border: 1px solid #5a5a5a;
+            }
+            QPushButton:hover { background-color: #555555; }
+            QPushButton:pressed { background-color: #2b2b2b; }
+        """)
+        self.offline_btn.clicked.connect(self.launch_offline_mode)
+        layout.addWidget(self.offline_btn)
 
         self.loading_label = QLabel("")
         self.loading_label.setStyleSheet("color: #E0E0E0; font-size: 15px; font-weight: bold; margin-top: 10px;")
@@ -200,6 +226,7 @@ class StartupWindow(QMainWindow):
 
         self.scan_btn.setEnabled(False)
         self.device_list.setEnabled(False)
+        self.offline_btn.setEnabled(False)
         
         if "Ettus" in device_name:
             self.base_loading_text = "⏳ Cargando imagen FPGA"
@@ -216,11 +243,17 @@ class StartupWindow(QMainWindow):
         self.thread.error_signal.connect(self.on_device_error)
         self.thread.start()
 
+    def launch_offline_mode(self):
+        self.scan_btn.setEnabled(False)
+        self.device_list.setEnabled(False)
+        self.offline_btn.setEnabled(False)
+        self.on_device_initialized(MockSDRHandler())
+
     def on_device_initialized(self, radio_handler):
         self.dot_timer.stop()
         if radio_handler:
             try:
-                self.main_app_window = MainWindow(radio_handler)
+                self.main_app_window = create_main_window(radio_handler)
             except Exception as exc:
                 try:
                     radio_handler.close()
@@ -238,6 +271,7 @@ class StartupWindow(QMainWindow):
         self.loading_label.setText(f"❌ Error al iniciar: {err_msg}")
         self.scan_btn.setEnabled(True)
         self.device_list.setEnabled(True)
+        self.offline_btn.setEnabled(True)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

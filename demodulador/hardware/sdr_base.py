@@ -3,6 +3,8 @@ from typing import Callable
 import numpy as np
 
 class SDRBase(ABC):
+    supports_live_rx = True
+
     def __init__(self, rx_callback: Callable[[np.ndarray | None], None] | None):
         """
         rx_callback es la función a la que la radio le va a "escupir" 

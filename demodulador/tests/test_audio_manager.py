@@ -39,7 +39,6 @@ class Stream:
 def make_manager(monkeypatch):
     monkeypatch.setitem(sys.modules, 'sounddevice', SimpleNamespace(OutputStream=Stream))
     module = importlib.import_module('audio_manager')
-    monkeypatch.setattr(module.sd, 'OutputStream', Stream)
     ui = SimpleNamespace(audio_l_btn=Button(), audio_r_btn=Button())
     manager = module.AudioManager(ui, {})
     manager.toggle_audio()

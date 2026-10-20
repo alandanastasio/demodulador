@@ -12,6 +12,7 @@ import playback_manager as playback_module
 from dsp.demoduladores.sa import SpectrumAnalyzer
 from dsp.demoduladores.lte_uplink import DemoduladorLTEUplink
 from dsp.stream_reset import reset_demodulator_stream
+from hardware.mock_sdr_handler import MockSDRHandler
 from iq_capture import IQRecorder, load_capture
 from playback_manager import PlaybackManager
 
@@ -21,6 +22,8 @@ class Emitter(QObject):
 
 
 class FakeRadio:
+    supports_live_rx = True
+
     def __init__(self):
         self.is_running = True
         self.starts = 0
@@ -116,6 +119,7 @@ def test_replay_includes_short_last_block_and_restores_live_state(tmp_path, monk
                         lambda *args: (str(path), ""))
     manager.load_and_play()
     assert window.radio.stops == 1
+    assert window.change_sdr_btn.isEnabled()
     assert state['sample_rate'] == 1_000
     clock[0] = 0.2
     manager.playback_step()
@@ -129,6 +133,33 @@ def test_replay_includes_short_last_block_and_restores_live_state(tmp_path, monk
     assert state['center_freq'] == 101_000_000
     assert state['sample_rate'] == 2_000_000
     assert window.sr_combo.currentText() == "2 MHz"
+    window.close()
+
+
+def test_offline_replay_never_starts_receiver_and_cannot_record(tmp_path, monkeypatch):
+    samples = (np.arange(41) + 1j * np.arange(41)).astype(np.complex64)
+    path = tmp_path / "offline.iq"
+    make_capture(path, samples)
+    app, window, state, clock, manager = setup_manager(monkeypatch)
+    window.radio = MockSDRHandler()
+    window.radio.configurar(2_000_000, 101_000_000)
+    window.record_action.setEnabled(False)
+    monkeypatch.setattr(playback_module.QFileDialog, "getOpenFileName",
+                        lambda *args: (str(path), ""))
+
+    manager.toggle_recording()
+    assert not state['is_recording']
+    assert not list(tmp_path.glob("muestras_iq_*.iq"))
+    manager.load_and_play()
+    clock[0] = 0.2
+    manager.playback_step()
+    clock[0] = 0.31
+    manager.playback_step()
+
+    np.testing.assert_array_equal(np.concatenate(window.received), samples)
+    assert manager.playback_data is None
+    assert not window.radio.is_running
+    assert not window.record_action.isEnabled()
     window.close()
 
 

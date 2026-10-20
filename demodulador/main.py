@@ -56,11 +56,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout,
                              QPushButton, QListWidgetItem, QGridLayout, QCheckBox, QMessageBox)
 # --- IMPORTACIÓN DE NUESTROS MÓDULOS ---
 # Hardware
-from hardware.hackrf_handler import HackRFHandler
 from hardware.stream_transition import receiver_transition
-from hardware.rtlsdr_handler import RtlSdrHandler
-from hardware.nuand_bladerf_handler import BladeRFHandler
-from hardware.ettus_usrpb200_handler import USRPB200Handler
 # DSP (Plugins)
 from dsp.demoduladores.wbfm import DemoduladorWBFM
 from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
@@ -101,7 +97,7 @@ emitter = SignalEmitter()
 
 class MainWindow(QMainWindow):
     def _configure_wifi_rx_filter(self, enabled):
-        if isinstance(self.radio, HackRFHandler):
+        if self.radio.nombre == "HackRF One":
             self.radio.set_baseband_filter_bandwidth(20_000_000 if enabled else None)
 
     def __init__(self, radio_handler): 
@@ -135,6 +131,9 @@ class MainWindow(QMainWindow):
 
         # Construimos la interfaz gráfica delegada
         build_ui(self, state)
+        if not self.radio.supports_live_rx:
+            self.record_action.setEnabled(False)
+            self.record_action.setText("🔴 Grabación disponible con SDR")
         self.btle_readable_checkbox.toggled.connect(
             lambda: render_btle_packet_details(
                 self, getattr(self, '_btle_last_packet', None)))
@@ -153,7 +152,20 @@ class MainWindow(QMainWindow):
         
         # 3. ENCENDIDO DE LA RADIO
         self.radio.configurar(state['sample_rate'], state['center_freq'])
-        self.radio.start_rx()
+        if self.radio.supports_live_rx:
+            self.radio.start_rx()
+        else:
+            self.offline_notice = QLabel(
+                "Modo sin SDR: elegí un modo de demodulación y abrí una captura desde Rec/Play.",
+                self,
+            )
+            self.offline_notice.setStyleSheet(
+                "background-color: #493638; color: #ffe1e1; "
+                "border: 1px solid #8f5b5b; border-radius: 5px; "
+                "font-weight: bold; padding: 5px 10px;"
+            )
+            self.statusBar().clearMessage()
+            self.statusBar().addWidget(self.offline_notice, 1)
 
     def _procesar_muestras_radio(self, samples):
         if not self._suspend_live_iq:
@@ -306,7 +318,7 @@ class MainWindow(QMainWindow):
         self._reset_maximized_state()
         # A 3 Msps la RTL puede perder transferencias USB. A 2,4 Msps se
         # obtiene exactamente la misma banda MPX de 300 kHz (factor 8).
-        fm_sample_rate = 2.4e6 if isinstance(self.radio, RtlSdrHandler) else 3.0e6
+        fm_sample_rate = 2.4e6 if self.radio.nombre == "RTL-SDR" else 3.0e6
         fm_rate_text = ("2.4 MHz (Decimado a 300k)" if fm_sample_rate == 2.4e6
                         else "3.0 MHz (Decimado a 300k)")
         self.btn_change_uplink_freq.hide()
@@ -523,7 +535,7 @@ class MainWindow(QMainWindow):
         self.demodulador_actual = DemoduladorWiFiAG()
         self.demodulador_actual.configurar(
             state['sample_rate'], state['fft_size'],
-            remove_dc=isinstance(self.radio, BladeRFHandler),
+            remove_dc=self.radio.nombre == "Nuand bladeRF x40",
         )
         self.radio.set_sample_rate(state['sample_rate'])
         self._configure_wifi_rx_filter(True)
@@ -1201,7 +1213,7 @@ class MainWindow(QMainWindow):
 
     def on_freq_changed(self, val):
         center_freq = val * self.current_freq_multiplier
-        if isinstance(self.radio, HackRFHandler):
+        if self.radio.nombre == "HackRF One":
             try:
                 self.radio.validate_frequency(center_freq)
             except ValueError as exc:
@@ -1223,7 +1235,7 @@ class MainWindow(QMainWindow):
         self._reset_retro_iq()
         if isinstance(self.demodulador_actual, DemoduladorBTLE):
             self.demodulador_actual.set_center_frequency(center_freq)
-        if not isinstance(self.radio, HackRFHandler) and isinstance(
+        if self.radio.nombre != "HackRF One" and isinstance(
             self.demodulador_actual, DemoduladorLoRa
         ):
             self.demodulador_actual.reset_stream()
@@ -1853,10 +1865,11 @@ class MainWindow(QMainWindow):
     def restart_app(self):
         import sys
         from PyQt6.QtCore import QProcess
-        
+
+        self.playback_manager.shutdown()
+        self.audio_manager.stop_all()
         if hasattr(self, 'radio') and self.radio:
             try:
-                self.radio.stop_rx()
                 if hasattr(self.radio, 'close'):
                     self.radio.close()
             except Exception:

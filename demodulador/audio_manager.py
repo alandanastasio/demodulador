@@ -1,5 +1,4 @@
 import queue
-import sounddevice as sd
 from threading import Lock
 
 class AudioManager:
@@ -73,6 +72,7 @@ class AudioManager:
 
         # Si hay alguno encendido y el stream no está corriendo, lo iniciamos
         if self.state['play_audio'] and (self.audio_stream is None or not self.audio_stream.active):
+            import sounddevice as sd
             # Limpiamos buffers
             self.clear_audio()
             self.underrun_events = 0

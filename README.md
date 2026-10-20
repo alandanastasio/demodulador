@@ -27,7 +27,9 @@ La ventana inicial detecta estos SDR mediante sus controladores correspondientes
 | Nuand bladeRF x40 | Bindings de `libbladeRF` |
 | Ettus USRP B200 | UHD |
 
-La grabación desde **Rec/Play** escribe secuencialmente `muestras_iq_*.iq` en el directorio desde el que se ejecutó el programa. El archivo `.json` del mismo nombre guarda el tipo de muestra, la frecuencia central, la tasa de muestreo, el número de bloques y muestras, y una suma SHA-256; conservá ambos archivos juntos. Al reproducir una captura nueva se verifican su tamaño y suma; también se admiten las capturas `.npz` anteriores, que no contienen esa verificación. La reproducción conserva el orden de las muestras y puede ejecutarse una vez, en bucle o detenerse; requiere seleccionar e inicializar un SDR al abrir la aplicación. Si el procesamiento tarda más que el tiempo real, la reproducción puede retrasarse sin saltar muestras.
+La grabación desde **Rec/Play** escribe secuencialmente `muestras_iq_*.iq` en el directorio desde el que se ejecutó el programa. El archivo `.json` del mismo nombre guarda el tipo de muestra, la frecuencia central, la tasa de muestreo, el número de bloques y muestras, y una suma SHA-256; conservá ambos archivos juntos. Al reproducir una captura nueva se verifican su tamaño y suma; también se admiten las capturas `.npz` anteriores, que no contienen esa verificación. La reproducción conserva el orden de las muestras y puede ejecutarse una vez, en bucle o detenerse. Si el procesamiento tarda más que el tiempo real, la reproducción puede retrasarse sin saltar muestras.
+
+La ventana inicial ofrece **Abrir demodulador sin SDR**, separado de los equipos USB. En ese modo elegí el demodulador y luego **Rec/Play → Reproducir Archivo** (o reproducción en bucle). La frecuencia central y la tasa se toman de la captura al abrirla. La grabación queda deshabilitada porque no hay recepción en vivo; para grabar, seleccioná una SDR real.
 
 Durante la grabación se pausan los gráficos y se bloquean los cambios de modo, frecuencia y tasa para priorizar la recepción. Si el SDR informa un corte, falla la escritura o se llena la cola de disco, la captura se descarta y la interfaz muestra el error. Algunos controladores no informan todas las pérdidas que puedan ocurrir antes de entregar un bloque a la aplicación; la integridad del archivo verifica las muestras recibidas por el programa, no las que el hardware haya perdido previamente.
 
@@ -50,7 +52,7 @@ Con las dependencias instaladas:
 uv run python demodulador/startup_window.py
 ```
 
-Elegí un equipo detectado en la ventana inicial. En la ventana principal, ajustá frecuencia y ganancia, y seleccioná un modo desde **Demodulación**. Para grabar o reproducir I/Q, usá **Rec/Play**.
+Elegí un equipo detectado o la opción sin SDR en la ventana inicial. En la ventana principal, seleccioná un modo desde **Demodulación**. Con un SDR, ajustá frecuencia y ganancia según corresponda. Para grabar o reproducir I/Q, usá **Rec/Play**.
 
 ## Estructura del proyecto
 
