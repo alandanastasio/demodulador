@@ -121,3 +121,34 @@ def test_change_sdr_button_stops_active_offline_playback(tmp_path, monkeypatch, 
     assert len(launches) == 2
     assert launches[1] == "quit"
     window.close()
+
+
+def test_both_fm_modes_show_rds_panel(qapp):
+    from main import MainWindow, state
+    from plot_renderer import render_plot
+
+    window = MainWindow(MockSDRHandler())
+    window.show()
+    for select_mode in (window.set_wbfm_mode, window.set_wbfm_audio_mode):
+        select_mode()
+        qapp.processEvents()
+        assert window.modes_stack.currentWidget() is window.page_wbfm
+        assert window.rds_label.isVisible()
+        assert window.controls_widget.layout().indexOf(window.rds_label) >= 0
+        assert window.layout_wbfm.indexOf(window.rds_label) == -1
+        assert 'RDS' in window.rds_label.text()
+        render_plot(
+            window, state, np.zeros(len(window.f_axis)),
+            np.zeros(len(window.f_axis), dtype=np.complex64),
+            fm_metrics={
+                'pico_max': 1.0, 'pico_min': -1.0, 'pico_rms': 0.7,
+                'rms': 0.5, 'dc_offset': 0.0,
+                'rds': {'pi': 0xA52C, 'ps': 'RADIO123',
+                        'radiotext': '<HOLA ARGENTINA>', 'pty': 10},
+            },
+        )
+        assert 'RADIO123' in window.rds_label.text()
+        assert '&lt;HOLA ARGENTINA&gt;' in window.rds_label.text()
+    window.set_normal_mode()
+    assert not window.rds_label.isVisible()
+    window.close()

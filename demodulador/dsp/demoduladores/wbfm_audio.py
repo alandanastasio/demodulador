@@ -5,6 +5,7 @@ from threading import Lock, Thread
 import numpy as np
 from scipy.signal import butter, lfilter, lfilter_zi, firwin
 from .base import DemoduladorBase
+from ..rds import RDSDecoder
 from ..streaming_resampler import StreamingResampler
 from numba import jit
 
@@ -110,6 +111,7 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         hw_sr = int(self.sample_rate)
         factor_bajada = int(hw_sr / 300000)
         nueva_fs = hw_sr / factor_bajada 
+        self.rds_decoder = RDSDecoder(nueva_fs)
         audio_ratio = Fraction(48_000 * factor_bajada, hw_sr)
         self.factor_bajada = factor_bajada
         self.audio_ratio = audio_ratio
@@ -245,6 +247,7 @@ class DemoduladorWBFMAudio(DemoduladorBase):
                     traceback.print_exc()
 
     def _reset_signal_path(self):
+        self.rds_decoder = RDSDecoder(self.sample_rate / self.factor_bajada)
         self.lpf_zi = self.mpx_zi = None
         self.lpr_zi = self.pilot_zi = self.lmr_zi = self.audio_lpf_zi = None
         self.deemph_l_zi = self.deemph_r_zi = None
@@ -296,6 +299,7 @@ class DemoduladorWBFMAudio(DemoduladorBase):
         if self.mpx_zi is None:
             self.mpx_zi = lfilter_zi(self.mpx_lpf_kernel, [1.0]) * demod_khz_raw[0]
         demod_khz_clean, self.mpx_zi = lfilter(self.mpx_lpf_kernel, [1.0], demod_khz_raw, zi=self.mpx_zi)
+        rds_result = self.rds_decoder.process(demod_khz_clean)
         
         # === PASO 5: EXTRACCIÓN ESTÉREO ===
         
@@ -390,6 +394,7 @@ class DemoduladorWBFMAudio(DemoduladorBase):
             'pico_rms': self.avg_pico_rms,
             'dc_offset': self.avg_dc_offset
         }
+        fm_metrics['rds'] = rds_result
 
        # --- DE-ÉNFASIS PARA CANALES L Y R ---
         stereo_48k = self.audio_resampler.process(np.column_stack((canal_L, canal_R)))

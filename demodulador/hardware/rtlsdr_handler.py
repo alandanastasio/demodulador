@@ -75,6 +75,9 @@ class RtlSdrHandler(SDRBase):
             self.sdr.cancel_read_async()
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=1.0)
+                if self._thread.is_alive():
+                    raise RuntimeError("La lectura RTL-SDR no se detuvo antes de reconfigurar el sintonizador.")
+            self._thread = None
 
     def close(self):
         self.stop_rx()

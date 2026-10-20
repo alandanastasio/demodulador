@@ -192,6 +192,8 @@ class PlaybackManager(QObject):
             self.ui._reset_retro_iq()
         self.ui.audio_manager.clear_audio()
         self.ui.demodulador_actual = file_demod
+        if hasattr(self.ui, '_reset_rds_display'):
+            self.ui._reset_rds_display()
         if isinstance(file_demod, DemoduladorWBFMAudio):
             self.ui._bind_wbfm_audio_result(file_demod)
         self.playback_data = samples
@@ -287,6 +289,8 @@ class PlaybackManager(QObject):
         if hasattr(self.ui, '_reset_retro_iq'):
             self.ui._reset_retro_iq()
         self.ui.demodulador_actual = reset_demodulator_stream(self._live_demod)
+        if hasattr(self.ui, '_reset_rds_display'):
+            self.ui._reset_rds_display()
         if isinstance(self.ui.demodulador_actual, DemoduladorWBFMAudio):
             self.ui._bind_wbfm_audio_result(self.ui.demodulador_actual)
         self._live_demod = None

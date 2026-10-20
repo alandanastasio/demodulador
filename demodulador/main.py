@@ -176,10 +176,14 @@ class MainWindow(QMainWindow):
             self.retro_buffer = None
         self.waterfall_buffer = None
 
+    def _reset_rds_display(self):
+        self.rds_label.setText("RDS: buscando grupos válidos en 57 kHz...")
+
     def procesar_muestras_iq(self, c_samples):
         if c_samples is None:
             self.playback_manager.signal_discontinuity()
             self._reset_retro_iq()
+            self._reset_rds_display()
             self.audio_manager.clear_audio()
             if self.demodulador_actual is not None:
                 previous = self.demodulador_actual
@@ -316,6 +320,7 @@ class MainWindow(QMainWindow):
     def set_wbfm_mode(self):
         self._configure_wifi_rx_filter(False)
         self._reset_maximized_state()
+        self._reset_rds_display()
         # A 3 Msps la RTL puede perder transferencias USB. A 2,4 Msps se
         # obtiene exactamente la misma banda MPX de 300 kHz (factor 8).
         fm_sample_rate = 2.4e6 if self.radio.nombre == "RTL-SDR" else 3.0e6
@@ -354,6 +359,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.show() 
         self.stereo_metrics_label.show()
+        self.rds_label.show()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
@@ -434,6 +440,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.rds_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
@@ -516,6 +523,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.rds_label.hide()
         self.wifi_metrics_label.show()
         self.wifi_hw_metrics_label.show()
         if hasattr(self, 'lte_metrics_label'):
@@ -625,6 +633,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.rds_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
@@ -830,6 +839,7 @@ class MainWindow(QMainWindow):
         self.audio_container.hide()
         self.fm_metrics_label.hide()
         self.stereo_metrics_label.hide()
+        self.rds_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         self.lte_metrics_label.show()
@@ -1171,6 +1181,7 @@ class MainWindow(QMainWindow):
         self.lora_sync_words_panel.close_histories()
         self.lora_sync_words_panel.hide()
         self.stereo_metrics_label.hide()
+        self.rds_label.hide()
         self.wifi_metrics_label.hide()
         self.wifi_hw_metrics_label.hide()
         if hasattr(self, 'lte_metrics_label'):
@@ -1233,6 +1244,12 @@ class MainWindow(QMainWindow):
         self.radio.set_freq(center_freq)
         state['center_freq'] = center_freq
         self._reset_retro_iq()
+        if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+            self.demodulador_actual = reset_demodulator_stream(self.demodulador_actual)
+            if isinstance(self.demodulador_actual, DemoduladorWBFMAudio):
+                self._bind_wbfm_audio_result(self.demodulador_actual)
+            self.audio_manager.clear_audio()
+            self._reset_rds_display()
         if isinstance(self.demodulador_actual, DemoduladorBTLE):
             self.demodulador_actual.set_center_frequency(center_freq)
         if self.radio.nombre != "HackRF One" and isinstance(
@@ -1279,6 +1296,8 @@ class MainWindow(QMainWindow):
         # Si hay un plugin activo, le avisamos que cambió el sample rate
         if self.demodulador_actual is not None:
             self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+                self._reset_rds_display()
             
         self.trace_manager.reset()
         self.update_x_axis()
@@ -1311,6 +1330,8 @@ class MainWindow(QMainWindow):
                     decode_legacy=self.demodulador_actual.decode_legacy)
             else:
                 self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+                self._reset_rds_display()
         self.update_x_axis()
             
     def on_fft_window_changed(self, text):

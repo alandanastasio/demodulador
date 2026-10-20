@@ -2,6 +2,7 @@ import numpy as np
 import threading
 from scipy.signal import resample_poly, firwin, fftconvolve, hilbert
 from .base import DemoduladorBase
+from ..rds import RDSDecoder
 from numba import jit
 
 # --- PLL COMPILADO EN C (Velocidad extrema) ---
@@ -73,6 +74,7 @@ class DemoduladorWBFM(DemoduladorBase):
         hw_sr = int(self.sample_rate)
         self.factor_bajada = int(hw_sr / 300000)
         self.nueva_fs = hw_sr / self.factor_bajada
+        self.rds_decoder = RDSDecoder(self.nueva_fs)
         freq_nyq = self.nueva_fs / 2.0
         
         # Filtros de Grado Laboratorio (501 taps y Blackman-Harris)
@@ -147,6 +149,7 @@ class DemoduladorWBFM(DemoduladorBase):
             demod_khz_raw = msj / 1000.0
             
             demod_khz_clean = fftconvolve(demod_khz_raw, self.mpx_lpf_kernel, mode='same')
+            rds_result = self.rds_decoder.process(demod_khz_clean)
             
             # === 3. ESPECTRO MPX (Alta Resolución Restaurada) ===
             N_audio = len(demod_khz_clean)
@@ -245,7 +248,8 @@ class DemoduladorWBFM(DemoduladorBase):
                 'pico_rms': max(abs(np.max(mpx_medicion)), abs(np.min(mpx_medicion))) / np.sqrt(2),
                 'dc_offset': np.mean(mpx_medicion),
                 'rms_L': rms_L,
-                'rms_R': rms_R
+                'rms_R': rms_R,
+                'rds': rds_result,
             }
             
             t_axis_audio = np.linspace(0, 10, muestras_10ms)

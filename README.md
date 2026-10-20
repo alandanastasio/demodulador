@@ -7,14 +7,16 @@ Aplicación de recepción y análisis de señales de radio con interfaz gráfica
 | Modo | Funciones implementadas |
 | --- | --- |
 | Analizador de espectro | Espectro interactivo, espectrograma, marcadores, trazas y controles de visualización. |
-| FM: medición | Medición de la señal multiplex, piloto estéreo y canales de audio, con un espectro multiplex de mayor resolución. |
-| FM: escucha | Gráficos y métricas FM, con reproducción de audio estéreo en vivo y controles para los canales izquierdo y derecho. |
+| FM: medición | Medición de la señal multiplex, piloto estéreo y canales de audio, con un espectro multiplex de mayor resolución y lectura RDS. |
+| FM: escucha | Gráficos y métricas FM, reproducción de audio estéreo en vivo, controles para los canales izquierdo y derecho y lectura RDS. |
 | WiFi 802.11a/g | Detección y sincronización de tramas OFDM, estimación de desplazamiento de frecuencia y canal, constelación, EVM y decodificación del campo SIGNAL. |
 | Bluetooth Low Energy | Detección y métricas de ráfagas LE 1M y LE 2M; en LE 1M, decodificación de anuncios *legacy* con verificación de CRC e historial de paquetes. |
 | LoRa | Detección de preámbulo y decodificación de tramas de la capa física, con encabezado, carga útil, CRC cuando está presente, símbolos y *sync word*. La interfaz ofrece BW de 125, 250 y 500 kHz y SF7 a SF12. |
 | LTE | Análisis de señales downlink y uplink, con sincronización, constelaciones, métricas y visualizaciones de recursos. Las opciones de ancho de banda dependen de la tasa de muestreo que admita el SDR. |
 
 El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física.
+
+Ambos modos FM decodifican la subportadora RDS de 57 kHz. El panel RDS muestra PI, el nombre corto de la emisora (PS), el código PTY y RadioText cuando la estación los transmite y se han recibido grupos válidos. PS y RadioText se forman a partir de varios grupos, por lo que pueden tardar unos segundos en aparecer. Se admiten los grupos 0A/0B y 2A/2B; el juego de caracteres extendidos todavía se muestra de forma aproximada como Latin-1. La estructura de la señal y los grupos se describen en [UIT-R BS.643-3](https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.643-3-201105-S!!PDF-E.pdf).
 
 ## Hardware y capturas
 

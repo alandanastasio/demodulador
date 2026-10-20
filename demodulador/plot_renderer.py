@@ -3,6 +3,7 @@ import numpy as np
 import re
 from PyQt6.QtCore import Qt, QRectF
 import time
+from html import escape
 
 
 def _btle_text_parts(packet):
@@ -446,6 +447,20 @@ def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None
         
 
         if state.get('demod_mode') in ['wbfm', 'wbfm_audio']:
+            rds = fm_metrics.get('rds') if fm_metrics else None
+            if rds is not None:
+                if rds['pi'] is None:
+                    self.rds_label.setText("RDS: buscando grupos válidos en 57 kHz...")
+                else:
+                    ps = escape(rds['ps']) if rds['ps'] else 'Esperando nombre'
+                    radiotext = (escape(rds['radiotext']) if rds['radiotext']
+                                 else 'Esperando texto')
+                    pty = f" · PTY {rds['pty']}" if rds['pty'] is not None else ''
+                    self.rds_label.setText(
+                        f"<b>RDS</b> · PI {rds['pi']:04X}{pty}<br>"
+                        f"<b>Emisora (PS):</b> {ps}<br>"
+                        f"<b>RadioText:</b> {radiotext}"
+                    )
             if PSD_audio is not None:
                 self.wbfm_mpx_curve.setData(f_axis_audio, PSD_audio)
             if mpx_time is not None:                              

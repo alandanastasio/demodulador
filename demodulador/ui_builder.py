@@ -537,7 +537,7 @@ def build_ui(self, state):
     self.layout_wbfm.addWidget(self.wbfm_mpx_widget, 0, 1)
     self.layout_wbfm.addWidget(self.wbfm_audio_widget, 1, 0)
     self.layout_wbfm.addWidget(self.wbfm_lr_container, 1, 1)
-    
+
     self.modes_stack.addWidget(self.page_wbfm)
 
     # ==========================================
@@ -575,7 +575,6 @@ def build_ui(self, state):
     self.q3_evm_rms_sym = self.wifi_evm_sym_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
     self.q3_evm_peak_sym = self.wifi_evm_sym_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
     self.q3b_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
-    self.wifi_evm_sym_widget.addItem(self.q3_evm_rms_sym)
     self.wifi_evm_sym_widget.addItem(self.q3b_evm_limit)
     
     self.wifi_const_widget = pg.PlotWidget(title="Constelación")
@@ -719,7 +718,6 @@ def build_ui(self, state):
     self.lte_evm_rms_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#00FF00", width=2))
     self.lte_evm_peak_sym = self.lte_evm_sym_widget.plot([], pen=pg.mkPen(color="#FF3333", width=1.5, style=Qt.PenStyle.DashLine))
     self.lteb_evm_limit = pg.InfiniteLine(pos=-25, angle=0, pen=pg.mkPen(color="#FFFFFF", style=Qt.PenStyle.DashLine))
-    self.lte_evm_sym_widget.addItem(self.lte_evm_rms_sym)
     self.lte_evm_sym_widget.addItem(self.lteb_evm_limit)
     
     self.lte_const_widget = pg.PlotWidget(title="Constelación (LTE)")
@@ -1787,6 +1785,16 @@ def build_ui(self, state):
     self.stereo_metrics_label.setStyleSheet("background-color: #1e1e1e; padding: 10px; border-radius: 4px; border: 1px solid #444; margin-top: 10px;")
     self.stereo_metrics_label.hide()
     controls_layout.addWidget(self.stereo_metrics_label)
+
+    self.rds_label = QLabel("RDS: buscando grupos válidos en 57 kHz...")
+    self.rds_label.setTextFormat(Qt.TextFormat.RichText)
+    self.rds_label.setWordWrap(True)
+    self.rds_label.setStyleSheet(
+        "background-color: #1e1e1e; color: #eeeeee; "
+        "border: 1px solid #555; border-radius: 4px; padding: 10px; margin-top: 10px;"
+    )
+    self.rds_label.hide()
+    controls_layout.addWidget(self.rds_label)
 
     # --- MÉTRICAS WIFI (SIGNAL) ---
     self.wifi_metrics_label = QLabel("")
