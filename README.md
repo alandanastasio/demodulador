@@ -1,49 +1,64 @@
-# Demodulador SDR Multicanal 📻
+# Demodulador SDR
 
-Una plataforma avanzada de Procesamiento Digital de Señales (DSP) en tiempo real con una interfaz gráfica basada en PyQt6. Este software permite la conexión directa a múltiples periféricos SDR (Software Defined Radio) para visualizar el espectro, realizar análisis forense de señales y demodular en tiempo real distintos protocolos y modulaciones de RF.
+Aplicación de recepción y análisis de señales de radio con interfaz gráfica en PyQt6. Toma muestras I/Q de un SDR, muestra el espectro y el espectrograma, y permite seleccionar distintos modos de demodulación. También puede grabar muestras y volver a analizarlas desde la interfaz.
 
-## Características Principales
+## Funciones disponibles
 
-*   **Arquitectura Modular:** Diseñado con un sistema de plugins de DSP, lo que permite agregar nuevos demoduladores de manera rápida y eficiente sin modificar el núcleo de la interfaz.
-*   **Aceleración en Tiempo Real:** Interfaz optimizada con `pyqtgraph` y subprocesamiento multi-hilo en Python para garantizar análisis libre de congelamientos (GIL yield & direct-yield pipelines).
-*   **Análisis Visual:** 
-    *   Analizador de Espectro interactivo (densidad espectral de potencia en dB).
-    *   Gráfico de Cascada (Waterfall) de alto rendimiento.
-*   **Demoduladores Integrados:**
-    *   **WBFM (Audio Estéreo):** Radio FM comercial con decodificación completa del subcanal estéreo (Tono Piloto de 19kHz y subportadora L-R de 38kHz) a través de un lazo de seguimiento de fase (PLL) y audio en vivo usando `sounddevice`.
-    *   **WBFM (Mono):** Demodulación simple para métricas crudas.
-    *   **AM:** Demodulación de Amplitud Modulada clásica.
-    *   **WiFi 802.11a/g (OFDM):** Sincronización fina Schmidl & Cox, estimación de canal, ecualización Zero-Forcing, visualización de la constelación OFDM, y decodificación Viterbi usando algoritmos matemáticos crudos sin librerías externas.
-    *   **LTE:** Sincronizador de Trama LTE con detección de CFO y correlación en frecuencia cruzada de secuencias Zadoff-Chu (PSS).
-*   **Modo Laboratorio:** Posibilidad de grabar el stream de I/Q crudo directamente a un archivo de disco (Raw IQ Sink) y reproducirlo posteriormente (Offline mode) simulando la tasa de muestreo original para facilitar el desarrollo de algoritmos de DSP.
+| Modo | Funciones implementadas |
+| --- | --- |
+| Analizador de espectro | Espectro interactivo, espectrograma, marcadores, trazas y controles de visualización. |
+| FM comercial (WBFM) | Medición de la señal multiplex, piloto estéreo y canales de audio; modo separado de reproducción de audio estéreo en vivo. |
+| WiFi 802.11a/g | Detección y sincronización de tramas OFDM, estimación de desplazamiento de frecuencia y canal, constelación, EVM y decodificación del campo SIGNAL. |
+| Bluetooth Low Energy | Detección y métricas de ráfagas LE 1M y LE 2M; en LE 1M, decodificación de anuncios *legacy* con verificación de CRC e historial de paquetes. |
+| LoRa | Detección de preámbulo y decodificación de tramas de la capa física, con encabezado, carga útil, CRC cuando está presente, símbolos y *sync word*. La interfaz ofrece BW de 125, 250 y 500 kHz y SF7 a SF12. |
+| LTE | Análisis de señales downlink y uplink, con sincronización, constelaciones, métricas y visualizaciones de recursos. Las opciones de ancho de banda dependen de la tasa de muestreo que admita el SDR. |
 
-## Hardware Soportado
+El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física. El elemento «Custom FM» figura en el menú, pero todavía no tiene una acción de demodulación conectada.
 
-El demodulador integra de forma nativa los siguientes equipos SDR (y descarga sus FPGAs/firmwares correspondientes):
-*   **Ettus Research USRP B200** (a través de UHD)
-*   **Nuand bladeRF x40** (a través de libbladerf)
-*   **HackRF One** (a través de python-hackrf)
-*   **RTL-SDR** (a través de librtlsdr)
+## Hardware y capturas
 
-## Instalación y Puesta en Marcha
+La ventana inicial detecta estos SDR mediante sus controladores correspondientes:
 
-Este proyecto está diseñado para ejecutarse en entornos Linux (testeado en Ubuntu/Debian).
+| Equipo | Integración |
+| --- | --- |
+| HackRF One | `python-hackrf` / `libhackrf` |
+| RTL-SDR | `pyrtlsdr` / `librtlsdr` |
+| Nuand bladeRF x40 | Bindings de `libbladeRF` |
+| Ettus USRP B200 | UHD |
 
-### 1. Clonar el repositorio
+La grabación desde **Rec/Play** guarda un archivo `muestras_iq_*.npz` en el directorio desde el que se ejecutó el programa. Contiene `raw_iq`, `center_freq` y `sample_rate`. El mismo menú permite reproducirlo una vez, en bucle o detener la reproducción. Las muestras se acumulan en memoria durante la grabación y se escriben al detenerla; conviene vigilar la RAM en capturas largas. La interfaz de reproducción se abre después de seleccionar e inicializar un SDR.
+
+## Instalación
+
+El proyecto está orientado a Linux con `apt` y requiere Python 3.10 o posterior. Para usar un SDR, también hacen falta sus bibliotecas y permisos de acceso USB.
+
 ```bash
+cd ~
 git clone https://github.com/alandanastasio/demodulador.git
 cd demodulador
+bash setup.sh
 ```
 
-### 2. Ejecutar el Script de Configuración del Sistema
-Este script instalará todos los drivers a nivel de sistema operativo (UHD, bladeRF, RTL, HackRF, dependencias de audio de PortAudio) y descargará las imágenes de FPGA correspondientes para tu hardware SDR.
-Tambien se encargará de instalar [uv](https://github.com/astral-sh/uv) para generar el entorno virtual y gestionar dependencias.
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-### 3. Arrancar el programa
-Con los drivers en orden, el entorno virtual creado automáticamente y el hardware conectado (se recomienda encarecidamente utilizar un puerto y cable **USB 3.0** para anchos de banda mayores a 5 MHz), simplemente iniciá la aplicación gráfica:
+`setup.sh` instala paquetes del sistema, instala `uv` si falta, compila `libhackrf`, descarga imágenes para bladeRF y UHD, configura reglas USB y crea `.venv` con las dependencias de Python. Ofrece opcionalmente actualizar el firmware de bladeRF. El script presupone que el repositorio está en `~/demodulador` y recrea `.venv`; revisalo antes de ejecutarlo si ya tenés un entorno preparado.
+
+Con las dependencias instaladas:
+
 ```bash
 uv run python demodulador/startup_window.py
+```
+
+Elegí un equipo detectado en la ventana inicial. En la ventana principal, ajustá frecuencia y ganancia, y seleccioná un modo desde **Demodulación**. Para grabar o reproducir I/Q, usá **Rec/Play**.
+
+## Estructura del proyecto
+
+- `demodulador/hardware/`: controladores SDR y contrato común de recepción.
+- `demodulador/dsp/demoduladores/`: analizador y procesadores de cada modo.
+- `demodulador/main.py`, `ui_builder.py` y `startup_window.py`: flujo de recepción e interfaz gráfica.
+- `demodulador/research/`: notebooks y experimentos de desarrollo.
+- `demodulador/tests/`: pruebas automáticas de DSP, controladores y componentes de interfaz.
+
+Para ejecutar las pruebas con las dependencias de desarrollo instaladas:
+
+```bash
+uv run pytest demodulador/tests -q
 ```
