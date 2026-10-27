@@ -240,6 +240,8 @@ def render_lora(self, state, metrics):
 def render_plot(self, state, PSD, raw_samples, PSD_audio=None, f_axis_audio=None, audio_L=None, audio_R=None, t_axis=None, fm_metrics=None, mpx_time=None, evm_data=None):
     if self.is_paused:
         return
+    if f_axis_audio is not None and state.get('demod_mode') in ('wbfm', 'wbfm_audio'):
+        self.last_f_axis_audio = f_axis_audio
     
     if len(self.f_axis) == len(PSD):
         

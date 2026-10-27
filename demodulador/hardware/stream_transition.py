@@ -4,7 +4,7 @@ from functools import wraps
 from inspect import signature
 
 def receiver_transition(method):
-    """Pausa HackRF y RTL-SDR durante cambios de configuración anidados."""
+    """Pausa los receptores SDR físicos durante cambios de configuración anidados."""
     no_arguments = len(signature(method).parameters) == 1
 
     @wraps(method)
@@ -14,7 +14,7 @@ def receiver_transition(method):
         if no_arguments and len(args) == 1 and isinstance(args[0], bool) and not kwargs:
             args = ()
 
-        if self.radio.nombre not in ("HackRF One", "RTL-SDR"):
+        if self.radio.nombre not in ("HackRF One", "RTL-SDR", "bladeRF", "USRP B200"):
             return method(self, *args, **kwargs)
 
         depth = getattr(self, '_receiver_transition_depth', 0)

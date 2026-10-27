@@ -28,3 +28,8 @@ bladerf = { git = "https://github.com/Nuand/bladeRF.git", subdirectory = "host/l
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["demodulador/tests"]
+pythonpath = ["demodulador"]
+

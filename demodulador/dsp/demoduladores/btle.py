@@ -478,6 +478,12 @@ class DemoduladorBTLE(DemoduladorBase):
         return freq_dev_hz
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
+        if muestras_iq is None:
+            self._buffer_start_sample += len(self.buffer)
+            self.buffer = np.empty(0, dtype=np.complex64)
+            self._recent_packet_starts = []
+            self.last_burst_metrics = None
+            return None
         muestras_iq = np.asarray(muestras_iq, dtype=np.complex64)
         self.buffer = np.concatenate((self.buffer, muestras_iq))
 

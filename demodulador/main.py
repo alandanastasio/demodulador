@@ -48,7 +48,7 @@ pg.AxisItem.generateDrawSpecs = _custom_generateDrawSpecs
 # ------------------------------------
 
 import usb.core
-from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer
+from PyQt6.QtCore import QSize, Qt, pyqtSignal, QObject, QTimer, QThread
 from PyQt6.QtGui import QAction, QActionGroup, QPainterPath, QIcon, QPainter
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, 
                            QVBoxLayout, QLabel, QDoubleSpinBox, QComboBox, QFormLayout, 
@@ -92,6 +92,8 @@ class SignalEmitter(QObject):
     # Definimos la señal para actualizar los gráficos desde otros hilos
     data_updated = pyqtSignal(np.ndarray, object, object, object, object, object, object, object, object, object)
     recording_done = pyqtSignal(object, object)
+    rds_reset_requested = pyqtSignal()
+    ul_switch_requested = pyqtSignal()
 
 emitter = SignalEmitter()
 
@@ -146,6 +148,8 @@ class MainWindow(QMainWindow):
 
         # Conectamos el actualizador de gráficos delegando a render_plot
         emitter.data_updated.connect(lambda *args: render_plot(self, state, *args))
+        emitter.rds_reset_requested.connect(self._reset_rds_display)
+        emitter.ul_switch_requested.connect(self._force_switch_to_ul)
 
         # --- Creamos el eje X matemático en memoria ANTES de encender el SDR ---
         self.update_x_axis()
@@ -177,6 +181,9 @@ class MainWindow(QMainWindow):
         self.waterfall_buffer = None
 
     def _reset_rds_display(self):
+        if QThread.currentThread() is not self.thread():
+            emitter.rds_reset_requested.emit()
+            return
         self.rds_label.setText("RDS: buscando grupos válidos en 57 kHz...")
 
     def procesar_muestras_iq(self, c_samples):
@@ -223,7 +230,7 @@ class MainWindow(QMainWindow):
                     from iq_ring_buffer import IQRingBuffer
                     retro_buf = IQRingBuffer(expected_samples)
                     self.retro_buffer = retro_buf
-                elif retro_buf.max_samples != expected_samples:
+                elif abs(retro_buf.max_samples - expected_samples) > max(1, int(0.1 * retro_buf.max_samples)):
                     retro_buf.resize(expected_samples)
                     
                 retro_buf.append(c_samples)
@@ -237,8 +244,7 @@ class MainWindow(QMainWindow):
             # para cumplir con el bloque de tiempo mínimo (ej: los 100ms de la FM)
             if resultados is not None:
                 if resultados.get('action') == 'switch_to_ul':
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(0, self._force_switch_to_ul)
+                    emitter.ul_switch_requested.emit()
                     return
                 self._publish_demod_result(resultados)
 
@@ -316,9 +322,21 @@ class MainWindow(QMainWindow):
 
     # ==========================================
 
+    def _cleanup_lora_mode(self):
+        if isinstance(self.demodulador_actual, DemoduladorLoRa):
+            self.demodulador_actual.close()
+        if hasattr(self, 'lora_config_label'):
+            self.lora_config_label.hide()
+        if hasattr(self, 'lora_sync_words_panel'):
+            self.lora_sync_words_panel.close_histories()
+            self.lora_sync_words_panel.hide()
+
     @receiver_transition
     def set_wbfm_mode(self):
         self._configure_wifi_rx_filter(False)
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+        self._cleanup_lora_mode()
         self._reset_maximized_state()
         self._reset_rds_display()
         # A 3 Msps la RTL puede perder transferencias USB. A 2,4 Msps se
@@ -396,6 +414,7 @@ class MainWindow(QMainWindow):
         self._configure_wifi_rx_filter(False)
         if state.get('demod_mode') == 'none':
             self.sa_sample_rate_text = self.sr_combo.currentText()
+        self._cleanup_lora_mode()
         if hasattr(self, '_btle_power_stats'):
             del self._btle_power_stats
         self._btle_last_packet = None
@@ -488,6 +507,9 @@ class MainWindow(QMainWindow):
 
     @receiver_transition
     def set_wifi_ag_mode(self):
+        if state.get('demod_mode', 'none') == 'none':
+            self.sa_sample_rate_text = self.sr_combo.currentText()
+        self._cleanup_lora_mode()
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -550,9 +572,6 @@ class MainWindow(QMainWindow):
         
         self.unit_combo.setCurrentText("GHz")
         self.freq_input.setValue(2.412)
-
-        if state.get('demod_mode', 'none') == 'none':
-            self.sa_sample_rate_text = self.sr_combo.currentText()
             
         self.sr_combo.blockSignals(True)
         if self.sr_combo.findText("20 MHz") != -1:
@@ -573,6 +592,7 @@ class MainWindow(QMainWindow):
     @receiver_transition
     def set_lte_mode(self, bw_mhz=5):
         self._configure_wifi_rx_filter(False)
+        self._cleanup_lora_mode()
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -743,6 +763,7 @@ class MainWindow(QMainWindow):
     @receiver_transition
     def set_lte_uplink_mode(self, bw_mhz=5):
         self._configure_wifi_rx_filter(False)
+        self._cleanup_lora_mode()
         self._reset_maximized_state()
         self._current_lte_bw_mhz = bw_mhz
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, QPushButton
@@ -1137,8 +1158,7 @@ class MainWindow(QMainWindow):
     @receiver_transition
     def set_normal_mode(self):
         self._configure_wifi_rx_filter(False)
-        if isinstance(self.demodulador_actual, DemoduladorLoRa):
-            self.demodulador_actual.close()
+        self._cleanup_lora_mode()
         self._reset_maximized_state()
         self.btn_change_uplink_freq.hide()
         self.freq_input.setEnabled(True)
@@ -1177,9 +1197,6 @@ class MainWindow(QMainWindow):
         
         self.audio_container.hide()
         self.fm_metrics_label.hide()
-        self.lora_config_label.hide()
-        self.lora_sync_words_panel.close_histories()
-        self.lora_sync_words_panel.hide()
         self.stereo_metrics_label.hide()
         self.rds_label.hide()
         self.wifi_metrics_label.hide()
@@ -1244,7 +1261,10 @@ class MainWindow(QMainWindow):
         self.radio.set_freq(center_freq)
         state['center_freq'] = center_freq
         self._reset_retro_iq()
-        if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+        if isinstance(
+            self.demodulador_actual,
+            (DemoduladorWBFM, DemoduladorWBFMAudio, DemoduladorWiFiAG, DemoduladorLTEDownlink),
+        ):
             self.demodulador_actual = reset_demodulator_stream(self.demodulador_actual)
             if isinstance(self.demodulador_actual, DemoduladorWBFMAudio):
                 self._bind_wbfm_audio_result(self.demodulador_actual)
@@ -1295,8 +1315,14 @@ class MainWindow(QMainWindow):
         
         # Si hay un plugin activo, le avisamos que cambió el sample rate
         if self.demodulador_actual is not None:
-            self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            self.demodulador_actual = reset_demodulator_stream(
+                self.demodulador_actual,
+                sample_rate=state['sample_rate'],
+                fft_size=state['fft_size'],
+            )
             if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+                if isinstance(self.demodulador_actual, DemoduladorWBFMAudio):
+                    self._bind_wbfm_audio_result(self.demodulador_actual)
                 self._reset_rds_display()
             
         self.trace_manager.reset()
@@ -1323,14 +1349,14 @@ class MainWindow(QMainWindow):
         state['fft_size'] = int(text)
         self.trace_manager.reset()
         if self.demodulador_actual is not None:
-            if isinstance(self.demodulador_actual, DemoduladorBTLE):
-                self.demodulador_actual.configurar(
-                    state['sample_rate'], state['fft_size'],
-                    bw_mhz=self.demodulador_actual.bw_mhz,
-                    decode_legacy=self.demodulador_actual.decode_legacy)
-            else:
-                self.demodulador_actual.configurar(state['sample_rate'], state['fft_size'])
+            self.demodulador_actual = reset_demodulator_stream(
+                self.demodulador_actual,
+                sample_rate=state['sample_rate'],
+                fft_size=state['fft_size'],
+            )
             if isinstance(self.demodulador_actual, (DemoduladorWBFM, DemoduladorWBFMAudio)):
+                if isinstance(self.demodulador_actual, DemoduladorWBFMAudio):
+                    self._bind_wbfm_audio_result(self.demodulador_actual)
                 self._reset_rds_display()
         self.update_x_axis()
             
@@ -1759,6 +1785,21 @@ class MainWindow(QMainWindow):
     def save_waterfall(self):
         if not getattr(self, 'waterfall_enabled', False) or self.waterfall_buffer is None:
             return
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Guardar Espectrograma", "", "Imágenes PNG (*.png)"
+        )
+        if not filepath:
+            return
+
+        if not filepath.lower().endswith('.png'):
+            filepath += '.png'
+
+        try:
+            exporter = pg.exporters.ImageExporter(self.waterfall_widget.plotItem)
+            exporter.export(filepath)
+            QMessageBox.information(self, "Éxito", f"Espectrograma guardado correctamente en:\n{filepath}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen:\n{str(e)}")
             
     def toggle_waterfall_crop(self):
         if not getattr(self, 'waterfall_enabled', False):
@@ -1868,26 +1909,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Éxito", f"Señal guardada exitosamente:\n{filepath}\n\nMuestras: {len(cropped_iq)}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar la grabación:\n{str(e)}")
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "Guardar Espectrograma", "", "Imágenes PNG (*.png)"
-        )
-        if not filepath:
-            return
-            
-        if not filepath.lower().endswith('.png'):
-            filepath += '.png'
-            
-        try:
-            exporter = pg.exporters.ImageExporter(self.waterfall_widget.plotItem)
-            exporter.export(filepath)
-            QMessageBox.information(self, "Éxito", f"Espectrograma guardado correctamente en:\n{filepath}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar la imagen:\n{str(e)}")
 
     def restart_app(self):
         import sys
         from PyQt6.QtCore import QProcess
 
+        self._cleanup_lora_mode()
         self.playback_manager.shutdown()
         self.audio_manager.stop_all()
         if hasattr(self, 'radio') and self.radio:

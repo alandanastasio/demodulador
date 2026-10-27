@@ -87,8 +87,9 @@ class DemoduladorWBFM(DemoduladorBase):
         
         self.pll_fase = 0.0
         self.pll_filtro_integral = 0.0
-        self.ajuste_fase_estereo = 0.0
+        self.fase_estereo_memoria = None
         self.is_processing = False
+        self.nuevos_datos_listos = False
         self.last_heavy_results = {}
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
@@ -97,21 +98,22 @@ class DemoduladorWBFM(DemoduladorBase):
             self.muestras_acumuladas = 0
             return None
         """ Recepcionista ultrarrápida. Cero matemáticas. """
-        self.buffer_medicion.append(muestras_iq)
-        self.muestras_acumuladas += len(muestras_iq)
+        if len(muestras_iq):
+            self.buffer_medicion.append(muestras_iq)
+            self.muestras_acumuladas += len(muestras_iq)
         
         muestras_500ms = int(self.sample_rate * 0.5) 
         
-        if self.muestras_acumuladas >= muestras_500ms:
-            if not self.is_processing:
-                bloque_iq = np.concatenate(self.buffer_medicion)[:muestras_500ms]
-                self.is_processing = True
-                t = threading.Thread(target=self._procesar_fondo, args=(bloque_iq,))
-                t.daemon = True
-                t.start()
-            
-            self.buffer_medicion = []
-            self.muestras_acumuladas = 0
+        if self.muestras_acumuladas >= muestras_500ms and not self.is_processing:
+            concatenado = np.concatenate(self.buffer_medicion)
+            bloque_iq = concatenado[:muestras_500ms]
+            sobrante = concatenado[muestras_500ms:]
+            self.buffer_medicion = [sobrante] if len(sobrante) > 0 else []
+            self.muestras_acumuladas = len(sobrante)
+            self.is_processing = True
+            t = threading.Thread(target=self._procesar_fondo, args=(bloque_iq,))
+            t.daemon = True
+            t.start()
         
         # --- Sincronización perfecta de todos los gráficos ---
         if self.nuevos_datos_listos:
@@ -125,23 +127,24 @@ class DemoduladorWBFM(DemoduladorBase):
     def _procesar_fondo(self, bloque_iq):
         """ Hilo de fondo: Trabaja pesado una vez cada 500ms """
         try:
-            # === 1. ESPECTRO RF (Movido al hilo para ahorrar recursos) ===
-            fs_fft = self.fft_size
-            rf_fft_chunk = bloque_iq[:fs_fft] - np.mean(bloque_iq[:fs_fft])
-            ventana_rf = np.hanning(fs_fft)
-            chunk_ventaneado = rf_fft_chunk * ventana_rf
-            
-            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_ventaneado)))**2 / fs_fft
-            PSD_rf = 10.0 * np.log10(np.maximum(potencia, 1e-12))
-            centro = fs_fft // 2
-            PSD_rf[centro] = (PSD_rf[centro - 1] + PSD_rf[centro + 1]) / 2.0
-
-            # === 2. DEMODULACIÓN BANDA BASE ===
+            # === 1. DEMODULACIÓN BANDA BASE Y DECIMACIÓN A 300 kHz ===
             bloque_dc_block = bloque_iq - np.mean(bloque_iq)
             bb_filt = fftconvolve(bloque_dc_block, self.bb_lpf_kernel, mode='same')
             
             bb_resample = resample_poly(bb_filt, up=1, down=self.factor_bajada)
             
+            # === 2. ESPECTRO RF (Sobre la banda decimada de 300 kHz, igual que wbfm_audio) ===
+            fs_fft = self.fft_size
+            fuente_rf = bb_resample if len(bb_resample) >= fs_fft else bloque_iq
+            rf_fft_chunk = fuente_rf[:fs_fft] - np.mean(fuente_rf[:fs_fft])
+            ventana_rf = np.hanning(len(rf_fft_chunk))
+            chunk_ventaneado = rf_fft_chunk * ventana_rf
+            
+            potencia = np.abs(np.fft.fftshift(np.fft.fft(chunk_ventaneado, n=fs_fft)))**2 / fs_fft
+            PSD_rf = 10.0 * np.log10(np.maximum(potencia, 1e-12))
+            centro = fs_fft // 2
+            PSD_rf[centro] = (PSD_rf[centro - 1] + PSD_rf[centro + 1]) / 2.0
+
             msj = np.angle(bb_resample[1:] * np.conjugate(bb_resample[:-1])) * (self.nueva_fs / (2*np.pi))
             # Rellenar con el último valor para evitar FFT de longitud prima (ej: 149999) que cuelgan np.fft
             msj = np.append(msj, msj[-1] if len(msj) > 0 else 0)

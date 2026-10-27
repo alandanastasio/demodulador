@@ -82,3 +82,49 @@ def test_lora_uses_its_generation_barrier():
     assert lora._generation == generation + 1
     assert lora._buffer_samples == 0
     lora.close()
+
+
+def test_btle_procesar_none_resets_buffer_without_crashing():
+    btle = DemoduladorBTLE()
+    btle.configurar(20_000_000, 1024, bw_mhz=2)
+    btle.buffer = np.ones(256, dtype=np.complex64)
+    btle._recent_packet_starts = [(10, b"abc")]
+    btle.last_burst_metrics = {"f1_avg_khz": 250.0}
+
+    assert btle.procesar(None) is None
+    assert len(btle.buffer) == 0
+    assert btle._recent_packet_starts == []
+    assert btle.last_burst_metrics is None
+
+
+def test_wbfm_audio_preserves_result_callback_on_stream_reset():
+    from dsp.demoduladores.wbfm_audio import DemoduladorWBFMAudio
+
+    cb = lambda res: None
+    wbfm = DemoduladorWBFMAudio()
+    wbfm.configurar(2_400_000, 4096)
+    wbfm.result_callback = cb
+
+    fresh = reset_demodulator_stream(wbfm, sample_rate=2_000_000, fft_size=2048)
+    assert fresh is not wbfm
+    assert fresh.result_callback is cb
+    assert fresh.sample_rate == 2_000_000
+    assert fresh.fft_size == 2048
+
+
+def test_iq_ring_buffer_resize_and_append():
+    from iq_ring_buffer import IQRingBuffer
+
+    buf = IQRingBuffer(max_samples=100)
+    buf.append(np.arange(60, dtype=np.complex64))
+    assert len(buf.get_samples()) == 60
+
+    buf.resize(40)
+    assert buf.max_samples == 40
+    np.testing.assert_array_equal(buf.get_samples(), np.arange(20, 60, dtype=np.complex64))
+    buf.append(np.arange(50, dtype=np.complex64))
+    samples = buf.get_samples()
+    assert len(samples) == 40
+    np.testing.assert_array_equal(samples, np.arange(10, 50, dtype=np.complex64))
+
+

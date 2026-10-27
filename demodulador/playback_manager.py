@@ -140,26 +140,13 @@ class PlaybackManager(QObject):
                 f"Captura guardada: {recorder.path} ({count} muestras recibidas).", 0)
 
     def _make_demodulator(self, sample_rate, center_freq):
-        previous = self.ui.demodulador_actual
-        if previous is None:
-            return None
-        fresh = type(previous)()
-        args = (sample_rate, self.state['fft_size'])
-        if isinstance(previous, DemoduladorLoRa):
-            fresh.configurar(*args, previous.bandwidth_hz, previous.sf)
-        elif isinstance(previous, DemoduladorBTLE):
-            fresh.configurar(*args, bw_mhz=previous.bw_mhz,
-                             decode_legacy=previous.decode_legacy)
-            fresh.set_center_frequency(center_freq)
-        elif isinstance(previous, DemoduladorLTEUplink):
-            fresh.configurar(*args, rb_count=previous.rb_count)
-        elif isinstance(previous, DemoduladorWiFiAG):
-            fresh.configurar(*args, remove_dc=previous.remove_dc)
-        else:
-            fresh.configurar(*args)
-        if hasattr(previous, 'window_type'):
-            fresh.set_window(previous.window_type)
-        return fresh
+        return reset_demodulator_stream(
+            self.ui.demodulador_actual,
+            sample_rate=sample_rate,
+            fft_size=self.state['fft_size'],
+            center_freq=center_freq,
+            clone_lora=True,
+        )
 
     def load_and_play(self, loop=False):
         if self._recorder is not None or self.playback_data is not None:

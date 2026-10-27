@@ -742,6 +742,11 @@ class DemoduladorLTEUplink(DemoduladorBase):
 
     def procesar(self, muestras_iq: np.ndarray) -> dict:
         if muestras_iq is None:
+            with self._lock:
+                self.nuevos_datos_listos = False
+                self.last_heavy_results = {}
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
 
         # SIEMPRE extraer resultados pendientes primero, sin importar si estamos
@@ -759,10 +764,14 @@ class DemoduladorLTEUplink(DemoduladorBase):
             return None
 
         if self.is_processing:
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
 
         ahora = time.time()
         if ahora < self.proxima_captura:
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
 
         self.buffer_medicion.append(muestras_iq)

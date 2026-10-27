@@ -472,19 +472,27 @@ class DemoduladorLTEDownlink(DemoduladorBase):
             self.ultimo_puntos_corr = np.array([])
 
     def procesar(self, muestras_iq):
+        if muestras_iq is None:
+            with self._lock:
+                self.nuevos_datos_listos = False
+                self.last_heavy_results = {}
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
+            return None
+
         with self._lock:
             if self.nuevos_datos_listos:
                 self.nuevos_datos_listos = False
                 return self.last_heavy_results
 
-        if muestras_iq is None:
-            self.buffer_medicion = []
-            self.muestras_acumuladas = 0
+        if len(muestras_iq) == 0:
             return None
 
         ahora = time.time()
         
         if self.is_processing or ahora < self.proxima_captura:
+            self.buffer_medicion = []
+            self.muestras_acumuladas = 0
             return None
 
         self.buffer_medicion.append(muestras_iq)
@@ -498,9 +506,8 @@ class DemoduladorLTEDownlink(DemoduladorBase):
         buffer_unido = np.concatenate(self.buffer_medicion)
         chunk_procesar = buffer_unido[:muestras_10ms]
         
-        sobrante = buffer_unido[muestras_10ms:]
-        self.buffer_medicion = [sobrante] if len(sobrante) > 0 else []
-        self.muestras_acumuladas = len(sobrante)
+        self.buffer_medicion = []
+        self.muestras_acumuladas = 0
 
         self.is_processing = True
 
@@ -853,7 +860,7 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                             if l_slot == 1 and ((k_local - (0 + v_shift)) % 6 == 0 or (k_local - (3 + v_shift)) % 6 == 0): is_crs = True
                             
                             if not is_crs:
-                                idx_1d = l_slot * 60 + k_local_idx
+                                idx_1d = k_local_idx
                                 if idx_1d < len(pbch_qpsk):
                                     subframe_fft[sym_idx, sc_abs] = pbch_qpsk[idx_1d]
                                 k_local_idx += 1
@@ -874,14 +881,16 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                             pdcch_k_abs.append(k_abs)
                             
                     pdcch_k_abs = np.array(pdcch_k_abs)
-                    if len(pdcch_k_abs) > 0 and len(pdcch_k_abs) % 2 == 0:
+                    n_even_pdcch = (len(pdcch_k_abs) // 2) * 2
+                    if n_even_pdcch > 0:
+                        pdcch_pairs = pdcch_k_abs[:n_even_pdcch]
                         pdcch_syms = alamouti_combine(
-                            subframe_fft_raw[sym_idx, pdcch_k_abs], 
-                            H_est_0[sym_idx, pdcch_k_abs], 
-                            H_est_1[sym_idx, pdcch_k_abs], 
+                            subframe_fft_raw[sym_idx, pdcch_pairs], 
+                            H_est_0[sym_idx, pdcch_pairs], 
+                            H_est_1[sym_idx, pdcch_pairs], 
                             sigma2
                         )
-                        subframe_fft[sym_idx, pdcch_k_abs] = pdcch_syms
+                        subframe_fft[sym_idx, pdcch_pairs] = pdcch_syms
                 
                 # APLICACIÓN DE SFBC AL PDSCH
                 # Los datos PDSCH con 2 antenas Tx usan diversidad de transmisión (TM2/SFBC)
@@ -910,14 +919,16 @@ class DemoduladorLTEDownlink(DemoduladorBase):
                             pdsch_k_abs.append(k_abs)
                     
                     pdsch_k_abs_arr = np.array(pdsch_k_abs)
-                    if len(pdsch_k_abs_arr) > 0 and len(pdsch_k_abs_arr) % 2 == 0:
+                    n_even_pdsch = (len(pdsch_k_abs_arr) // 2) * 2
+                    if n_even_pdsch > 0:
+                        pdsch_pairs = pdsch_k_abs_arr[:n_even_pdsch]
                         pdsch_syms = alamouti_combine(
-                            subframe_fft_raw[sym_idx, pdsch_k_abs_arr],
-                            H_est_0[sym_idx, pdsch_k_abs_arr],
-                            H_est_1[sym_idx, pdsch_k_abs_arr],
+                            subframe_fft_raw[sym_idx, pdsch_pairs],
+                            H_est_0[sym_idx, pdsch_pairs],
+                            H_est_1[sym_idx, pdsch_pairs],
                             sigma2
                         )
-                        subframe_fft[sym_idx, pdsch_k_abs_arr] = pdsch_syms
+                        subframe_fft[sym_idx, pdsch_pairs] = pdsch_syms
             
             # --- FASE 4: Constelación y Métricas para UI ---
             evm_data = None
