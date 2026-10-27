@@ -74,4 +74,6 @@ Para ejecutar las pruebas con las dependencias de desarrollo instaladas:
 uv run pytest -q
 ```
 
+Para más detalles sobre la arquitectura interna, el contrato DSP, la validación y la resolución de problemas, consultá [DOCUMENTACION.md](DOCUMENTACION.md).
+
 
