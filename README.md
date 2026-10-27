@@ -6,13 +6,13 @@ Aplicación de recepción y análisis de señales de radio con interfaz gráfica
 
 | Modo | Funciones implementadas |
 | --- | --- |
-| Analizador de espectro | Espectro interactivo, espectrograma, marcadores, trazas y controles de visualización. |
-| FM: medición | Medición de la señal multiplex, piloto estéreo y canales de audio, con un espectro multiplex de mayor resolución y lectura RDS. |
-| FM: escucha | Gráficos y métricas FM, reproducción de audio estéreo en vivo, controles para los canales izquierdo y derecho y lectura RDS. |
-| WiFi 802.11a/g | Detección y sincronización de tramas OFDM, estimación de desplazamiento de frecuencia y canal, constelación, EVM y decodificación del campo SIGNAL. |
-| Bluetooth Low Energy | Detección y métricas de ráfagas LE 1M y LE 2M; en LE 1M, decodificación de anuncios *legacy* con verificación de CRC e historial de paquetes. |
-| LoRa | Detección de preámbulo y decodificación de tramas de la capa física, con encabezado, carga útil, CRC cuando está presente, símbolos y *sync word*. La interfaz ofrece BW de 125, 250 y 500 kHz y SF7 a SF12. |
-| LTE | Análisis de señales downlink y uplink, con sincronización, constelaciones, métricas y visualizaciones de recursos. Las opciones de ancho de banda dependen de la tasa de muestreo que admita el SDR. |
+| Analizador de espectro | Espectro interactivo (FFT de 1024 a 65536 puntos, RBW y 6 ventanas seleccionables), espectrograma, hasta 4 trazas (*Clear & Write*, *Max Hold*, *Min Hold*, *Average*) y hasta 6 marcadores (*Normal*, *Delta*, *Peak Search*, *Next Peak*, *Track Peak*). |
+| FM: medición | Medición de la señal multiplex (desviación pico máx./mín./RMS, piloto de 19 kHz, portadora de 38 kHz y canales L/R), espectro multiplex de mayor resolución con soporte de marcadores y lectura RDS. |
+| FM: escucha | Gráficos y métricas FM, reproducción de audio estéreo en vivo a 48 kHz con selección de desénfasis (75 µs / 50 µs), controles para los canales izquierdo y derecho y lectura RDS. |
+| WiFi 802.11a/g | Detección y sincronización de tramas OFDM legacy, estimación de CFO, SNR y canal, constelación ecualizada, EVM RMS (% y dB) y decodificación del símbolo `SIGNAL`. |
+| Bluetooth Low Energy | Detección y métricas físicas GFSK (`df_avg`, `f1_avg`, `f2_avg`, `f2/f1`, desviación RMS y CFO) en LE 1M y LE 2M; en LE 1M, decodificación de anuncios *legacy* en canales primarios (37/38/39) con *dewhitening*, verificación de CRC-24 e historial deduplicado de paquetes. |
+| LoRa | Detección de preámbulo y decodificación de tramas de la capa física (CFO, SNR, RSSI, encabezado explícito, carga útil, validación de CRC, símbolos y *sync word*). La interfaz ofrece BW de 125, 250 y 500 kHz y SF7 a SF12. |
+| LTE | Análisis de señales downlink (PSS/SSS, `N_ID_cell`, detección ciega de 1/2/4 antenas TX por PBCH, MIB, RSRP/RSRQ/RSSI/SNR y EVM por canal) y uplink (flujo asistido DL→UL con identificación automática de banda FDD 3GPP, adquisición de `Cell ID` en DL y conmutación automática a UL para DMRS y PUSCH). |
 
 El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física.
 
@@ -22,14 +22,16 @@ Ambos modos FM decodifican la subportadora RDS de 57 kHz. El panel RDS muestra P
 
 La ventana inicial detecta estos SDR mediante sus controladores correspondientes:
 
-| Equipo | Integración |
-| --- | --- |
-| HackRF One | `python-hackrf` / `libhackrf` |
-| RTL-SDR | `pyrtlsdr` / `librtlsdr` |
-| Nuand bladeRF x40 | Bindings de `libbladeRF` |
-| Ettus USRP B200 | UHD |
+| Equipo | Integración | Tasa máx. y modos en vivo | Controles de ganancia |
+| --- | --- | --- | --- |
+| HackRF One | `python-hackrf` / `libhackrf` | Hasta 20 Ms/s — Todos los modos | `LNA` (0–40 dB), `VGA` (0–62 dB) y `AMP` |
+| RTL-SDR | `pyrtlsdr` / `librtlsdr` | Hasta ~2,4–3,2 Ms/s — SA, FM (2,4 Ms/s), LoRa y LTE 1,4 MHz (no admite WiFi ni BLE en vivo) | Ganancia única (dB) y `AGC` |
+| Nuand bladeRF x40 | Bindings de `libbladeRF` | Hasta 20+ Ms/s — Todos los modos | `LNA`, `RX VGA1` y `RX VGA2` |
+| Ettus USRP B200 | UHD | Hasta 20+ Ms/s — Todos los modos | Ganancia global RX UHD |
 
 La grabación desde **Rec/Play** escribe secuencialmente `muestras_iq_*.iq` en el directorio desde el que se ejecutó el programa. El archivo `.json` del mismo nombre guarda el tipo de muestra, la frecuencia central, la tasa de muestreo, el número de bloques y muestras, y una suma SHA-256; conservá ambos archivos juntos. Al reproducir una captura nueva se verifican su tamaño y suma; también se admiten las capturas `.npz` anteriores, que no contienen esa verificación. La reproducción conserva el orden de las muestras y puede ejecutarse una vez, en bucle o detenerse. Si el procesamiento tarda más que el tiempo real, la reproducción puede retrasarse sin saltar muestras.
+
+Además, cuando el espectrograma está activo, la aplicación mantiene un buffer circular en memoria (`IQRingBuffer`) con el historial visible en la cascada. El botón **✂️ Recortar Señal** pausa el espectrograma, permite delimitar un intervalo temporal directamente sobre la cascada y guarda ese segmento como archivo `.npz` (`raw_iq`, `center_freq` y `sample_rate`). También se puede exportar la vista actual del espectrograma como imagen `.png` mediante **Guardar Espectrograma**.
 
 La ventana inicial ofrece **Abrir demodulador sin SDR**, separado de los equipos USB. En ese modo elegí el demodulador y luego **Rec/Play → Reproducir Archivo** (o reproducción en bucle). La frecuencia central y la tasa se toman de la captura al abrirla. La grabación queda deshabilitada porque no hay recepción en vivo; para grabar, seleccioná una SDR real.
 
@@ -58,14 +60,18 @@ Elegí un equipo detectado o la opción sin SDR en la ventana inicial. En la ven
 
 ## Estructura del proyecto
 
-- `demodulador/hardware/`: controladores SDR y contrato común de recepción.
-- `demodulador/dsp/demoduladores/`: analizador y procesadores de cada modo.
-- `demodulador/main.py`, `ui_builder.py` y `startup_window.py`: flujo de recepción e interfaz gráfica.
+- `demodulador/hardware/`: controladores SDR (`sdr_base.py`, HackRF, RTL-SDR, bladeRF, USRP B200, Mock) y transiciones de stream (`stream_transition.py`).
+- `demodulador/dsp/`: procesadores de cada modo (`demoduladores/`), decodificador RDS (`rds.py`), remuestreador continuo (`streaming_resampler.py`) y reinicio de flujos (`stream_reset.py`).
+- `demodulador/main.py`, `ui_builder.py`, `plot_renderer.py` y `startup_window.py`: ventana principal, construcción de paneles, renderizado y selección inicial de dispositivo.
+- `demodulador/trace_manager.py`, `marker_manager.py` y `btle_history.py`: gestión de trazas, marcadores interactivos e historial deduplicado de anuncios BLE.
+- `demodulador/playback_manager.py`, `iq_capture.py`, `iq_ring_buffer.py` y `audio_manager.py`: grabación/reproducción verificada con SHA-256, buffer circular para recortes desde el espectrograma y salida de audio estéreo a 48 kHz.
 - `demodulador/research/`: notebooks y experimentos de desarrollo.
 - `demodulador/tests/`: pruebas automáticas de DSP, controladores y componentes de interfaz.
 
 Para ejecutar las pruebas con las dependencias de desarrollo instaladas:
 
 ```bash
-uv run pytest demodulador/tests -q
+uv run pytest -q
 ```
+
+
