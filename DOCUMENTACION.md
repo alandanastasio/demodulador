@@ -66,7 +66,7 @@ Esta sección delimita lo implementado en la interfaz actual. Todos los modos re
 
 Los dos modos comparten la visualización del espectro RF, el espectro multiplex, la desviación temporal y los canales izquierdo y derecho. [`wbfm.py`](demodulador/dsp/demoduladores/wbfm.py) procesa ventanas de medición y presenta el espectro multiplex con mayor resolución. [`wbfm_audio.py`](demodulador/dsp/demoduladores/wbfm_audio.py) procesa bloques más cortos y entrega estéreo a [`AudioManager`](demodulador/audio_manager.py), que genera la salida a 48 kHz con selección de desénfasis (75 µs / 50 µs). Si no detecta un piloto estéreo utilizable, la ruta de escucha entrega mono a ambos canales. El panel informa desviación pico máxima, mínima y RMS (kHz), offset DC, nivel de piloto de 19 kHz (dB), enganche del PLL de 38 kHz y porcentaje de *stereo blend*, además de admitir marcadores sobre el espectro multiplex MPX.
 
-Ambos usan [`RDSDecoder`](demodulador/dsp/rds.py) sobre la subportadora multiplex de 57 kHz. El panel muestra PI, PS, el código PTY y RadioText al reunir grupos válidos 0A/0B o 2A/2B. Un piloto de 19 kHz detectable no garantiza que la emisora transmita RDS. La interpretación de caracteres extendidos RDS aún usa una aproximación Latin-1; el panel puede permanecer en espera si la estación no transmite esos grupos o la señal no alcanza para validarlos.
+Ambos usan [`RDSDecoder`](demodulador/dsp/rds.py) sobre la subportadora multiplex de 57 kHz. El panel muestra PI, PS, el código PTY y RadioText al reunir grupos válidos 0A/0B o 2A/2B, decodificando los caracteres mediante el repertorio RDS básico oficial (IEC 62106 Anexo E, tabla EBU G0). Un piloto de 19 kHz detectable no garantiza que la emisora transmita RDS; el panel permanece en espera si la estación no transmite esos grupos o la señal no alcanza para validarlos.
 
 ### WiFi 802.11a/g
 
@@ -168,13 +168,13 @@ Con el entorno del proyecto instalado, desde la raíz del repositorio:
 QT_QPA_PLATFORM=offscreen PYTHONPATH=demodulador .venv/bin/python -m pytest demodulador/tests -q
 ```
 
-`QT_QPA_PLATFORM=offscreen` permite probar componentes de PyQt sin abrir ventanas (con el entorno activo también basta ejecutar `pytest -q` o `uv run pytest -q` desde la raíz gracias a la configuración en [`pyproject.toml`](pyproject.toml)). Para una prueba puntual, reemplazá `demodulador/tests` por el archivo correspondiente. La ejecución local del 27 de octubre de 2026 terminó con **132 pruebas aprobadas**; ese número es una referencia fechada, no un valor fijo del proyecto.
+`QT_QPA_PLATFORM=offscreen` permite probar componentes de PyQt sin abrir ventanas (con el entorno activo también basta ejecutar `pytest -q` o `uv run pytest -q` desde la raíz gracias a la configuración en [`pyproject.toml`](pyproject.toml)). Para una prueba puntual, reemplazá `demodulador/tests` por el archivo correspondiente. La ejecución local del 28 de octubre de 2026 terminó con **133 pruebas aprobadas**; ese número es una referencia fechada, no un valor fijo del proyecto.
 
 | Área | Pruebas de referencia | Qué comprueban |
 | --- | --- | --- |
 | Espectro y trazas | [`test_dsp.py`](demodulador/tests/test_dsp.py) | Pico espectral, promedio y retención de máximos. |
 | FM y audio | [`test_wbfm_audio.py`](demodulador/tests/test_wbfm_audio.py), [`test_audio_manager.py`](demodulador/tests/test_audio_manager.py) | Separación estéreo, mono sin piloto, continuidad de bloques, pausa y cola de audio. |
-| RDS | [`test_rds.py`](demodulador/tests/test_rds.py), [`test_offline_startup.py`](demodulador/tests/test_offline_startup.py) | CRC de grupos, PS/RadioText, versiones A/B, recorrido IQ en ambos modos FM y panel de interfaz. |
+| RDS | [`test_rds.py`](demodulador/tests/test_rds.py), [`test_offline_startup.py`](demodulador/tests/test_offline_startup.py) | CRC de grupos, PS/RadioText, tabla de caracteres EBU G0, versiones A/B, recorrido IQ en ambos modos FM y panel de interfaz. |
 | WiFi | [`test_wifi_ag.py`](demodulador/tests/test_wifi_ag.py) | Sincronización, CFO, SIGNAL, EVM, tramas sintéticas y límites entre callbacks. |
 | BLE | [`test_btle.py`](demodulador/tests/test_btle.py), [`test_btle_frames.py`](demodulador/tests/test_btle_frames.py) | Preámbulo LE 1M/2M, anuncios *legacy*, *dewhitening*, CRC y rechazo de señales falsas. |
 | LoRa | [`test_lora_core.py`](demodulador/tests/test_lora_core.py), [`test_lora_stream.py`](demodulador/tests/test_lora_stream.py) | Decodificación física, CRC, flujo continuo y un paquete RF real recortado. |
@@ -213,7 +213,6 @@ Este registro explica elecciones visibles en el código y se actualiza cuando ca
 
 ### Límites y siguientes comprobaciones
 
-- Completar el juego de caracteres RDS extendido; hoy se usa una aproximación Latin-1.
 - Incorporar capturas pequeñas y pruebas de regresión específicas para LTE downlink y uplink.
 - Repetir las pruebas de cambios de modo y sintonía con cada SDR física; las pruebas automáticas de controladores usan dobles de prueba.
 - Documentar ajustes de antena, ganancia y entorno junto a futuras capturas RF de referencia; esos datos no se guardan en el JSON actual.

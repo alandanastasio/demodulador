@@ -16,7 +16,7 @@ Aplicación de recepción y análisis de señales de radio con interfaz gráfica
 
 El proyecto es un receptor y analizador. El controlador de HackRF de esta aplicación trabaja en recepción. El modo LoRa analiza tramas de la capa física.
 
-Ambos modos FM decodifican la subportadora RDS de 57 kHz. El panel RDS muestra PI, el nombre corto de la emisora (PS), el código PTY y RadioText cuando la estación los transmite y se han recibido grupos válidos. PS y RadioText se forman a partir de varios grupos, por lo que pueden tardar unos segundos en aparecer. Se admiten los grupos 0A/0B y 2A/2B; el juego de caracteres extendidos todavía se muestra de forma aproximada como Latin-1. La estructura de la señal y los grupos se describen en [UIT-R BS.643-3](https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.643-3-201105-S!!PDF-E.pdf).
+Ambos modos FM decodifican la subportadora RDS de 57 kHz. El panel RDS muestra PI, el nombre corto de la emisora (PS), el código PTY y RadioText cuando la estación los transmite y se han recibido grupos válidos. PS y RadioText se forman a partir de varios grupos, por lo que pueden tardar unos segundos en aparecer. Se admiten los grupos 0A/0B y 2A/2B, decodificando los textos con la tabla de caracteres básica RDS (IEC 62106 Anexo E, tabla G0). La estructura de la señal y los grupos se describen en [UIT-R BS.643-3](https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.643-3-201105-S!!PDF-E.pdf).
 
 ## Hardware y capturas
 

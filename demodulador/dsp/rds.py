@@ -68,10 +68,35 @@ class _BitFramer:
         return groups
 
 
+_RDS_G0_TABLE = (
+    " !\"#¤%&'()*+,-./"
+    "0123456789:;<=>?"
+    "@ABCDEFGHIJKLMNO"
+    "PQRSTUVWXYZ[\\]―_"
+    "‖abcdefghijklmno"
+    "pqrstuvwxyz{|}¯ "
+    "áàéèíìóòúùÑÇŞß¡Ĳ"
+    "âäêëîïôöûüñçşğıĳ"
+    "ªα©‰Ğěňőπ€£$←↑→↓"
+    "º¹²³±İńűµ¿÷°¼½¾§"
+    "ÁÀÉÈÍÌÓÒÚÙŘČŠŽĐĿ"
+    "ÂÄÊËÎÏÔÖÛÜřčšžđŀ"
+    "ÃÅÆŒŷÝÕØÞŊŔĆŚŹŦð"
+    "ãåæœŵýõøþŋŕćśźŧ "
+)
+
+
 def _rds_text(raw):
-    # ASCII es la parte común del repertorio RDS. Se conservan los bytes
-    # superiores como Latin-1 hasta incorporar la tabla EBU completa.
-    return raw.split(b'\r', 1)[0].decode('latin-1', errors='replace').strip()
+    """Convierte bytes del repertorio RDS básico (IEC 62106 Anexo E, tabla G0)."""
+    payload = raw.split(b'\r', 1)[0]
+    chars = []
+    for byte in payload:
+        if byte >= 0x20:
+            chars.append(_RDS_G0_TABLE[byte - 0x20])
+        elif byte in (0x0A, 0x0B):
+            chars.append(' ')
+    return ''.join(chars).strip()
+
 
 
 class RDSDecoder:
